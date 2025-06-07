@@ -1,5 +1,5 @@
 @echo off
-rem ffmpeg一括再エンコードVer7.4 (わっち改修版・パス最終修正)
+rem ffmpeg一括再エンコードVer7.6 (わっち改修版・最終修正 v2)
 rem このバッチファイルは、複数の動画ファイルをffmpegで一括再エンコードします。
 rem 最初にエンコードオプションを設定し、その後ファイルごとに処理を実行します。
 
@@ -54,7 +54,7 @@ echo.
 
 rem --- 処理後アクション設定 ---
 set "after_process_action=none"
-choice /c srh /m "エンコード完了後どうしますか？ (S:シャットダウン, R:再起動, H:休止)"
+choice /c srhn /m "エンコード完了後どうしますか？ (S:シャットダウン, R:再起動, H:休止, N:何もしない)"
 if %errorlevel%==1 set "after_process_action=shutdown"
 if %errorlevel%==2 set "after_process_action=reboot"
 if %errorlevel%==3 set "after_process_action=hibernate"
@@ -184,12 +184,10 @@ goto MainLoop
     echo +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     echo.
 
-    rem --- パスを扱う変数は、定義時にクォートを含めない ---
     set "input_file=%~1"
     set "input_dir=%~dp1"
     set "input_name=%~n1"
 
-    rem --- パスの連結を安全に行う ---
     set "output_dir="
     if "!output_mode!"=="fixed" (
         set "output_dir=!output_fixed_path!"
@@ -202,7 +200,6 @@ goto MainLoop
     set "temp_dir=!output_dir!\temp_!input_name!"
     if not exist "!temp_dir!" mkdir "!temp_dir!"
 
-    rem --- 各種設定のリセットと準備 ---
     set "current_cutinfo="
     set "current_cutinfo2="
     set "temp_qaac_output_file=!temp_dir!\qaac_tmp.m4a"
@@ -274,26 +271,37 @@ goto MainLoop
         )
     )
 
-    rem --- ffmpeg エンコードコマンドの組み立て ---
     set "final_ffmpeg_command=ffmpeg -hide_banner -y"
     if defined current_cutinfo set "final_ffmpeg_command=!final_ffmpeg_command! !current_cutinfo!"
-    set "final_ffmpeg_command=!final_ffmpeg_command! -i ""!input_file!"""
-    if "!use_qaac_audio!"=="yes" set "final_ffmpeg_command=!final_ffmpeg_command! -i ""!temp_qaac_output_file!"""
-    if "!use_ffmpeg_metadata!"=="yes" set "final_ffmpeg_command=!final_ffmpeg_command! -i ""!temp_ffmpeg_metadata_file!"""
+    set "final_ffmpeg_command=!final_ffmpeg_command! -i "!input_file!""
+    if "!use_qaac_audio!"=="yes" set "final_ffmpeg_command=!final_ffmpeg_command! -i "!temp_qaac_output_file!""
+    if "!use_ffmpeg_metadata!"=="yes" set "final_ffmpeg_command=!final_ffmpeg_command! -i "!temp_ffmpeg_metadata_file!""
     if defined current_cutinfo2 set "final_ffmpeg_command=!final_ffmpeg_command! !current_cutinfo2!"
-    
-    set "final_ffmpeg_command=!final_ffmpeg_command! -c:v !encoder! !vf! !argument!"
+    set "final_ffmpeg_command=!final_ffmpeg_command! !encoder! !vf! !argument!"
 
+    set /a map_video_index=0
+    set /a map_audio_index=0
+    set /a map_meta_index=0
+    set /a input_count=1
+    
     if "!use_qaac_audio!"=="yes" (
-        set "final_ffmpeg_command=!final_ffmpeg_command! -c:a copy -map 0:v:0 -map 1:a:0"
+        set "map_audio_index=!input_count!"
+        set /a input_count+=1
+    )
+    if "!use_ffmpeg_metadata!"=="yes" (
+        set "map_meta_index=!input_count!"
+    )
+    
+    if "!use_qaac_audio!"=="yes" (
+        set "final_ffmpeg_command=!final_ffmpeg_command! -c:a copy -map !map_video_index!:v:0 -map !map_audio_index!:a:0"
     ) else (
         if defined final_audio_encode_options set "final_ffmpeg_command=!final_ffmpeg_command! !final_audio_encode_options!"
     )
-    if "!use_ffmpeg_metadata!"=="yes" set "final_ffmpeg_command=!final_ffmpeg_command! -map_metadata 2"
+    
+    if "!use_ffmpeg_metadata!"=="yes" set "final_ffmpeg_command=!final_ffmpeg_command! -map_metadata !map_meta_index!"
 
-    set "final_ffmpeg_command=!final_ffmpeg_command! ""!output_file!"""
+    set "final_ffmpeg_command=!final_ffmpeg_command! "!output_file!""
 
-    rem --- ffmpeg エンコード実行 ---
     echo --- ffmpeg エンコード実行 ---
     echo.
     echo    実行コマンド:
@@ -302,9 +310,10 @@ goto MainLoop
     echo    エンコード処理を開始します...
     @echo on
     !final_ffmpeg_command!
+    set "ffmpeg_errorlevel=!errorlevel!"
     @echo off
 
-    if errorlevel 1 (
+    if !ffmpeg_errorlevel! neq 0 (
         echo エラー: ffmpegエンコード中にエラーが発生しました。
         if exist "!notify_script_path!" call "!notify_script_path!" "!filecount! EncodeError"
     ) else (
@@ -319,7 +328,6 @@ goto MainLoop
         if exist "!output_dir!\*.*_original" del "!output_dir!\*.*_original"
     )
 
-    rem 一時フォルダはエラーの有無に関わらず削除
     if exist "!temp_dir!" (
         rd /s /q "!temp_dir!"
         echo 一時ファイルをクリーンアップしました。
@@ -329,8 +337,9 @@ goto MainLoop
     echo  ファイル「%~nx1」の処理が完了しました。
     echo +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     echo.
-    pause
-
+    
+    rem --- [修正箇所] 無人実行のためpauseを削除 ---
+    
     shift
     if not "%~1"=="" goto MainLoop
 
@@ -341,13 +350,25 @@ echo  全てのファイルの処理が完了しました。
 echo ─────────────────────────────────────
 if exist "!notify_script_path!" call "!notify_script_path!" "All encode ended"
 
-rem --- 終了処理 ---
+rem --- [修正箇所] キャンセル可能な終了処理 ---
 if "!after_process_action!"=="shutdown" (
-    echo 60秒後にシャットダウンします。
-    shutdown -s -t 60
+    echo.
+    echo 60秒後にシャットダウンします。キャンセルするには、何かキーを押してください...
+    timeout /t 60 > nul
+    if errorlevel 1 (
+        shutdown -s -t 1
+    ) else (
+        echo シャットダウンはキャンセルされました。
+    )
 ) else if "!after_process_action!"=="reboot" (
-    echo 60秒後に再起動します。
-    shutdown -r -t 60
+    echo.
+    echo 60秒後に再起動します。キャンセルするには、何かキーを押してください...
+    timeout /t 60 > nul
+    if errorlevel 1 (
+        shutdown -r -t 1
+    ) else (
+        echo 再起動はキャンセルされました。
+    )
 ) else if "!after_process_action!"=="hibernate" (
     echo 休止モードへ移行します...
     rundll32.exe PowrProf.dll,SetSuspendState
