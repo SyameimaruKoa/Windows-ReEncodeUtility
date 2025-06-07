@@ -1,5 +1,5 @@
 @echo off
-rem ffmpegエンコーダー選択Ver.5.0 (わっち改修版・デバッグ機能付き)
+rem ffmpegエンコーダー選択Ver.5.1 (わっち改修版・バグ修正)
 rem このバッチファイルは、FFmpegのエンコードオプションを設定します。
 rem 呼び出し元のバッチファイルに `encoder` 変数を返します。
 chcp 932
@@ -60,11 +60,19 @@ goto home
     echo    5: カスタムビットレート (手動入力)
     choice /c 12345 /m "品質を選択してください"
     set quality_choice=%errorlevel%
-    if %quality_choice%==1 set encoder=%base_encoder% -global_quality 20 -preset slow
-    if %quality_choice%==2 set encoder=%base_encoder% -global_quality 25 -preset medium
-    if %quality_choice%==3 set encoder=%base_encoder% -global_quality 30 -preset fast
-    if %quality_choice%==4 ( set /p val="品質値(1-51) > " & set encoder=%base_encoder% -global_quality %val% )
-    if %quality_choice%==5 ( set /p val="ビットレート(例:8000k) > " & set encoder=%base_encoder% -b:v %val% )
+    if %quality_choice%==1 (
+        set encoder=%base_encoder% -global_quality 20 -preset slow
+    ) else if %quality_choice%==2 (
+        set encoder=%base_encoder% -global_quality 25 -preset medium
+    ) else if %quality_choice%==3 (
+        set encoder=%base_encoder% -global_quality 30 -preset fast
+    ) else if %quality_choice%==4 (
+        set /p val="品質値(1-51) > "
+        set encoder=%base_encoder% -global_quality %val%
+    ) else if %quality_choice%==5 (
+        set /p val="ビットレート(例:8000k) > "
+        set encoder=%base_encoder% -b:v %val%
+    )
     goto end_options
 
 :NVIDIA_NVENC
@@ -82,11 +90,19 @@ goto home
     echo    5: カスタムビットレート (手動入力)
     choice /c 12345 /m "品質を選択してください"
     set quality_choice=%errorlevel%
-    if %quality_choice%==1 set encoder=%base_encoder% -rc vbr -cq 23 -qmin 0 -qmax 99 -preset p5 -tune hq
-    if %quality_choice%==2 set encoder=%base_encoder% -rc vbr -cq 28 -qmin 0 -qmax 99 -preset p5 -tune hq
-    if %quality_choice%==3 set encoder=%base_encoder% -rc vbr -cq 32 -qmin 0 -qmax 99 -preset p1 -tune ll
-    if %quality_choice%==4 ( set /p val="品質値(CQ 1-51) > " & set encoder=%base_encoder% -rc vbr -cq %val% -qmin 0 -qmax 99 -preset p5 -tune hq )
-    if %quality_choice%==5 ( set /p val="ビットレート(例:6000k) > " & set encoder=%base_encoder% -rc vbr -b:v %val% -preset p5 -tune hq )
+    if %quality_choice%==1 (
+        set encoder=%base_encoder% -rc vbr -cq 23 -qmin 0 -qmax 99 -preset p5 -tune hq
+    ) else if %quality_choice%==2 (
+        set encoder=%base_encoder% -rc vbr -cq 28 -qmin 0 -qmax 99 -preset p5 -tune hq
+    ) else if %quality_choice%==3 (
+        set encoder=%base_encoder% -rc vbr -cq 32 -qmin 0 -qmax 99 -preset p1 -tune ll
+    ) else if %quality_choice%==4 (
+        set /p val="品質値(CQ 1-51) > "
+        set encoder=%base_encoder% -rc vbr -cq %val% -qmin 0 -qmax 99 -preset p5 -tune hq
+    ) else if %quality_choice%==5 (
+        set /p val="ビットレート(例:6000k) > "
+        set encoder=%base_encoder% -rc vbr -b:v %val% -preset p5 -tune hq
+    )
     goto end_options
 
 :CPU_X26X
@@ -97,16 +113,29 @@ goto home
     if %codec_choice%==3 (
         echo "   (VP9) 1:高品質(CRF:30) 2:中品質(CRF:35) 3:カスタム"
         choice /c 123 /m "品質を選択"
-        if %errorlevel%==1 set encoder=%base_encoder% -crf 30 -b:v 0 -cpu-used 4
-        if %errorlevel%==2 set encoder=%base_encoder% -crf 35 -b:v 0 -cpu-used 4
-        if %errorlevel%==3 ( set /p val="CRF値 > " & set encoder=%base_encoder% -crf %val% -b:v 0 )
+        set quality_choice=%errorlevel%
+        if %quality_choice%==1 (
+            set encoder=%base_encoder% -crf 30 -b:v 0 -cpu-used 4
+        ) else if %quality_choice%==2 (
+            set encoder=%base_encoder% -crf 35 -b:v 0 -cpu-used 4
+        ) else if %quality_choice%==3 (
+            set /p val="CRF値 > "
+            set encoder=%base_encoder% -crf %val% -b:v 0
+        )
     ) else (
         echo "   (H.26x) 1:高品質(CRF:18) 2:中品質(CRF:23) 3:低品質(CRF:28) 4:カスタム"
         choice /c 1234 /m "品質を選択"
-        if %errorlevel%==1 set encoder=%base_encoder% -crf 18 -preset slow
-        if %errorlevel%==2 set encoder=%base_encoder% -crf 23 -preset medium
-        if %errorlevel%==3 set encoder=%base_encoder% -crf 28 -preset fast
-        if %errorlevel%==4 ( set /p val="CRF値 > " & set encoder=%base_encoder% -crf %val% -preset medium )
+        set quality_choice=%errorlevel%
+        if %quality_choice%==1 (
+            set encoder=%base_encoder% -crf 18 -preset slow
+        ) else if %quality_choice%==2 (
+            set encoder=%base_encoder% -crf 23 -preset medium
+        ) else if %quality_choice%==3 (
+            set encoder=%base_encoder% -crf 28 -preset fast
+        ) else if %quality_choice%==4 (
+            set /p val="CRF値 > "
+            set encoder=%base_encoder% -crf %val% -preset medium
+        )
     )
     goto end_options
 
@@ -125,11 +154,19 @@ goto home
     echo    5: カスタムビットレート (手動入力)
     choice /c 12345 /m "品質を選択してください"
     set quality_choice=%errorlevel%
-    if %quality_choice%==1 set encoder=%base_encoder% -rc cqp -qp_i 22 -qp_p 22 -qp_b 22 -quality quality
-    if %quality_choice%==2 set encoder=%base_encoder% -rc cqp -qp_i 28 -qp_p 28 -qp_b 28 -quality quality
-    if %quality_choice%==3 set encoder=%base_encoder% -rc cqp -qp_i 35 -qp_p 35 -qp_b 35 -quality quality
-    if %quality_choice%==4 ( set /p val="QP値 > " & set encoder=%base_encoder% -rc cqp -qp_i %val% -qp_p %val% -qp_b %val% -quality quality )
-    if %quality_choice%==5 ( set /p val="ビットレート(例:7000k) > " & set encoder=%base_encoder% -rc vbr_peak -b:v %val% -quality quality )
+    if %quality_choice%==1 (
+        set encoder=%base_encoder% -rc cqp -qp_i 22 -qp_p 22 -qp_b 22 -quality quality
+    ) else if %quality_choice%==2 (
+        set encoder=%base_encoder% -rc cqp -qp_i 28 -qp_p 28 -qp_b 28 -quality quality
+    ) else if %quality_choice%==3 (
+        set encoder=%base_encoder% -rc cqp -qp_i 35 -qp_p 35 -qp_b 35 -quality quality
+    ) else if %quality_choice%==4 (
+        set /p val="QP値 > "
+        set encoder=%base_encoder% -rc cqp -qp_i %val% -qp_p %val% -qp_b %val% -quality quality
+    ) else if %quality_choice%==5 (
+        set /p val="ビットレート(例:7000k) > "
+        set encoder=%base_encoder% -rc vbr_peak -b:v %val% -quality quality
+    )
     goto end_options
 
 :end_options
@@ -161,7 +198,7 @@ if %cmdlevel% == 1 (
 
 rem 呼び出し元に encoder 変数を渡して終了
 (
-  endlocal
-  set "encoder=%encoder%"
+    endlocal
+    set "encoder=%encoder%"
 )
 exit /b
