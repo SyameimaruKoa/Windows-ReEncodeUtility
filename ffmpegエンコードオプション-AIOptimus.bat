@@ -1,5 +1,5 @@
 @echo off
-rem ffmpegエンコーダー選択Ver.5.1 (わっち改修版・バグ修正)
+rem ffmpegエンコーダー選択Ver.5.3 (わっち改修版・クラッシュ対策 v2)
 rem このバッチファイルは、FFmpegのエンコードオプションを設定します。
 rem 呼び出し元のバッチファイルに `encoder` 変数を返します。
 chcp 932
@@ -111,7 +111,12 @@ goto home
     if %codec_choice%==3 set base_encoder=-c:v libvpx-vp9
     echo --- 3. CPUエンコード 品質設定 ---
     if %codec_choice%==3 (
-        echo "   (VP9) 1:高品質(CRF:30) 2:中品質(CRF:35) 3:カスタム"
+        rem --- [修正箇所] VP9 の設定表示を変更 ---
+        echo.
+        echo    --- VP9 品質 ---
+        echo       1: 高品質 (CRF:30)
+        echo       2: 中品質 (CRF:35)
+        echo       3: カスタム
         choice /c 123 /m "品質を選択"
         set quality_choice=%errorlevel%
         if %quality_choice%==1 (
@@ -123,7 +128,13 @@ goto home
             set encoder=%base_encoder% -crf %val% -b:v 0
         )
     ) else (
-        echo "   (H.26x) 1:高品質(CRF:18) 2:中品質(CRF:23) 3:低品質(CRF:28) 4:カスタム"
+        rem --- [修正箇所] H.26x の設定表示を変更 ---
+        echo.
+        echo    --- H.26x 品質 ---
+        echo       1: 高品質 (CRF:18)
+        echo       2: 中品質 (CRF:23)
+        echo       3: 低品質 (CRF:28)
+        echo       4: カスタム
         choice /c 1234 /m "品質を選択"
         set quality_choice=%errorlevel%
         if %quality_choice%==1 (
