@@ -1,5 +1,5 @@
 @echo off
-rem ffmpeg一括再エンコードVer7.3 (わっち改修版・パス修正)
+rem ffmpeg一括再エンコードVer7.4 (わっち改修版・パス最終修正)
 rem このバッチファイルは、複数の動画ファイルをffmpegで一括再エンコードします。
 rem 最初にエンコードオプションを設定し、その後ファイルごとに処理を実行します。
 
@@ -11,8 +11,8 @@ setlocal enabledelayedexpansion
 
 rem --- ▼ ユーザー設定 ▼ ---
 rem LosslessCutや通知アプリのパスを自分の環境に合わせて設定してください。
-set losslesscut_path="C:\Path\To\LosslessCut\LosslessCut.exe"
-set notify_script_path=""
+set "losslesscut_path=C:\Path\To\LosslessCut\LosslessCut.exe"
+set "notify_script_path="
 rem --- ▲ ユーザー設定 ▲ ---
 
 
@@ -184,12 +184,12 @@ goto MainLoop
     echo +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     echo.
 
-    rem --- [修正箇所] パスを扱う変数は、定義時にクォートを含めない ---
+    rem --- パスを扱う変数は、定義時にクォートを含めない ---
     set "input_file=%~1"
     set "input_dir=%~dp1"
     set "input_name=%~n1"
 
-    rem --- [修正箇所] パスの連結を安全に行う ---
+    rem --- パスの連結を安全に行う ---
     set "output_dir="
     if "!output_mode!"=="fixed" (
         set "output_dir=!output_fixed_path!"
@@ -205,20 +205,19 @@ goto MainLoop
     rem --- 各種設定のリセットと準備 ---
     set "current_cutinfo="
     set "current_cutinfo2="
-    set "exiftoolCommand="
-    set "final_audio_input_options=-i ""!input_file!"""
-    set "final_audio_encode_options="
     set "temp_qaac_output_file=!temp_dir!\qaac_tmp.m4a"
     set "temp_wav_file=!temp_dir!\temp_audio.wav"
     set "temp_ffmpeg_metadata_file=!temp_dir!\ffmpeg_metadata.txt"
+    set "use_qaac_audio=no"
+    set "use_ffmpeg_metadata=no"
 
     rem --- メタデータファイル処理 (ffmpeg形式) ---
     if "!exiftool!"=="ffmpeg" (
         echo ffmetadataを作成中...
-        ffmpeg -hide_banner -i "!input_file!" -f ffmetadata "!temp_ffmpeg_metadata_file!"
+        ffmpeg -hide_banner -y -i "!input_file!" -f ffmetadata "!temp_ffmpeg_metadata_file!"
         if not errorlevel 1 (
-            set "exiftoolCommand=-i ""!temp_ffmpeg_metadata_file!"" -map_metadata 1"
-            echo    ffmetadataオプション: !exiftoolCommand!
+            set "use_ffmpeg_metadata=yes"
+            echo    ffmetadataを作成しました。
         ) else (
             echo 警告: ffmetadataの作成に失敗しました。
         )
@@ -249,6 +248,7 @@ goto MainLoop
         set "use_audio_option=opus"
     )
 
+    set "final_audio_encode_options="
     if "!use_audio_option!"=="copy" (
         set "final_audio_encode_options=-c:a copy"
     ) else if "!use_audio_option!"=="null" (
@@ -258,12 +258,11 @@ goto MainLoop
     ) else if "!use_audio_option!"=="qaac" (
         echo qaacでエンコード処理中...
         echo    一時WAVファイルに変換しています...
-        ffmpeg -hide_banner !current_cutinfo! -i "!input_file!" -vn !Audiofilter! -f wav "!temp_wav_file!"
+        ffmpeg -hide_banner -y !current_cutinfo! -i "!input_file!" -vn !Audiofilter! -f wav "!temp_wav_file!"
         if not errorlevel 1 (
             qaac64 !qaacencoder! "!temp_wav_file!" -o "!temp_qaac_output_file!"
             if not errorlevel 1 (
-                set "final_audio_input_options=-i ""!input_file!"" -i ""!temp_qaac_output_file!"""
-                set "final_audio_encode_options=-c:a copy -map 0:v:0 -map 1:a:0"
+                set "use_qaac_audio=yes"
                 echo    qaacでエンコードされた音声を使用します。
             ) else (
                 echo エラー: qaacエンコードに失敗。音声をコピーします。
@@ -274,12 +273,28 @@ goto MainLoop
             set "final_audio_encode_options=-c:a copy"
         )
     )
-    echo    最終音声オプション: !final_audio_encode_options!
 
-    rem --- ffmpeg エンコードコマンド実行 ---
-    echo --- ffmpeg エンコード実行 ---
-    set "final_ffmpeg_command=ffmpeg -hide_banner !current_cutinfo! !final_audio_input_options! !exiftoolCommand! !current_cutinfo2! !encoder! !vf! !argument! !final_audio_encode_options! ""!output_file!"""
+    rem --- ffmpeg エンコードコマンドの組み立て ---
+    set "final_ffmpeg_command=ffmpeg -hide_banner -y"
+    if defined current_cutinfo set "final_ffmpeg_command=!final_ffmpeg_command! !current_cutinfo!"
+    set "final_ffmpeg_command=!final_ffmpeg_command! -i ""!input_file!"""
+    if "!use_qaac_audio!"=="yes" set "final_ffmpeg_command=!final_ffmpeg_command! -i ""!temp_qaac_output_file!"""
+    if "!use_ffmpeg_metadata!"=="yes" set "final_ffmpeg_command=!final_ffmpeg_command! -i ""!temp_ffmpeg_metadata_file!"""
+    if defined current_cutinfo2 set "final_ffmpeg_command=!final_ffmpeg_command! !current_cutinfo2!"
     
+    set "final_ffmpeg_command=!final_ffmpeg_command! -c:v !encoder! !vf! !argument!"
+
+    if "!use_qaac_audio!"=="yes" (
+        set "final_ffmpeg_command=!final_ffmpeg_command! -c:a copy -map 0:v:0 -map 1:a:0"
+    ) else (
+        if defined final_audio_encode_options set "final_ffmpeg_command=!final_ffmpeg_command! !final_audio_encode_options!"
+    )
+    if "!use_ffmpeg_metadata!"=="yes" set "final_ffmpeg_command=!final_ffmpeg_command! -map_metadata 2"
+
+    set "final_ffmpeg_command=!final_ffmpeg_command! ""!output_file!"""
+
+    rem --- ffmpeg エンコード実行 ---
+    echo --- ffmpeg エンコード実行 ---
     echo.
     echo    実行コマンド:
     echo    !final_ffmpeg_command!
@@ -289,7 +304,6 @@ goto MainLoop
     !final_ffmpeg_command!
     @echo off
 
-    rem --- [修正箇所] エラー判定を強化 ---
     if errorlevel 1 (
         echo エラー: ffmpegエンコード中にエラーが発生しました。
         if exist "!notify_script_path!" call "!notify_script_path!" "!filecount! EncodeError"
@@ -302,12 +316,13 @@ goto MainLoop
             echo ExifToolでメタデータをコピーしています...
             exiftool -api largefilesupport=1 -tagsfromfile "%~1" -all:all -overwrite_original "!output_file!"
         )
-        rem 一時フォルダの削除
-        if exist "!temp_dir!" (
-            rd /s /q "!temp_dir!"
-            echo 一時ファイルをクリーンアップしました。
-        )
         if exist "!output_dir!\*.*_original" del "!output_dir!\*.*_original"
+    )
+
+    rem 一時フォルダはエラーの有無に関わらず削除
+    if exist "!temp_dir!" (
+        rd /s /q "!temp_dir!"
+        echo 一時ファイルをクリーンアップしました。
     )
 
     echo.
