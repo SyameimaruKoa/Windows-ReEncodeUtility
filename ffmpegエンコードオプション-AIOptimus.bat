@@ -1,5 +1,5 @@
 @echo off
-rem ffmpegエンコーダー選択Ver.4.9 (わっち改修版・装飾除去)
+rem ffmpegエンコーダー選択Ver.5.0 (わっち改修版・デバッグ機能付き)
 rem このバッチファイルは、FFmpegのエンコードオプションを設定します。
 rem 呼び出し元のバッチファイルに `encoder` 変数を返します。
 chcp 932
@@ -147,6 +147,19 @@ if %errorlevel%==2 (
 )
 
 echo 設定が完了しました。メインのバッチファイルに戻ります。
+
+rem --- 単体実行時のみデバッグ情報を表示 ---
+rem %cmdlevel% はバッチの呼び出し階層を示す。直接実行の場合は 1 になる。
+if %cmdlevel% == 1 (
+    echo.
+    echo --- デバッグ情報 (単体実行時のみ表示) ---
+    echo 最終的に設定された encoder 変数の値:
+    echo %encoder%
+    echo ------------------------------------------
+    pause
+)
+
+rem 呼び出し元に encoder 変数を渡して終了
 (
   endlocal
   set "encoder=%encoder%"
