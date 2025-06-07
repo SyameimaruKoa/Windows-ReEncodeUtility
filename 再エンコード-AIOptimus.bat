@@ -1,5 +1,5 @@
 @echo off
-rem ffmpeg一括再エンコードVer6.8 (わっち改修版・装飾除去)
+rem ffmpeg一括再エンコードVer7.1 (わっち改修版・変数利用対策)
 rem このバッチファイルは、複数の動画ファイルをffmpegで一括再エンコードします。
 rem 最初にエンコードオプションを設定し、その後ファイルごとに処理を実行します。
 
@@ -91,11 +91,13 @@ if "!AudioEncode!"=="qaac" (
     goto qaacoption
 )
 if "!AudioEncode!"=="copy" (
-    echo 音声はそのままコピーします (-c:a copy)。
+    set "msg=音声はそのままコピーします (-c:a copy)。"
+    echo !msg!
     goto SkipAudioSettings
 )
 if "!AudioEncode!"=="null" (
-    echo 音声は削除します (-an)。
+    set "msg=音声は削除します (-an)。"
+    echo !msg!
     goto SkipAudioSettings
 )
 
@@ -107,7 +109,8 @@ if %errorlevel%==2 set qaacencoder=--he
 
 choice /m "qaacで音声フィルター(-af)を使いますか？"
 if %errorlevel%==1 (
-    echo 複数指定する場合はカンマ(,)で区切ってください (例: atempo=2.0,volume=0.5)
+    set "msg=複数指定する場合はカンマ(,)で区切ってください (例: atempo=2.0,volume=0.5)"
+    echo !msg!
     set /P Audiofilter="ffmpegの-afフィルター文字列入力 > "
     if defined Audiofilter (
         set Audiofilter=-af "!Audiofilter!"
@@ -148,11 +151,13 @@ set vf=
 set argument=
 choice /m "追加のビデオフィルター(-vf)やオプションを使いますか？"
 if %errorlevel%==1 (
-    echo   ffmpegの「-vf」として使用するフィルターを入力してください (例: scale=1280:-1)。
+    set "msg=  ffmpegの「-vf」として使用するフィルターを入力してください (例: scale=1280:-1)。"
+    echo !msg!
     set /p vf="   -vfフィルター文字列入力 > "
     if defined vf set vf=-vf "!vf!"
 
-    echo   その他のffmpeg引数を追加する場合はスペース区切りで入力してください (例: -max_muxing_queue_size 1024)。
+    set "msg=  その他のffmpeg引数を追加する場合はスペース区切りで入力してください (例: -max_muxing_queue_size 1024)。"
+    echo !msg!
     set /p argument="   追加引数入力 > "
 )
 echo.
