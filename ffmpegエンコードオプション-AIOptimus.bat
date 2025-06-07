@@ -34,7 +34,7 @@ set hardware_choice=%errorlevel%
 echo.
 
 echo --- 2. コーデック選択 ---
-choice /c HWV /m "使用するコーデック (H:H.265/HEVC, W:H.264/AVC, V:VP9)"
+choice /c HWV /m "使用するコーデック (H:HEVC, W:AVC, V:VP9)"
 set codec_choice=%errorlevel%
 echo.
 
