@@ -12,7 +12,7 @@ setlocal enabledelayedexpansion
 rem --- ▼ ユーザー設定 ▼ ---
 rem LosslessCutや通知アプリのパスを自分の環境に合わせて設定してください。
 set losslesscut_path="C:\Path\To\LosslessCut\LosslessCut.exe"
-set notify_script_path="C:\Path\To\Your\notify.bat"
+set notify_script_path=""
 rem --- ▲ ユーザー設定 ▲ ---
 
 
@@ -25,7 +25,7 @@ echo.
 
 rem 外部バッチファイルでエンコードオプションを設定
 echo エンコードオプションを設定します...
-call "%~dp0ffmpegエンコードオプション-改.bat"
+call "%~dp0ffmpegエンコードオプション-AIOptimus.bat"
 if "!encoder!"=="" (
     echo エラー: エンコードオプションが設定されませんでした。処理を中止します。
     pause
