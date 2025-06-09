@@ -181,15 +181,6 @@ rem --- [修正箇所] ファイルベースのテンプレート選択 ---
 :TemplateSelect
 cls
 echo --- テンプレートモード ---
-if not exist "!template_dir!" (
-    echo テンプレートフォルダが見つかりませぬ。
-    echo "!template_dir!" を作成します。
-    mkdir "!template_dir!"
-    echo このフォルダに .template ファイルを置いてくだされ。
-    pause
-    goto root
-)
-
 set "template_count=0"
 echo 利用可能なテンプレート:
 for %%F in ("!template_dir!\*.template") do (
