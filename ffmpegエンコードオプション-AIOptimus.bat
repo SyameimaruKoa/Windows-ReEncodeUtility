@@ -70,9 +70,9 @@ goto home
 
 :Intel_QSV
     if %codec_choice%==1 (
-        set "base_encoder=-c:v hevc_qsv -pix_fmt nv12"
+        set "base_encoder=-c:v hevc_qsv"
     ) else if %codec_choice%==2 (
-        set "base_encoder=-c:v h264_qsv -pix_fmt nv12"
+        set "base_encoder=-c:v h264_qsv"
     ) else if %codec_choice%==3 (
         echo エラー: Intel QSVはVP9エンコードに非対応です。やり直してください。
         pause & goto home
@@ -269,7 +269,8 @@ goto Finalize
 
 :Finalize
 echo 設定が完了しました。メインのバッチファイルに戻ります。
-(
-    endlocal
-    set "encoder=%encoder%"
+rem --- [修正箇所] 確実な方法で呼び出し元に変数を渡す ---
+for /f "delims=" %%i in ("!encoder!") do (
+  endlocal
+  set "encoder=%%i"
 )
