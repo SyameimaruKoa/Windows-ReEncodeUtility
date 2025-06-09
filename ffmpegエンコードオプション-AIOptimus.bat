@@ -1,12 +1,12 @@
 @echo off
-rem ffmpegエンコーダー選択Ver.7.4 (わっち改修版・VP9オプション修正)
+rem ffmpegエンコーダー選択Ver.8.0 (わっち改修版・統合最終版)
 rem このバッチファイルは、FFmpegのエンコードオプションを設定します。
 rem 呼び出し元のバッチファイルに `encoder` 変数を返します。
 chcp 932
 
 :home
 cls
-setlocal
+setlocal enabledelayedexpansion
 set encoder=
 set hardware_choice=
 set codec_choice=
@@ -17,7 +17,6 @@ set tune_option=
 echo ───────────────────────────────────────────────────────────────
 echo  FFmpeg エンコードオプション設定 (わっち改修版)
 echo ───────────────────────────────────────────────────────────────
-rem --- [修正箇所] 罫線を復活させ、説明を半角にした最終版の表示 ---
 echo.
 echo     [Available Options]
 echo.
@@ -71,9 +70,9 @@ goto home
 
 :Intel_QSV
     if %codec_choice%==1 (
-        set base_encoder=-c:v hevc_qsv
+        set "base_encoder=-c:v hevc_qsv -pix_fmt nv12"
     ) else if %codec_choice%==2 (
-        set base_encoder=-c:v h264_qsv
+        set "base_encoder=-c:v h264_qsv -pix_fmt nv12"
     ) else if %codec_choice%==3 (
         echo エラー: Intel QSVはVP9エンコードに非対応です。やり直してください。
         pause & goto home
@@ -90,12 +89,12 @@ goto home
     if %quality_choice%==2 set "encoder=%base_encoder% -global_quality 25"
     if %quality_choice%==3 set "encoder=%base_encoder% -global_quality 30"
     if %quality_choice%==4 (
-    set /p val="品質値(1-51) > "
-    set "encoder=%base_encoder% -global_quality %val%"
+        set /p val="品質値(1-51) > "
+        set "encoder=!base_encoder! -global_quality !val!"
     )
     if %quality_choice%==5 (
-    set /p val="ビットレート(例:8000k) > "
-    set "encoder=%base_encoder% -b:v %val%"
+        set /p val="ビットレート(例:8000k) > "
+        set "encoder=!base_encoder! -b:v !val!"
     )
 
     echo.
@@ -115,8 +114,8 @@ goto home
     goto end_options
 
 :NVIDIA_NVENC
-    if %codec_choice%==1 set base_encoder=-c:v hevc_nvenc
-    if %codec_choice%==2 set base_encoder=-c:v h264_nvenc
+    if %codec_choice%==1 set "base_encoder=-c:v hevc_nvenc"
+    if %codec_choice%==2 set "base_encoder=-c:v h264_nvenc"
     if %codec_choice%==3 (
         echo エラー: NVIDIA NVENCはVP9エンコードに非対応です。やり直してください。
         pause
@@ -132,12 +131,12 @@ goto home
     if %quality_choice%==2 set "encoder=%base_encoder% -rc vbr -qmin 0 -qmax 99 -cq 28"
     if %quality_choice%==3 set "encoder=%base_encoder% -rc vbr -qmin 0 -qmax 99 -cq 32"
     if %quality_choice%==4 (
-    set /p val="品質値(CQ 1-51) > "
-    set "encoder=%base_encoder% -rc vbr -qmin 0 -qmax 99 -cq %val%"
+        set /p val="品質値(CQ 1-51) > "
+        set "encoder=!base_encoder! -rc vbr -qmin 0 -qmax 99 -cq !val!"
     )
     if %quality_choice%==5 (
-    set /p val="ビットレート(例:6000k) > "
-    set "encoder=%base_encoder% -rc vbr -b:v %val%"
+        set /p val="ビットレート(例:6000k) > "
+        set "encoder=!base_encoder! -rc vbr -b:v !val!"
     )
 
     echo.
@@ -166,13 +165,13 @@ goto home
     goto end_options
 
 :CPU_X26X
-    if %codec_choice%==1 set base_encoder=-c:v libx265
-    if %codec_choice%==2 set base_encoder=-c:v libx264
+    if %codec_choice%==1 set "base_encoder=-c:v libx265"
+    if %codec_choice%==2 set "base_encoder=-c:v libx264"
     if %codec_choice%==3 (
-    set base_encoder=-c:v libvpx-vp9
+        set "base_encoder=-c:v libvpx-vp9"
         goto CPU_VP9_MENU
     )
-        goto CPU_H26X_MENU
+    goto CPU_H26X_MENU
 
 :CPU_VP9_MENU
     echo --- 3. CPU (VP9) 品質設定 ---
@@ -182,8 +181,8 @@ goto home
     if %quality_choice%==1 set "encoder=%base_encoder% -crf 30 -b:v 0 -cpu-used 4"
     if %quality_choice%==2 set "encoder=%base_encoder% -crf 35 -b:v 0 -cpu-used 4"
     if %quality_choice%==3 (
-    set /p val="CRF値 > "
-    set "encoder=%base_encoder% -crf %val% -b:v 0 -cpu-used 4"
+        set /p val="CRF値 > "
+        set "encoder=!base_encoder! -crf !val! -b:v 0 -cpu-used 4"
     )
     goto end_options
 
@@ -195,7 +194,7 @@ goto home
     if %quality_choice%==1 set "encoder=%base_encoder% -crf 18"
     if %quality_choice%==2 set "encoder=%base_encoder% -crf 23"
     if %quality_choice%==3 set "encoder=%base_encoder% -crf 28"
-    if %quality_choice%==4 ( set /p val="CRF値 > " & set "encoder=%base_encoder% -crf %val%" )
+    if %quality_choice%==4 ( set /p val="CRF値 > " & set "encoder=!base_encoder! -crf !val!" )
 
     echo.
     echo --- 3b. CPU (H.26x) プリセット選択 ---
@@ -218,8 +217,8 @@ goto home
     goto end_options
 
 :AMD_AMF
-    if %codec_choice%==1 set base_encoder=-c:v hevc_amf
-    if %codec_choice%==2 set base_encoder=-c:v h264_amf
+    if %codec_choice%==1 set "base_encoder=-c:v hevc_amf"
+    if %codec_choice%==2 set "base_encoder=-c:v h264_amf"
     if %codec_choice%==3 (
         echo エラー: AMD AMFはVP9エンコードに非対応です。やり直してください。
         pause
@@ -235,11 +234,11 @@ goto home
     if %quality_choice%==2 set "encoder=%base_encoder% -rc cqp -qp_i 28 -qp_p 28 -qp_b 28"
     if %quality_choice%==3 set "encoder=%base_encoder% -rc cqp -qp_i 35 -qp_p 35 -qp_b 35"
     if %quality_choice%==4 (
-    set /p val="QP値 > "
+        set /p val="QP値 > "
     set "encoder=%base_encoder% -rc cqp -qp_i %val% -qp_p %val% -qp_b %val%"
     )
     if %quality_choice%==5 (
-    set /p val="ビットレート(例:7000k) > "
+        set /p val="ビットレート(例:7000k) > "
     set "encoder=%base_encoder% -rc vbr_peak -b:v %val%"
     )
 
@@ -271,6 +270,6 @@ goto Finalize
 :Finalize
 echo 設定が完了しました。メインのバッチファイルに戻ります。
 (
-endlocal
-set "encoder=%encoder%"
+    endlocal
+    set "encoder=%encoder%"
 )
