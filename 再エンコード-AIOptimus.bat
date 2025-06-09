@@ -13,7 +13,7 @@ rem --- ▼ ユーザー設定 ▼ ---
 rem LosslessCutや通知アプリのパスを自分の環境に合わせて設定してください。
 set "losslesscut_path=C:\Path\To\LosslessCut\LosslessCut.exe"
 set "notify_script_path="
-set "template_dir=%~dp0templates"
+set "template_dir=%~dp0"
 rem --- ▲ ユーザー設定 ▲ ---
 
 

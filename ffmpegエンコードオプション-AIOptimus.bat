@@ -271,16 +271,6 @@ goto Finalize
 :Finalize
 echo 設定が完了しました。メインのバッチファイルに戻ります。
 (
-    endlocal
-    set "encoder=%encoder%"
-)
-if %cmdlevel% == 1 (
-    echo.
-    echo --- デバッグ情報 (単体実行時のみ表示) ---
-    echo.
-    set encoder
-    echo.
-    echo ------------------------------------------
-    echo このウィンドウは、何かキーを押すと閉じるのが正常な動きじゃ。
-    pause
+endlocal
+set "encoder=%encoder%"
 )
