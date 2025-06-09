@@ -1,5 +1,5 @@
 @echo off
-rem ffmpeg一括再エンコードVer7.6 (わっち改修版・最終修正 v2)
+rem ffmpeg一括再エンコードVer9.0 (わっち改修版・複数テンプレート対応)
 rem このバッチファイルは、複数の動画ファイルをffmpegで一括再エンコードします。
 rem 最初にエンコードオプションを設定し、その後ファイルごとに処理を実行します。
 
@@ -13,16 +13,32 @@ rem --- ▼ ユーザー設定 ▼ ---
 rem LosslessCutや通知アプリのパスを自分の環境に合わせて設定してください。
 set "losslesscut_path=C:\Path\To\LosslessCut\LosslessCut.exe"
 set "notify_script_path="
+set "template_dir=%~dp0templates"
 rem --- ▲ ユーザー設定 ▲ ---
 
 
 :root
-rem --- 初期設定 ---
+rem --- [修正箇所] モード選択 ---
+cls
 echo ─────────────────────────────────────
 echo  FFmpeg 一括再エンコード処理 開始 (わっち改修版)
 echo ─────────────────────────────────────
 echo.
+echo 実行モードを選択してください。
+echo.
+echo   1. 通常モード (一つずつ対話形式で設定)
+echo   2. テンプレートから選択
+echo.
+choice /c 12 /m "モードを選択してください"
+if %errorlevel%==1 goto InteractiveSetup
+if %errorlevel%==2 goto TemplateSelect
+goto root
 
+
+rem --- 通常設定モード ---
+:InteractiveSetup
+cls
+echo --- 通常モード ---
 rem 外部バッチファイルでエンコードオプションを設定
 echo エンコードオプションを設定します...
 call "%~dp0ffmpegエンコードオプション-AIOptimus.bat"
@@ -157,6 +173,70 @@ if %errorlevel%==1 (
     echo !msg!
     set /p argument="   追加引数入力 > "
 )
+
+goto StartProcessing
+
+
+rem --- [修正箇所] ファイルベースのテンプレート選択 ---
+:TemplateSelect
+cls
+echo --- テンプレートモード ---
+if not exist "!template_dir!" (
+    echo テンプレートフォルダが見つかりませぬ。
+    echo "!template_dir!" を作成します。
+    mkdir "!template_dir!"
+    echo このフォルダに .template ファイルを置いてくだされ。
+    pause
+    goto root
+)
+
+set "template_count=0"
+echo 利用可能なテンプレート:
+for %%F in ("!template_dir!\*.template") do (
+    set /a template_count+=1
+    echo   !template_count!. %%~nF
+    set "template_!template_count!=%%F"
+)
+
+if !template_count! equ 0 (
+    echo.
+    echo テンプレートファイルが見つかりませぬ。
+    echo "!template_dir!" フォルダに .template ファイルを置いてくだされ。
+    pause
+    goto root
+)
+
+echo.
+:SelectTemplateNumber
+set /p selected_num="使用するテンプレートの番号を入力してください (1-!template_count!): "
+if !selected_num! gtr !template_count! (
+    echo 無効な番号じゃ。
+    goto SelectTemplateNumber
+)
+if !selected_num! lss 1 (
+    echo 無効な番号じゃ。
+    goto SelectTemplateNumber
+)
+
+set "selected_template=!template_%selected_num%!"
+echo "!selected_template!" を読み込みます...
+call "!selected_template!"
+
+echo.
+echo --- テンプレートから読み込まれた設定 ---
+echo エンコードオプション: !encoder!
+echo 出力先: !output_mode!
+echo 完了後アクション: !after_process_action!
+echo 拡張子: .!extension!
+echo 音声: !AudioEncode!
+echo カット: !cut!
+echo メタデータ: !exiftool!
+echo.
+
+goto StartProcessing
+
+
+:StartProcessing
 echo.
 echo ─────────────────────────────────────
 echo  全ての初期設定が完了しました。
@@ -188,16 +268,16 @@ goto MainLoop
     set "input_dir=%~dp1"
     set "input_name=%~n1"
 
-    set "output_dir="
+    set "output_dir_final="
     if "!output_mode!"=="fixed" (
-        set "output_dir=!output_fixed_path!"
+        set "output_dir_final=!output_fixed_path!"
     ) else (
-        set "output_dir=!input_dir!encoded_output"
+        set "output_dir_final=!input_dir!encoded_output"
     )
-    if not exist "!output_dir!" mkdir "!output_dir!"
+    if not exist "!output_dir_final!" mkdir "!output_dir_final!"
 
-    set "output_file=!output_dir!\!input_name!.!extension!"
-    set "temp_dir=!output_dir!\temp_!input_name!"
+    set "output_file=!output_dir_final!\!input_name!.!extension!"
+    set "temp_dir=!output_dir_final!\temp_!input_name!"
     if not exist "!temp_dir!" mkdir "!temp_dir!"
 
     set "current_cutinfo="
@@ -257,6 +337,7 @@ goto MainLoop
         echo    一時WAVファイルに変換しています...
         ffmpeg -hide_banner -y !current_cutinfo! -i "!input_file!" -vn !Audiofilter! -f wav "!temp_wav_file!"
         if not errorlevel 1 (
+            echo    qaacでエンコードしています...
             qaac64 !qaacencoder! "!temp_wav_file!" -o "!temp_qaac_output_file!"
             if not errorlevel 1 (
                 set "use_qaac_audio=yes"
@@ -283,7 +364,7 @@ goto MainLoop
     set /a map_audio_index=0
     set /a map_meta_index=0
     set /a input_count=1
-    
+
     if "!use_qaac_audio!"=="yes" (
         set "map_audio_index=!input_count!"
         set /a input_count+=1
@@ -291,13 +372,13 @@ goto MainLoop
     if "!use_ffmpeg_metadata!"=="yes" (
         set "map_meta_index=!input_count!"
     )
-    
+
     if "!use_qaac_audio!"=="yes" (
         set "final_ffmpeg_command=!final_ffmpeg_command! -c:a copy -map !map_video_index!:v:0 -map !map_audio_index!:a:0"
     ) else (
         if defined final_audio_encode_options set "final_ffmpeg_command=!final_ffmpeg_command! !final_audio_encode_options!"
     )
-    
+
     if "!use_ffmpeg_metadata!"=="yes" set "final_ffmpeg_command=!final_ffmpeg_command! -map_metadata !map_meta_index!"
 
     set "final_ffmpeg_command=!final_ffmpeg_command! "!output_file!""
@@ -318,7 +399,7 @@ goto MainLoop
         if exist "!notify_script_path!" call "!notify_script_path!" "!filecount! EncodeError"
     ) else (
         echo ffmpegエンコードが正常に完了しました。
-        
+
         rem --- 後処理 ---
         echo --- 後処理実行 ---
         if "!exiftool!"=="yes" (
@@ -337,9 +418,7 @@ goto MainLoop
     echo  ファイル「%~nx1」の処理が完了しました。
     echo +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     echo.
-    
-    rem --- [修正箇所] 無人実行のためpauseを削除 ---
-    
+
     shift
     if not "%~1"=="" goto MainLoop
 

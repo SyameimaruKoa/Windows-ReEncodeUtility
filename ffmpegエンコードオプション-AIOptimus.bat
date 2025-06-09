@@ -1,5 +1,5 @@
 @echo off
-rem ffmpegƒGƒ“ƒR[ƒ_[‘I‘ðVer.5.4 (‚í‚Á‚¿‰üC”ÅE•ªŠòƒƒWƒbƒNC³)
+rem ffmpegƒGƒ“ƒR[ƒ_[‘I‘ðVer.6.1 (‚í‚Á‚¿‰üC”ÅEƒeƒ“ƒvƒŒ[ƒg”ñ‘Î‰ž)
 rem ‚±‚Ìƒoƒbƒ`ƒtƒ@ƒCƒ‹‚ÍAFFmpeg‚ÌƒGƒ“ƒR[ƒhƒIƒvƒVƒ‡ƒ“‚ðÝ’è‚µ‚Ü‚·B
 rem ŒÄ‚Ño‚µŒ³‚Ìƒoƒbƒ`ƒtƒ@ƒCƒ‹‚É `encoder` •Ï”‚ð•Ô‚µ‚Ü‚·B
 chcp 932
@@ -17,10 +17,10 @@ echo „Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„
 echo ƒGƒ“ƒR[ƒh•ûŽ®•Žg—pƒvƒƒZƒbƒT
 echo         „      Intel (I)    „    NVIDIA (N)    „         CPU (C)        „  AMD (A) (NVIDIA‚ÌŠ)
 echo         „¥„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„¨„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„¦„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„¨„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„¦„¦„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„§
-echo         „   Intel¨LA-ICQ NVIDIA¨CQP    „         LA       „ „    VP9(W)  „ 
+echo         „   Intel¨LA-ICQ NVIDIA¨CQP    „         LA       „ „    VP9(V)  „ 
 echo „¡„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„©„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„¦„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„©„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„§„¥„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„§
 echo „  H.264 „  1 (Vlow)     „  3 (High)     „  5 Custom        „ „  1 crf20   „ 
-echo „   (M)  „¥„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„©„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„©„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„§„¥„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„§
+echo „   (W)  „¥„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„©„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„©„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„§„¥„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„§
 echo „        „  2 (low)      „  4 Custom     „  6 10000k        „ „  2 crf25   „ 
 echo „¥„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„©„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„©„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„©„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„§„¥„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„Ÿ„§
 echo „  H.265 „  1 (Vlow)     „  3 (High)     „  5 Custom        „ „  3 crf30   „ 
@@ -63,17 +63,17 @@ goto home
     choice /c 12345 /m "•iŽ¿‚ð‘I‘ð‚µ‚Ä‚­‚¾‚³‚¢"
     set quality_choice=%errorlevel%
     if %quality_choice%==1 (
-        set encoder=%base_encoder% -global_quality 20 -preset slow
+        set "encoder=%base_encoder% -global_quality 20 -preset slow"
     ) else if %quality_choice%==2 (
-        set encoder=%base_encoder% -global_quality 25 -preset medium
+        set "encoder=%base_encoder% -global_quality 25 -preset medium"
     ) else if %quality_choice%==3 (
-        set encoder=%base_encoder% -global_quality 30 -preset fast
+        set "encoder=%base_encoder% -global_quality 30 -preset fast"
     ) else if %quality_choice%==4 (
         set /p val="•iŽ¿’l(1-51) > "
-        set encoder=%base_encoder% -global_quality %val%
+        set "encoder=%base_encoder% -global_quality %val%"
     ) else if %quality_choice%==5 (
         set /p val="ƒrƒbƒgƒŒ[ƒg(—á:8000k) > "
-        set encoder=%base_encoder% -b:v %val%
+        set "encoder=%base_encoder% -b:v %val%"
     )
     goto end_options
 
@@ -93,26 +93,33 @@ goto home
     choice /c 12345 /m "•iŽ¿‚ð‘I‘ð‚µ‚Ä‚­‚¾‚³‚¢"
     set quality_choice=%errorlevel%
     if %quality_choice%==1 (
-        set encoder=%base_encoder% -rc vbr -cq 23 -qmin 0 -qmax 99 -preset p5 -tune hq
+        set "encoder=%base_encoder% -rc vbr -cq 23 -qmin 0 -qmax 99 -preset p5 -tune hq"
     ) else if %quality_choice%==2 (
-        set encoder=%base_encoder% -rc vbr -cq 28 -qmin 0 -qmax 99 -preset p5 -tune hq
+        set "encoder=%base_encoder% -rc vbr -cq 28 -qmin 0 -qmax 99 -preset p5 -tune hq"
     ) else if %quality_choice%==3 (
-        set encoder=%base_encoder% -rc vbr -cq 32 -qmin 0 -qmax 99 -preset p1 -tune ll
+        set "encoder=%base_encoder% -rc vbr -cq 32 -qmin 0 -qmax 99 -preset p1 -tune ll"
     ) else if %quality_choice%==4 (
         set /p val="•iŽ¿’l(CQ 1-51) > "
-        set encoder=%base_encoder% -rc vbr -cq %val% -qmin 0 -qmax 99 -preset p5 -tune hq
+        set "encoder=%base_encoder% -rc vbr -cq %val% -qmin 0 -qmax 99 -preset p5 -tune hq"
     ) else if %quality_choice%==5 (
         set /p val="ƒrƒbƒgƒŒ[ƒg(—á:6000k) > "
-        set encoder=%base_encoder% -rc vbr -b:v %val% -preset p5 -tune hq
+        set "encoder=%base_encoder% -rc vbr -b:v %val% -preset p5 -tune hq"
     )
     goto end_options
 
 :CPU_X26X
-    if %codec_choice%==1 set base_encoder=-c:v libx265
-    if %codec_choice%==2 set base_encoder=-c:v libx264
-    if %codec_choice%==3 set base_encoder=-c:v libvpx-vp9
+    if %codec_choice%==1 (
+        set base_encoder=-c:v libx265
+    ) else if %codec_choice%==2 (
+        set base_encoder=-c:v libx264
+    ) else if %codec_choice%==3 (
+        set base_encoder=-c:v libvpx-vp9
+    ) else (
+        echo ƒGƒ‰[: –³Œø‚ÈƒR[ƒfƒbƒN‚ª‘I‘ð‚³‚ê‚Ü‚µ‚½B
+        pause
+        goto home
+    )
     echo --- 3. CPUƒGƒ“ƒR[ƒh •iŽ¿Ý’è ---
-    rem --- [C³‰ÓŠ] M—Š«‚Ì‚‚¢GOTO•¶‚É‚æ‚é•ªŠò‚É•ÏX ---
     if "%codec_choice%"=="3" goto CPU_VP9_MENU
     goto CPU_H26X_MENU
 
@@ -125,12 +132,12 @@ goto home
     choice /c 123 /m "•iŽ¿‚ð‘I‘ð"
     set quality_choice=%errorlevel%
     if %quality_choice%==1 (
-        set encoder=%base_encoder% -crf 30 -b:v 0 -cpu-used 4
+        set "encoder=%base_encoder% -crf 30 -b:v 0 -cpu-used 4"
     ) else if %quality_choice%==2 (
-        set encoder=%base_encoder% -crf 35 -b:v 0 -cpu-used 4
+        set "encoder=%base_encoder% -crf 35 -b:v 0 -cpu-used 4"
     ) else if %quality_choice%==3 (
         set /p val="CRF’l > "
-        set encoder=%base_encoder% -crf %val% -b:v 0
+        set "encoder=%base_encoder% -crf %val% -b:v 0"
     )
     goto end_options
 
@@ -144,21 +151,23 @@ goto home
     choice /c 1234 /m "•iŽ¿‚ð‘I‘ð"
     set quality_choice=%errorlevel%
     if %quality_choice%==1 (
-        set encoder=%base_encoder% -crf 18 -preset slow
+        set "encoder=%base_encoder% -crf 18 -preset slow"
     ) else if %quality_choice%==2 (
-        set encoder=%base_encoder% -crf 23 -preset medium
+        set "encoder=%base_encoder% -crf 23 -preset medium"
     ) else if %quality_choice%==3 (
-        set encoder=%base_encoder% -crf 28 -preset fast
+        set "encoder=%base_encoder% -crf 28 -preset fast"
     ) else if %quality_choice%==4 (
         set /p val="CRF’l > "
-        set encoder=%base_encoder% -crf %val% -preset medium
+        set "encoder=%base_encoder% -crf %val% -preset medium"
     )
     goto end_options
 
 :AMD_AMF
-    if %codec_choice%==1 set base_encoder=-c:v hevc_amf
-    if %codec_choice%==2 set base_encoder=-c:v h264_amf
-    if %codec_choice%==3 (
+    if %codec_choice%==1 (
+        set base_encoder=-c:v hevc_amf
+    ) else if %codec_choice%==2 (
+        set base_encoder=-c:v h264_amf
+    ) else if %codec_choice%==3 (
         echo ƒGƒ‰[: AMD AMF‚ÍVP9ƒGƒ“ƒR[ƒh‚É”ñ‘Î‰ž‚Å‚·B‚â‚è’¼‚µ‚Ä‚­‚¾‚³‚¢B
         pause & goto home
     )
@@ -171,17 +180,17 @@ goto home
     choice /c 12345 /m "•iŽ¿‚ð‘I‘ð‚µ‚Ä‚­‚¾‚³‚¢"
     set quality_choice=%errorlevel%
     if %quality_choice%==1 (
-        set encoder=%base_encoder% -rc cqp -qp_i 22 -qp_p 22 -qp_b 22 -quality quality
+        set "encoder=%base_encoder% -rc cqp -qp_i 22 -qp_p 22 -qp_b 22 -quality quality"
     ) else if %quality_choice%==2 (
-        set encoder=%base_encoder% -rc cqp -qp_i 28 -qp_p 28 -qp_b 28 -quality quality
+        set "encoder=%base_encoder% -rc cqp -qp_i 28 -qp_p 28 -qp_b 28 -quality quality"
     ) else if %quality_choice%==3 (
-        set encoder=%base_encoder% -rc cqp -qp_i 35 -qp_p 35 -qp_b 35 -quality quality
+        set "encoder=%base_encoder% -rc cqp -qp_i 35 -qp_p 35 -qp_b 35 -quality quality"
     ) else if %quality_choice%==4 (
         set /p val="QP’l > "
-        set encoder=%base_encoder% -rc cqp -qp_i %val% -qp_p %val% -qp_b %val% -quality quality
+        set "encoder=%base_encoder% -rc cqp -qp_i %val% -qp_p %val% -qp_b %val% -quality quality"
     ) else if %quality_choice%==5 (
         set /p val="ƒrƒbƒgƒŒ[ƒg(—á:7000k) > "
-        set encoder=%base_encoder% -rc vbr_peak -b:v %val% -quality quality
+        set "encoder=%base_encoder% -rc vbr_peak -b:v %val% -quality quality"
     )
     goto end_options
 

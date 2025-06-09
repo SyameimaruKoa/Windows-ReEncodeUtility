@@ -1,0 +1,44 @@
+@echo off
+rem これはテンプレートファイルの一例じゃ。
+rem 以下の変数を、そなたの好きなように設定するのじゃ。
+rem このファイルは `templates` フォルダに置けよ。
+
+rem --- エンコードオプション ---
+rem ffmpegエンコードオプション-改.bat を単体で実行して、好みのコマンドを生成し、ここに貼り付けるのが楽じゃろう。
+set "encoder=-c:v hevc_nvenc -rc vbr -cq 23 -qmin 0 -qmax 99 -preset p5 -tune hq"
+
+rem --- 出力先 ---
+rem subfolder: 入力元と同じ階層に「encoded_output」フォルダを作成
+rem fixed:     メインのバッチファイルで指定した固定パスに出力（あまり使わんじゃろう）
+set "output_mode=subfolder"
+
+rem --- 完了後アクション ---
+rem none: 何もしない
+rem shutdown: シャットダウン
+rem reboot: 再起動
+rem hibernate: 休止
+set "after_process_action=none"
+
+rem --- 拡張子 ---
+set "extension=mp4"
+
+rem --- 音声設定 ---
+rem copy: 音声をコピー
+rem qaac: qaacで再エンコード
+rem null: 音声を削除
+set "AudioEncode=copy"
+
+rem --- 動画カット ---
+rem yes: カットする（手動入力が必要になるため、テンプレートでの自動実行には向かぬ）
+rem no: カットしない
+set "cut=no"
+
+rem --- メタデータ保持 ---
+rem yes: ExifToolで全コピー
+rem ffmpeg: ffmpeg形式で一部保持
+rem no: 保持しない
+set "exiftool=yes"
+
+rem --- 追加フィルター/オプション（通常は空でよい） ---
+set "vf="
+set "argument="
