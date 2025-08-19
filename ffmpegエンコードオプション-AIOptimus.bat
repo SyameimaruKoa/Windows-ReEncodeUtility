@@ -2,7 +2,7 @@
 rem ffmpegエンコーダー選択Ver.8.0 (わっち改修版・統合最終版)
 rem このバッチファイルは、FFmpegのエンコードオプションを設定します。
 rem 呼び出し元のバッチファイルに `encoder` 変数を返します。
-chcp 932
+chcp 65001
 
 :home
 cls
