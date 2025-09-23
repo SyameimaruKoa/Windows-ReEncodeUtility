@@ -1,8 +1,16 @@
 @echo off
-rem ffmpegエンコーダー選択Ver.8.0 (わっち改修版・統合最終版)
+rem ffmpegエンコーダー選択Ver.8.1 (わっち改修版・中間ファイルモード追加)
 rem このバッチファイルは、FFmpegのエンコードオプションを設定します。
 rem 呼び出し元のバッチファイルに `encoder` 変数を返します。
 chcp 65001
+
+rem --- モード判定 ---
+if /i "%~1"=="intermediate" (
+    goto IntermediateMenu
+) else (
+    goto home
+)
+
 
 :home
 cls
@@ -55,12 +63,10 @@ echo --- 1. ハードウェア選択 ---
 choice /c INCA /m "エンコードに使用するハードウェア (I:Intel, N:NVIDIA, C:CPU, A:AMD)"
 set hardware_choice=%errorlevel%
 echo.
-
 echo --- 2. コーデック選択 ---
 choice /c HWV /m "使用するコーデック (H:HEVC, W:AVC, V:VP9)"
 set codec_choice=%errorlevel%
 echo.
-
 rem --- ハードウェアとコーデックの組み合わせに応じて分岐 ---
 if %hardware_choice%==1 goto Intel_QSV
 if %hardware_choice%==2 goto NVIDIA_NVENC
@@ -235,11 +241,11 @@ goto home
     if %quality_choice%==3 set "encoder=%base_encoder% -rc cqp -qp_i 35 -qp_p 35 -qp_b 35"
     if %quality_choice%==4 (
         set /p val="QP値 > "
-    set "encoder=%base_encoder% -rc cqp -qp_i %val% -qp_p %val% -qp_b %val%"
+        set "encoder=%base_encoder% -rc cqp -qp_i %val% -qp_p %val% -qp_b %val%"
     )
     if %quality_choice%==5 (
         set /p val="ビットレート(例:7000k) > "
-    set "encoder=%base_encoder% -rc vbr_peak -b:v %val%"
+        set "encoder=%base_encoder% -rc vbr_peak -b:v %val%"
     )
 
     echo.
@@ -252,6 +258,86 @@ goto home
     set "encoder=!encoder! !preset_option!"
     goto end_options
 
+
+rem --- [新規追加] 中間ファイル作成用メニュー ---
+:IntermediateMenu
+cls
+setlocal enabledelayedexpansion
+set encoder=
+set "base_encoder="
+set "pixel_format_option="
+set "crf_option="
+set "preset_option="
+
+echo ───────────────────────────────────────────────────────────────
+echo  中間ファイル作成モード (高画質)
+echo ───────────────────────────────────────────────────────────────
+echo.
+echo CPU(x264/x265)を使用して、編集耐性の高い中間ファイルを作成します。
+echo コンテナはMKV、音声はコピーが前提となります。
+echo.
+
+echo --- 1. コーデック選択 ---
+choice /c 45 /m "使用するコーデックを選択してください (4: H.264/AVC, 5: H.265/HEVC)"
+if %errorlevel%==1 set "base_encoder=-c:v libx264"
+if %errorlevel%==2 set "base_encoder=-c:v libx265"
+echo.
+
+echo --- 2. ピクセルフォーマット選択 ---
+echo    1: yuv420p (標準・互換性高)
+echo    2: yuv422p (色情報が多い)
+echo    3: yuv444p (最高画質・無劣化)
+choice /c 123 /m "ピクセルフォーマットを選択してください"
+if %errorlevel%==1 set "pixel_format_option=-pix_fmt yuv420p"
+if %errorlevel%==2 set "pixel_format_option=-pix_fmt yuv422p"
+if %errorlevel%==3 set "pixel_format_option=-pix_fmt yuv444p"
+echo.
+
+echo --- 3. 品質 (CRF) 選択 ---
+echo    0: 可逆圧縮 (ファイルサイズが非常に大きい)
+echo    1: CRF 5 (ほぼ無劣化)
+echo    2: CRF 10 (非常に高画質)
+echo    3: CRF 15 (高画質)
+echo    4: カスタム
+choice /c 01234 /m "品質(CRF値)を選択してください"
+set crf_choice=%errorlevel%
+if %crf_choice%==1 set "crf_option=-crf 0"
+if %crf_choice%==2 set "crf_option=-crf 5"
+if %crf_choice%==3 set "crf_option=-crf 10"
+if %crf_choice%==4 set "crf_option=-crf 15"
+if %crf_choice%==5 (
+    set /p val="カスタムCRF値を入力してください (0-51) > "
+    set "crf_option=-crf !val!"
+)
+echo.
+
+echo --- 4. プリセット選択 ---
+echo    1: ultrafast (最速)
+echo    2: superfast
+echo    3: veryfast
+echo    4: faster
+echo    5: fast
+echo    6: medium (標準)
+echo    7: slow (高品質・低速)
+echo    8: slower
+echo    9: veryslow (最高品質・激遅)
+choice /c 123456789 /m "エンコード速度のプリセットを選択してください"
+set preset_choice=%errorlevel%
+if %preset_choice%==1 set "preset_option=-preset ultrafast"
+if %preset_choice%==2 set "preset_option=-preset superfast"
+if %preset_choice%==3 set "preset_option=-preset veryfast"
+if %preset_choice%==4 set "preset_option=-preset faster"
+if %preset_choice%==5 set "preset_option=-preset fast"
+if %preset_choice%==6 set "preset_option=-preset medium"
+if %preset_choice%==7 set "preset_option=-preset slow"
+if %preset_choice%==8 set "preset_option=-preset slower"
+if %preset_choice%==9 set "preset_option=-preset veryslow"
+echo.
+
+set "encoder=!base_encoder! !pixel_format_option! !crf_option! !preset_option!"
+goto end_options
+
+
 :end_options
 echo.
 echo ───────────────────────────────────────────────────────────────
@@ -263,13 +349,17 @@ echo.
 choice /m "この設定でよろしいですか？ (Y:はい / N:やり直す)"
 if %errorlevel%==2 (
     echo 設定を最初からやり直します...
-    goto home
+    if /i "%~1"=="intermediate" (
+        goto IntermediateMenu
+    ) else (
+        goto home
+    )
 )
 goto Finalize
 
 :Finalize
 echo 設定が完了しました。メインのバッチファイルに戻ります。
-rem --- [修正箇所] 確実な方法で呼び出し元に変数を渡す ---
+rem --- 確実な方法で呼び出し元に変数を渡す ---
 for /f "delims=" %%i in ("!encoder!") do (
   endlocal
   set "encoder=%%i"
