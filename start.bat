@@ -1,0 +1,1 @@
+powershell -ExecutionPolicy Bypass -File "%~dp0re-encode-AIOptimus.ps1" %*

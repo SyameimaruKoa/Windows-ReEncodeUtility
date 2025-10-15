@@ -101,7 +101,7 @@ function Get-EncoderSettings {
     # --- 1. 音声コーデック選択 ---
     $audioMenuTitle = "--- 音声エンコード設定 ---"
     $audioChoices = @(
-        "音声をコピー (-c:a copy)", "音声なし (-an)", "qaac (外部 AAC)", "Nero AAC (外部 AAC)", "Opus (libopus)", "Vorbis (libvorbis)"
+        "音声をコピー (-c:a copy)", "音声なし (-an)", "qaac (外部 AAC)", "Nero AAC (外部 AAC)", "fdkaac (外部 AAC)", "Opus (libopus)", "Vorbis (libvorbis)"
     )
     $audioIndex = Show-Menu -Title $audioMenuTitle -Choices $audioChoices
     if ($audioIndex -lt 0) { return $null }
@@ -143,6 +143,22 @@ function Get-EncoderSettings {
             }
         }
         4 {
+            # fdkaac
+            $fdkChoices = @("最高品質 (VBR 5)", "高品質 (VBR 4)", "標準品質 (VBR 3)", "カスタム")
+            $fdkIndex = Show-Menu -Title "fdkaacの品質(VBR)を選択" -Choices $fdkChoices
+            if ($fdkIndex -lt 0) { return $null }
+            $audioSetting.Type = "fdkaac"
+            if ($fdkIndex -eq 3) {
+                $qVal = Read-Host "品質値を入力 (1 ~ 5)"
+                $audioSetting.Options = "-m $qVal"
+                $audioSetting.Description = "fdkaac: カスタム品質 (VBR $qVal)"
+            }
+            else {
+                $audioSetting.Options = @("-m 5", "-m 4", "-m 3")[$fdkIndex]
+                $audioSetting.Description = "fdkaac: $($fdkChoices[$fdkIndex])"
+            }
+        }
+        5 {
             # Opus
             $opusChoices = @("192 kbps", "160 kbps", "128 kbps", "カスタム")
             $opusIndex = Show-Menu -Title "Opusのビットレートを選択" -Choices $opusChoices
@@ -159,7 +175,7 @@ function Get-EncoderSettings {
                 $audioSetting.Description = "Opus: $($opusChoices[$opusIndex])"
             }
         }
-        5 {
+        6 {
             # Vorbis
             $vorbisChoices = @("高品質 (q:a 6)", "標準品質 (q:a 4)", "カスタム")
             $vorbisIndex = Show-Menu -Title "Vorbisの品質を選択" -Choices $vorbisChoices

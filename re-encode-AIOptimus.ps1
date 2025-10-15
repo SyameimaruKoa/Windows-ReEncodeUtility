@@ -8,8 +8,8 @@
 .PARAMETER Path
     処理対象の動画ファイルまたはフォルダのパスじゃ。複数指定も可能じゃぞ。
 .NOTES
-    このスクリプトの実行には、ffmpeg, qaac, neroAacEnc, ExifTool がパスの通った場所にあるか、
-    スクリプトと同じフォルダに置かれている必要があるからのう。
+    このスクリプトの実行には、ffmpeg や各種外部エンコーダーが必要じゃ。
+    `config.user.psd1` に各ツールのパスを正しく設定しておくのじゃぞ。
 #>
 [CmdletBinding()]
 param (
@@ -19,20 +19,23 @@ param (
 
 #region 初期設定とヘルパー関数
 $PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
-
 $logFile = Join-Path $PSScriptRoot "re-encode-log-$((Get-Date).ToString('yyyyMMdd-HHmmss')).log"
 Start-Transcript -Path $logFile -Append
 
+# --- 設定ファイルの読み込み ---
+$configFilePath = Join-Path $PSScriptRoot "config.user.psd1"
+if (-not (Test-Path $configFilePath)) {
+    Write-Error "設定ファイル (config.user.psd1) が見つからぬ！話にならんわ！"
+    Read-Host "何かキーを押して終了"; exit 1
+}
+$global:Settings = Import-PowerShellDataFile -Path $configFilePath
+$global:Settings.TemplateDir = $PSScriptRoot # テンプレートディレクトリは動的に設定する
+
+# --- 依存スクリプトの確認 ---
 $optionsScriptPath = Join-Path $PSScriptRoot "get-ffmpegOptions.ps1"
 if (-not (Test-Path $optionsScriptPath)) {
     Write-Error "エンコードオプション設定スクリプト (get-ffmpegOptions.ps1) が見つからぬ！話にならんわ！"
-    exit 1
-}
-
-$global:Settings = @{
-    LosslessCutPath  = "C:\Program Files\LosslessCut\LosslessCut.exe"
-    NotifyScriptPath = ""
-    TemplateDir      = Join-Path $PSScriptRoot "Templates"
+    Read-Host "何かキーを押して終了"; exit 1
 }
 
 function Write-Log {
@@ -63,8 +66,14 @@ function Show-Menu {
 #region メイン処理
 function Start-MainProcess {
     Write-Log -Message "=============== エンコード処理開始 ===============" -NoTimestamp
-    if (-not (Test-Path $global:Settings.TemplateDir)) { New-Item -Path $global:Settings.TemplateDir -ItemType Directory | Out-Null }
 
+    # --- ハードウェアデコード選択 ---
+    $hwAccelChoices = @("使用しない (CPUデコード)", "NVIDIA (cuda)", "Intel (qsv)", "AMD (d3d11va)", "Windows汎用 (dxva2)")
+    $hwAccelMap = @("", "cuda", "qsv", "d3d11va", "dxva2")
+    $hwAccelIndex = Show-Menu -Title "使用するハードウェアデコードを選択してください。" -Choices $hwAccelChoices
+    $hwAccelOption = if ($hwAccelIndex -gt 0) { "-hwaccel $($hwAccelMap[$hwAccelIndex])" } else { "" }
+
+    # --- 実行モード選択 ---
     $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "中間ファイル作成モード (高画質・MKV・音声コピー)")
     $selectedMode = Show-Menu -Title "実行モードを選択してください。" -Choices $modeChoices
     
@@ -85,7 +94,7 @@ function Start-MainProcess {
         Write-Log " [ $fileCount / $totalFiles 個目のファイル処理開始 ]"
         Write-Log " ファイル名: $(Split-Path -Leaf $inputFile)"
         Write-Log "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" -NoTimestamp
-        Invoke-EncodeFile -InputFile $inputFile -Config $config
+        Invoke-EncodeFile -InputFile $inputFile -Config $config -HwAccelOption $hwAccelOption
     }
     Write-Log "================ 全ての処理が完了しました ================" -NoTimestamp
     Invoke-AfterProcessAction -Action $config.AfterProcessAction
@@ -136,10 +145,11 @@ function Invoke-InteractiveSetup {
 }
 
 function Invoke-TemplateSelect {
-    $templates = Get-ChildItem -Path $global:Settings.TemplateDir -Filter "*.psd1"
+    $templates = Get-ChildItem -Path $global:Settings.TemplateDir -Filter "*.psd1" | Where-Object { $_.Name -notmatch "^config.*\.psd1$" }
     if (-not $templates) { Write-Log "テンプレートファイルが見つかりませぬ..."; Read-Host "何かキーを押して戻る"; return $null }
     $templateNames = $templates | ForEach-Object { $_.BaseName }
     $selectedIndex = Show-Menu -Title "使用するテンプレートを選択してください。" -Choices $templateNames
+    if ($selectedIndex -lt 0) { return $null }
     $selectedTemplatePath = $templates[$selectedIndex].FullName
     Write-Log "`"$($templateNames[$selectedIndex])`" を読み込みます..."
     return (Import-CliXml -Path $selectedTemplatePath)
@@ -157,7 +167,7 @@ function Invoke-IntermediateMode {
 }
 
 function Invoke-EncodeFile {
-    param ([string]$InputFile, [hashtable]$Config)
+    param ([string]$InputFile, [hashtable]$Config, [string]$HwAccelOption)
     
     $baseName = [System.IO.Path]::GetFileNameWithoutExtension($InputFile)
     $inputDir = Split-Path -Parent $InputFile
@@ -173,7 +183,7 @@ function Invoke-EncodeFile {
     if ($Config.Metadata -eq "Ffmpeg") {
         Write-Log "ffmetadataを作成中..."
         $argList = "-hide_banner -y -i `"$InputFile`" -f ffmetadata `"$ffmpegMetadataFile`""
-        $process = Start-Process ffmpeg -ArgumentList $argList -Wait -NoNewWindow -PassThru
+        $process = Start-Process $global:Settings.FfmpegPath -ArgumentList $argList -Wait -NoNewWindow -PassThru
         if ($process.ExitCode -eq 0) { $useFfmpegMetadata = $true } else { Write-Warning "ffmetadataの作成に失敗しました。" }
     }
 
@@ -187,34 +197,41 @@ function Invoke-EncodeFile {
     $audioOptions = $Config.EncoderSettings.Audio; $tempAudioOutFile = ""
     $tempWavFile = Join-Path $tempDir "temp_audio.wav"
     
-    if ($Config.EncoderSettings.AudioType -eq "qaac") {
-        Write-Log "qaacでエンコード処理中..."; $tempAudioOutFile = Join-Path $tempDir "qaac_tmp.m4a"
+    $audioEncType = $Config.EncoderSettings.AudioType
+    if ($audioEncType -eq "qaac" -or $audioEncType -eq "nero" -or $audioEncType -eq "fdkaac") {
+        # --- 外部音声エンコーダー共通処理 ---
+        Write-Log "音声ファイルをWAVに変換中..."
         $wavArgs = "-hide_banner -y $($cutInfo) -i `"$InputFile`" -vn -f wav `"$tempWavFile`""
-        $process = Start-Process ffmpeg -ArgumentList $wavArgs -Wait -NoNewWindow -PassThru
-        if ($process.ExitCode -eq 0) {
-            $qaacArgs = "$($Config.EncoderSettings.Audio) `"$tempWavFile`" -o `"$tempAudioOutFile`""
-            $process = Start-Process qaac64 -ArgumentList $qaacArgs -Wait -NoNewWindow -PassThru
+        $process = Start-Process $global:Settings.FfmpegPath -ArgumentList $wavArgs -Wait -NoNewWindow -PassThru
+        if ($process.ExitCode -ne 0) {
+            Write-Warning "WAV変換失敗。音声をコピーします。"; $audioOptions = "-c:a copy"
+        }
+        else {
+            $tempAudioOutFile = Join-Path $tempDir "temp_audio.m4a"
+            $encPath = $global:Settings["$($audioEncType)Path"]
+            $encArgs = ""
+            if ($audioEncType -eq "qaac") {
+                $encArgs = "$($Config.EncoderSettings.Audio) `"$tempWavFile`" -o `"$tempAudioOutFile`""
+            }
+            elseif ($audioEncType -eq "nero") {
+                $encArgs = "$($Config.EncoderSettings.Audio) -if `"$tempWavFile`" -of `"$tempAudioOutFile`""
+            }
+            elseif ($audioEncType -eq "fdkaac") {
+                $encArgs = "$($Config.EncoderSettings.Audio) -o `"$tempAudioOutFile`" `"$tempWavFile`""
+            }
+            
+            Write-Log "$($audioEncType)でエンコード処理中..."
+            $process = Start-Process $encPath -ArgumentList $encArgs -Wait -NoNewWindow -PassThru
             if ($process.ExitCode -eq 0) { $audioOptions = "" } 
-            else { Write-Warning "qaac失敗"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
+            else { Write-Warning "$($audioEncType)失敗。音声をコピーします。"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
         }
-        else { Write-Warning "WAV変換失敗"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
-
-    }
-    elseif ($Config.EncoderSettings.AudioType -eq "nero") {
-        Write-Log "NeroAACでエンコード処理中..."; $tempAudioOutFile = Join-Path $tempDir "nero_tmp.m4a"
-        $wavArgs = "-hide_banner -y $($cutInfo) -i `"$InputFile`" -vn -f wav `"$tempWavFile`""
-        $process = Start-Process ffmpeg -ArgumentList $wavArgs -Wait -NoNewWindow -PassThru
-        if ($process.ExitCode -eq 0) {
-            $neroArgs = "$($Config.EncoderSettings.Audio) -if `"$tempWavFile`" -of `"$tempAudioOutFile`""
-            $process = Start-Process neroAacEnc -ArgumentList $neroArgs -Wait -NoNewWindow -PassThru
-            if ($process.ExitCode -eq 0) { $audioOptions = "" }
-            else { Write-Warning "NeroAAC失敗"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
-        }
-        else { Write-Warning "WAV変換失敗"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
     }
 
-    $ffmpegArgsList = @("-hide_banner", "-y") + $cutInfo.Split(' ', $splitOptions)
+    $ffmpegArgsList = @("-hide_banner", "-y")
+    if ($HwAccelOption) { $ffmpegArgsList += $HwAccelOption.Split(' ', $splitOptions) }
+    $ffmpegArgsList += $cutInfo.Split(' ', $splitOptions)
     $ffmpegArgsList += @("-i", "`"$InputFile`"")
+
     if ($tempAudioOutFile) { $ffmpegArgsList += @("-i", "`"$tempAudioOutFile`"") }
     if ($useFfmpegMetadata) { $ffmpegArgsList += @("-i", "`"$ffmpegMetadataFile`"") }
     if ($cutInfo) { $ffmpegArgsList += @("-ss", "0") }
@@ -232,10 +249,10 @@ function Invoke-EncodeFile {
     $finalArgString = $ffmpegArgsList -join ' '
 
     Write-Log "--- ffmpeg エンコード実行 ---" -NoTimestamp
-    Write-Log "実行コマンド: ffmpeg $finalArgString"
+    Write-Log "実行コマンド: $($global:Settings.FfmpegPath) $finalArgString"
     Write-Log "エンコード処理を開始します..."
 
-    $process = Start-Process ffmpeg -ArgumentList $finalArgString -Wait -NoNewWindow -PassThru
+    $process = Start-Process $global:Settings.FfmpegPath -ArgumentList $finalArgString -Wait -NoNewWindow -PassThru
     
     if ($process.ExitCode -ne 0) {
         Write-Log "エラー: ffmpegエンコード中にエラーが発生しました。 (終了コード: $($process.ExitCode))"
@@ -246,7 +263,7 @@ function Invoke-EncodeFile {
         if ($Config.Metadata -eq "ExifTool") {
             Write-Log "ExifToolでメタデータをコピーしています..."
             $exifArgs = "-api largefilesupport=1 -tagsfromfile `"$InputFile`" -all:all -overwrite_original `"$outputFile`""
-            & exiftool $exifArgs
+            & $global:Settings.ExifToolPath $exifArgs
             Remove-Item -Path "$outputFile`_original" -ErrorAction SilentlyContinue
         }
     }
