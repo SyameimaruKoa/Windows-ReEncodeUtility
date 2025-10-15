@@ -1,0 +1,276 @@
+﻿<#
+.SYNOPSIS
+    動画ファイルを一括で再エンコードするPowerShellスクリプトじゃ。
+.DESCRIPTION
+    FFmpegを利用して、ドラッグ＆ドロップされた動画ファイルを一括で再エンコードする。
+    対話形式での詳細な設定、テンプレートの利用、高品質な中間ファイルの作成が可能じゃ。
+    エンコード設定は get-ffmpegOptions.ps1 で行うぞ。
+.PARAMETER Path
+    処理対象の動画ファイルまたはフォルダのパスじゃ。複数指定も可能じゃぞ。
+.NOTES
+    このスクリプトの実行には、ffmpeg, qaac, neroAacEnc, ExifTool がパスの通った場所にあるか、
+    スクリプトと同じフォルダに置かれている必要があるからのう。
+#>
+[CmdletBinding()]
+param (
+    [Parameter(Mandatory = $true, ValueFromPipeline = $true, ValueFromRemainingArguments = $true, HelpMessage = "処理対象のファイルまたはフォルダのパスを入力せい。")]
+    [string[]]$Path
+)
+
+#region 初期設定とヘルパー関数
+$PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
+
+$logFile = Join-Path $PSScriptRoot "re-encode-log-$((Get-Date).ToString('yyyyMMdd-HHmmss')).log"
+Start-Transcript -Path $logFile -Append
+
+$optionsScriptPath = Join-Path $PSScriptRoot "get-ffmpegOptions.ps1"
+if (-not (Test-Path $optionsScriptPath)) {
+    Write-Error "エンコードオプション設定スクリプト (get-ffmpegOptions.ps1) が見つからぬ！話にならんわ！"
+    exit 1
+}
+
+$global:Settings = @{
+    LosslessCutPath  = "C:\Program Files\LosslessCut\LosslessCut.exe"
+    NotifyScriptPath = ""
+    TemplateDir      = Join-Path $PSScriptRoot "Templates"
+}
+
+function Write-Log {
+    param([string]$Message, [switch]$NoTimestamp)
+    $logMessage = if ($NoTimestamp) { $Message } else { "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message }
+    Write-Host $logMessage
+}
+
+function Show-Menu {
+    param ([string]$Title, [string[]]$Choices, [int]$DefaultIndex = 0)
+    $currentIndex = $DefaultIndex
+    while ($true) {
+        Clear-Host; Write-Host "$Title`n"
+        for ($i = 0; $i -lt $Choices.Length; $i++) {
+            if ($i -eq $currentIndex) { Write-Host -ForegroundColor Black -BackgroundColor White " > $($Choices[$i])" }
+            else { Write-Host "   $($Choices[$i])" }
+        }
+        $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        switch ($key.VirtualKeyCode) {
+            38 { if ($currentIndex -gt 0) { $currentIndex-- } }
+            40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } }
+            13 { return $currentIndex }
+        }
+    }
+}
+#endregion
+
+#region メイン処理
+function Start-MainProcess {
+    Write-Log -Message "=============== エンコード処理開始 ===============" -NoTimestamp
+    if (-not (Test-Path $global:Settings.TemplateDir)) { New-Item -Path $global:Settings.TemplateDir -ItemType Directory | Out-Null }
+
+    $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "中間ファイル作成モード (高画質・MKV・音声コピー)")
+    $selectedMode = Show-Menu -Title "実行モードを選択してください。" -Choices $modeChoices
+    
+    $config = $null
+    switch ($selectedMode) {
+        0 { $config = Invoke-InteractiveSetup }
+        1 { $config = Invoke-TemplateSelect }
+        2 { $config = Invoke-IntermediateMode }
+    }
+    if (-not $config) { Write-Log "設定がキャンセルされたため、処理を中断します。"; return }
+
+    $fileCount = 0; $totalFiles = $Path.Count
+    foreach ($inputFile in $Path) {
+        $inputFile = $inputFile.Trim('"')
+        $fileCount++
+        Clear-Host
+        Write-Log "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" -NoTimestamp
+        Write-Log " [ $fileCount / $totalFiles 個目のファイル処理開始 ]"
+        Write-Log " ファイル名: $(Split-Path -Leaf $inputFile)"
+        Write-Log "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" -NoTimestamp
+        Invoke-EncodeFile -InputFile $inputFile -Config $config
+    }
+    Write-Log "================ 全ての処理が完了しました ================" -NoTimestamp
+    Invoke-AfterProcessAction -Action $config.AfterProcessAction
+}
+
+function Invoke-InteractiveSetup {
+    $encoderSettings = . $optionsScriptPath
+    if (-not $encoderSettings) { Write-Log "エンコード設定が中止されました。"; return $null }
+
+    $outputMode = "Subfolder"; $outputFixedPath = ""
+    if ((Show-Menu -Title "出力先を固定しますか？" -Choices @("いいえ (入力元と同じ階層のsubfolder)", "はい (固定フォルダを指定)")) -eq 1) {
+        while (-not $outputFixedPath) {
+            $outputFixedPath = Read-Host "固定出力先のパスを入力してください"
+            if (-not (Test-Path $outputFixedPath)) {
+                try { New-Item -Path $outputFixedPath -ItemType Directory -ErrorAction Stop | Out-Null }
+                catch { Write-Warning "フォルダの作成に失敗しました: $_"; $outputFixedPath = "" }
+            }
+        }
+        $outputMode = "Fixed"
+    }
+    
+    $afterProcessAction = @("None", "Shutdown", "Reboot", "Hibernate")[(Show-Menu -Title "エンコード完了後どうしますか？" -Choices @("何もしない", "シャットダウン", "再起動", "休止"))]
+    $extension = @("mp4", "mov", "mkv")[(Show-Menu -Title "出力ファイルの拡張子を選択してください。" -Choices @("mp4", "mov", "mkv"))]
+    $cut = @("No", "Yes")[(Show-Menu -Title "動画をカットしますか？ (LosslessCutを使用)" -Choices @("いいえ", "はい"))]
+    $metadata = @("ExifTool", "Ffmpeg", "None")[(Show-Menu -Title "動画のメタデータ(撮影日時など)を保持しますか？" -Choices @("ExifToolで全コピー", "ffmpeg形式で一部保持", "保持しない"))]
+
+    $additionalVF = ""; $additionalArgs = ""
+    if ((Show-Menu -Title "追加のビデオフィルター(-vf)やオプションを使いますか？" -Choices @("いいえ", "はい")) -eq 1) {
+        $additionalVF = Read-Host "ffmpegの「-vf」として使用するフィルターを入力 (例: scale=1280:-1)"
+        $additionalArgs = Read-Host "その他のffmpeg引数を追加 (例: -max_muxing_queue_size 1024)"
+    }
+
+    $currentConfig = @{
+        EncoderSettings = $encoderSettings; OutputMode = $outputMode; OutputFixedPath = $outputFixedPath
+        AfterProcessAction = $afterProcessAction; Extension = $extension; Cut = $cut; Metadata = $metadata
+        AdditionalVF = $additionalVF; AdditionalArgs = $additionalArgs
+    }
+
+    if ((Show-Menu -Title "この設定をテンプレートとして保存しますか？" -Choices @("いいえ", "はい")) -eq 1) {
+        $templateName = Read-Host "テンプレート名を入力してください"
+        if ($templateName) {
+            $templatePath = Join-Path $global:Settings.TemplateDir "$templateName.psd1"
+            $currentConfig | Export-CliXml -Path $templatePath
+            Write-Log "設定を $templatePath に保存しました。"
+        }
+    }
+    return $currentConfig
+}
+
+function Invoke-TemplateSelect {
+    $templates = Get-ChildItem -Path $global:Settings.TemplateDir -Filter "*.psd1"
+    if (-not $templates) { Write-Log "テンプレートファイルが見つかりませぬ..."; Read-Host "何かキーを押して戻る"; return $null }
+    $templateNames = $templates | ForEach-Object { $_.BaseName }
+    $selectedIndex = Show-Menu -Title "使用するテンプレートを選択してください。" -Choices $templateNames
+    $selectedTemplatePath = $templates[$selectedIndex].FullName
+    Write-Log "`"$($templateNames[$selectedIndex])`" を読み込みます..."
+    return (Import-CliXml -Path $selectedTemplatePath)
+}
+
+function Invoke-IntermediateMode {
+    Write-Log "中間ファイル用のエンコードオプションを設定します..."
+    $encoderSettings = . $optionsScriptPath -Intermediate
+    if (-not $encoderSettings) { Write-Log "エンコード設定が中止されました。"; return $null }
+    return @{
+        EncoderSettings = $encoderSettings; OutputMode = "Subfolder"; OutputFixedPath = ""
+        AfterProcessAction = "None"; Extension = "mkv"; Cut = "No"; Metadata = "ExifTool"
+        AdditionalVF = ""; AdditionalArgs = ""
+    }
+}
+
+function Invoke-EncodeFile {
+    param ([string]$InputFile, [hashtable]$Config)
+    
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($InputFile)
+    $inputDir = Split-Path -Parent $InputFile
+    $outputDir = if ($Config.OutputMode -eq "Fixed") { $Config.OutputFixedPath } else { Join-Path $inputDir "encoded_output" }
+    if (-not (Test-Path $outputDir)) { New-Item -Path $outputDir -ItemType Directory | Out-Null }
+    $outputFile = Join-Path $outputDir "$baseName.$($Config.Extension)"
+    $tempDir = Join-Path $outputDir "temp_$baseName"; if (-not (Test-Path $tempDir)) { New-Item -Path $tempDir -ItemType Directory | Out-Null }
+
+    $cutInfo = ""; $useFfmpegMetadata = $false
+    $ffmpegMetadataFile = Join-Path $tempDir "ffmpeg_metadata.txt"
+    $splitOptions = [System.StringSplitOptions]::RemoveEmptyEntries
+
+    if ($Config.Metadata -eq "Ffmpeg") {
+        Write-Log "ffmetadataを作成中..."
+        $argList = "-hide_banner -y -i `"$InputFile`" -f ffmetadata `"$ffmpegMetadataFile`""
+        $process = Start-Process ffmpeg -ArgumentList $argList -Wait -NoNewWindow -PassThru
+        if ($process.ExitCode -eq 0) { $useFfmpegMetadata = $true } else { Write-Warning "ffmetadataの作成に失敗しました。" }
+    }
+
+    if ($Config.Cut -eq "Yes") {
+        Write-Log "LosslessCutを起動します..."; Start-Process $global:Settings.LosslessCutPath -ArgumentList "`"$InputFile`""
+        $cutStart = Read-Host "開始位置 (例:00:01:15.000)"; $cutEnd = Read-Host "終了位置 (例:00:03:30.500)"
+        if ($cutStart -and $cutEnd) { $cutInfo = "-ss $cutStart -to $cutEnd"; Write-Log "カット情報: 開始 $cutStart, 終了 $cutEnd" }
+        else { Write-Warning "カット位置が未入力のため、カットしません。" }
+    }
+
+    $audioOptions = $Config.EncoderSettings.Audio; $tempAudioOutFile = ""
+    $tempWavFile = Join-Path $tempDir "temp_audio.wav"
+    
+    if ($Config.EncoderSettings.AudioType -eq "qaac") {
+        Write-Log "qaacでエンコード処理中..."; $tempAudioOutFile = Join-Path $tempDir "qaac_tmp.m4a"
+        $wavArgs = "-hide_banner -y $($cutInfo) -i `"$InputFile`" -vn -f wav `"$tempWavFile`""
+        $process = Start-Process ffmpeg -ArgumentList $wavArgs -Wait -NoNewWindow -PassThru
+        if ($process.ExitCode -eq 0) {
+            $qaacArgs = "$($Config.EncoderSettings.Audio) `"$tempWavFile`" -o `"$tempAudioOutFile`""
+            $process = Start-Process qaac64 -ArgumentList $qaacArgs -Wait -NoNewWindow -PassThru
+            if ($process.ExitCode -eq 0) { $audioOptions = "" } 
+            else { Write-Warning "qaac失敗"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
+        }
+        else { Write-Warning "WAV変換失敗"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
+
+    }
+    elseif ($Config.EncoderSettings.AudioType -eq "nero") {
+        Write-Log "NeroAACでエンコード処理中..."; $tempAudioOutFile = Join-Path $tempDir "nero_tmp.m4a"
+        $wavArgs = "-hide_banner -y $($cutInfo) -i `"$InputFile`" -vn -f wav `"$tempWavFile`""
+        $process = Start-Process ffmpeg -ArgumentList $wavArgs -Wait -NoNewWindow -PassThru
+        if ($process.ExitCode -eq 0) {
+            $neroArgs = "$($Config.EncoderSettings.Audio) -if `"$tempWavFile`" -of `"$tempAudioOutFile`""
+            $process = Start-Process neroAacEnc -ArgumentList $neroArgs -Wait -NoNewWindow -PassThru
+            if ($process.ExitCode -eq 0) { $audioOptions = "" }
+            else { Write-Warning "NeroAAC失敗"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
+        }
+        else { Write-Warning "WAV変換失敗"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
+    }
+
+    $ffmpegArgsList = @("-hide_banner", "-y") + $cutInfo.Split(' ', $splitOptions)
+    $ffmpegArgsList += @("-i", "`"$InputFile`"")
+    if ($tempAudioOutFile) { $ffmpegArgsList += @("-i", "`"$tempAudioOutFile`"") }
+    if ($useFfmpegMetadata) { $ffmpegArgsList += @("-i", "`"$ffmpegMetadataFile`"") }
+    if ($cutInfo) { $ffmpegArgsList += @("-ss", "0") }
+    $ffmpegArgsList += $Config.EncoderSettings.Video.Split(' ', $splitOptions)
+    if ($Config.AdditionalVF) { $ffmpegArgsList += @("-vf", "`"$($Config.AdditionalVF)`"") }
+    if ($Config.AdditionalArgs) { $ffmpegArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
+
+    $inputCount = 1; $audioInputIndex = 0; $metadataInputIndex = 0
+    if ($tempAudioOutFile) { $audioInputIndex = $inputCount; $inputCount++ }
+    if ($useFfmpegMetadata) { $metadataInputIndex = $inputCount }
+    if ($tempAudioOutFile) { $ffmpegArgsList += @("-map", "0:v:0", "-map", "${audioInputIndex}:a:0", "-c:a", "copy") }
+    else { $ffmpegArgsList += $audioOptions.Split(' ', $splitOptions) }
+    if ($useFfmpegMetadata) { $ffmpegArgsList += @("-map_metadata", "$metadataInputIndex") }
+    $ffmpegArgsList += "`"$outputFile`""
+    $finalArgString = $ffmpegArgsList -join ' '
+
+    Write-Log "--- ffmpeg エンコード実行 ---" -NoTimestamp
+    Write-Log "実行コマンド: ffmpeg $finalArgString"
+    Write-Log "エンコード処理を開始します..."
+
+    $process = Start-Process ffmpeg -ArgumentList $finalArgString -Wait -NoNewWindow -PassThru
+    
+    if ($process.ExitCode -ne 0) {
+        Write-Log "エラー: ffmpegエンコード中にエラーが発生しました。 (終了コード: $($process.ExitCode))"
+        if ($global:Settings.NotifyScriptPath) { & $global:Settings.NotifyScriptPath "$baseName EncodeError" }
+    }
+    else {
+        Write-Log "ffmpegエンコードが正常に完了しました。"
+        if ($Config.Metadata -eq "ExifTool") {
+            Write-Log "ExifToolでメタデータをコピーしています..."
+            $exifArgs = "-api largefilesupport=1 -tagsfromfile `"$InputFile`" -all:all -overwrite_original `"$outputFile`""
+            & exiftool $exifArgs
+            Remove-Item -Path "$outputFile`_original" -ErrorAction SilentlyContinue
+        }
+    }
+
+    if (Test-Path $tempDir) { Remove-Item -Path $tempDir -Recurse -Force; Write-Log "一時ファイルをクリーンアップしました。" }
+    Write-Log "ファイル「$(Split-Path -Leaf $InputFile)」の処理が完了しました。"
+}
+
+function Invoke-AfterProcessAction {
+    param ([string]$Action)
+    switch ($Action) {
+        "Shutdown" { Write-Host "60秒後にシャットダウン..."; Start-Sleep -Seconds 60; shutdown.exe -s -t 1 }
+        "Reboot" { Write-Host "60秒後に再起動..."; Start-Sleep -Seconds 60; shutdown.exe -r -t 1 }
+        "Hibernate" { Write-Host "休止モードへ移行..."; rundll32.exe powrprof.dll, SetSuspendState }
+    }
+}
+#endregion
+
+# --- スクリプト実行開始 ---
+try {
+    Start-MainProcess
+}
+finally {
+    Write-Log "処理を終了します。"
+    Read-Host "何かキーを押して終了"
+    Stop-Transcript
+}
