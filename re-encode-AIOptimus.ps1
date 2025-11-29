@@ -71,15 +71,24 @@ function Sanitize-FileName {
     param ([string]$Name)
     # 禁則文字を全角に置換するのじゃ
     return $Name -replace '\\', '＼' `
-        -replace '/', '／' `
-        -replace ':', '：' `
-        -replace '\*', '＊' `
-        -replace '\?', '？' `
-        -replace '"', '”' `
-        -replace '<', '＜' `
-        -replace '>', '＞' `
-        -replace '\|', '｜' `
-        -replace '[\r\n]', '' # 改行も削除
+                 -replace '/', '／' `
+                 -replace ':', '：' `
+                 -replace '\*', '＊' `
+                 -replace '\?', '？' `
+                 -replace '"', '”' `
+                 -replace '<', '＜' `
+                 -replace '>', '＞' `
+                 -replace '\|', '｜' `
+                 -replace '[\r\n]', '' # 改行も削除
+}
+
+function Test-CommandExists {
+    param ([string]$Command)
+    if ([string]::IsNullOrWhiteSpace($Command)) { return $false }
+    # パスとして存在するか、またはコマンドとして認識できるか
+    if (Test-Path $Command) { return $true }
+    if (Get-Command $Command -ErrorAction SilentlyContinue) { return $true }
+    return $false
 }
 #endregion
 
@@ -118,8 +127,7 @@ function Start-MainProcess {
         
         if ($config.IsSplitMode) {
             Invoke-SplitEncodeFile -InputFile $inputFile -Config $config -HwAccelOption $hwAccelOption
-        }
-        else {
+        } else {
             Invoke-EncodeFile -InputFile $inputFile -Config $config -HwAccelOption $hwAccelOption
         }
     }
@@ -210,11 +218,11 @@ function Invoke-SplitModeSetup {
     $afterProcessAction = @("None", "Shutdown", "Reboot", "Hibernate")[(Show-Menu -Title "エンコード完了後どうしますか？" -Choices @("何もしない", "シャットダウン", "再起動", "休止"))]
 
     return @{
-        IsSplitMode        = $true
-        EncoderSettings    = $encoderSettings
-        SplitSource        = $splitSource # InternalChapter or ExternalSRT
-        NamingStyle        = $namingStyle # Text or Number
-        Extension          = $extension
+        IsSplitMode = $true
+        EncoderSettings = $encoderSettings
+        SplitSource = $splitSource # InternalChapter or ExternalSRT
+        NamingStyle = $namingStyle # Text or Number
+        Extension = $extension
         AfterProcessAction = $afterProcessAction
     }
 }
@@ -261,8 +269,7 @@ function Invoke-SplitEncodeFile {
         try {
             [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
             $jsonStr = & $global:Settings.FfprobePath -v quiet -print_format json -show_chapters "$InputFile" | Out-String
-        }
-        finally {
+        } finally {
             [Console]::OutputEncoding = $oldEncoding
         }
         $json = $jsonStr | ConvertFrom-Json
@@ -287,8 +294,7 @@ function Invoke-SplitEncodeFile {
         if ($Config.NamingStyle -eq "Text" -and $seg.Name) {
             $safeName = Sanitize-FileName -Name $seg.Name
             $suffix = "_$safeName"
-        }
-        else {
+        } else {
             $suffix = "_{0:D2}" -f $count
         }
         
@@ -312,37 +318,49 @@ function Invoke-SplitEncodeFile {
         
         # 外部エンコーダーを使用する場合
         if ($audioEncType -eq "qaac" -or $audioEncType -eq "nero" -or $audioEncType -eq "fdkaac") {
-            # 1. WAV切り出し (カット済みのWAVを作成)
-            $wavArgs = @("-hide_banner", "-y", "-ss", "$($seg.Start)", "-to", "$($seg.End)", "-i", "`"$InputFile`"", "-vn", "-f", "wav", "`"$tempWavFile`"")
-            $process = Start-Process $global:Settings.FfmpegPath -ArgumentList $wavArgs -Wait -NoNewWindow -PassThru
-            
-            if ($process.ExitCode -ne 0) {
-                Write-Warning "WAV変換失敗。音声をコピーします。"
-                $audioOptions = "-c:a copy"
+            # 外部ツールの存在確認
+            $encPath = $global:Settings["$($audioEncType)Path"]
+            if (-not (Test-CommandExists -Command $encPath)) {
+                 Write-Warning "エラー: 外部エンコーダー '$encPath' が見つかりません。パスを確認してください。"
+                 Write-Warning "音声をコピーモード (-c:a copy) に切り替えて続行します。"
+                 $audioOptions = "-c:a copy"
             }
             else {
-                # 2. 外部エンコーダー実行
-                $tempAudioOutFile = Join-Path $tempDir "temp_audio_seg.m4a"
-                $encPath = $global:Settings["$($audioEncType)Path"]
-                $encArgs = ""
+                # 1. WAV切り出し (カット済みのWAVを作成)
+                # 重要: -map_chapters -1 -map_metadata -1 を追加して不要な情報を中間ファイルから削除
+                $wavArgs = @("-hide_banner", "-y", "-ss", "$($seg.Start)", "-to", "$($seg.End)", "-i", "`"$InputFile`"", "-vn", "-map_chapters", "-1", "-map_metadata", "-1", "-f", "wav", "`"$tempWavFile`"")
+                $process = Start-Process $global:Settings.FfmpegPath -ArgumentList $wavArgs -Wait -NoNewWindow -PassThru
                 
-                if ($audioEncType -eq "qaac") {
-                    $encArgs = "$($Config.EncoderSettings.Audio) `"$tempWavFile`" -o `"$tempAudioOutFile`""
-                }
-                elseif ($audioEncType -eq "nero") {
-                    $encArgs = "$($Config.EncoderSettings.Audio) -if `"$tempWavFile`" -of `"$tempAudioOutFile`""
-                }
-                elseif ($audioEncType -eq "fdkaac") {
-                    $encArgs = "$($Config.EncoderSettings.Audio) -o `"$tempAudioOutFile`" `"$tempWavFile`""
-                }
-                
-                $process = Start-Process $encPath -ArgumentList $encArgs -Wait -NoNewWindow -PassThru
-                if ($process.ExitCode -eq 0) {
-                    $audioOptions = "" # 外部エンコード成功時はffmpeg側の音声オプションは不要
-                }
-                else {
-                    Write-Warning "$($audioEncType)失敗。音声をコピーします。"
-                    $audioOptions = "-c:a copy"; $tempAudioOutFile = ""
+                if ($process.ExitCode -ne 0) {
+                    Write-Warning "WAV変換失敗。音声をコピーします。"
+                    $audioOptions = "-c:a copy"
+                } else {
+                    # 2. 外部エンコーダー実行
+                    $tempAudioOutFile = Join-Path $tempDir "temp_audio_seg.m4a"
+                    $encArgs = ""
+                    
+                    if ($audioEncType -eq "qaac") {
+                        $encArgs = "$($Config.EncoderSettings.Audio) `"$tempWavFile`" -o `"$tempAudioOutFile`""
+                    }
+                    elseif ($audioEncType -eq "nero") {
+                        $encArgs = "$($Config.EncoderSettings.Audio) -if `"$tempWavFile`" -of `"$tempAudioOutFile`""
+                    }
+                    elseif ($audioEncType -eq "fdkaac") {
+                        $encArgs = "$($Config.EncoderSettings.Audio) -o `"$tempAudioOutFile`" `"$tempWavFile`""
+                    }
+                    
+                    try {
+                        $process = Start-Process $encPath -ArgumentList $encArgs -Wait -NoNewWindow -PassThru -ErrorAction Stop
+                        if ($process.ExitCode -eq 0) {
+                            $audioOptions = "" # 外部エンコード成功時はffmpeg側の音声オプションは不要
+                        } else {
+                            Write-Warning "$($audioEncType)失敗 (ExitCode: $($process.ExitCode))。音声をコピーします。"
+                            $audioOptions = "-c:a copy"; $tempAudioOutFile = ""
+                        }
+                    } catch {
+                        Write-Warning "外部エンコーダー実行エラー: $_"
+                        $audioOptions = "-c:a copy"; $tempAudioOutFile = ""
+                    }
                 }
             }
         }
@@ -371,8 +389,7 @@ function Invoke-SplitEncodeFile {
         if ($tempAudioOutFile) {
             # 外部音声を使う場合: 映像はInput0, 音声はInput1(既にエンコード済なのでコピー)
             $ffmpegArgsList += @("-map", "0:v:0", "-map", "1:a:0", "-c:a", "copy")
-        }
-        else {
+        } else {
             # 内部/コピーの場合
             $ffmpegArgsList += $audioOptions.Split(' ', $splitOptions)
         }
@@ -424,31 +441,44 @@ function Invoke-EncodeFile {
     
     $audioEncType = $Config.EncoderSettings.AudioType
     if ($audioEncType -eq "qaac" -or $audioEncType -eq "nero" -or $audioEncType -eq "fdkaac") {
-        # --- 外部音声エンコーダー共通処理 ---
-        Write-Log "音声ファイルをWAVに変換中..."
-        $wavArgs = "-hide_banner -y $($cutInfo) -i `"$InputFile`" -vn -f wav `"$tempWavFile`""
-        $process = Start-Process $global:Settings.FfmpegPath -ArgumentList $wavArgs -Wait -NoNewWindow -PassThru
-        if ($process.ExitCode -ne 0) {
-            Write-Warning "WAV変換失敗。音声をコピーします。"; $audioOptions = "-c:a copy"
+        # 外部ツールの存在確認
+        $encPath = $global:Settings["$($audioEncType)Path"]
+        if (-not (Test-CommandExists -Command $encPath)) {
+            Write-Warning "エラー: 外部エンコーダー '$encPath' が見つかりません。パスを確認してください。"
+            Write-Warning "音声をコピーモード (-c:a copy) に切り替えて続行します。"
+            $audioOptions = "-c:a copy"
         }
         else {
-            $tempAudioOutFile = Join-Path $tempDir "temp_audio.m4a"
-            $encPath = $global:Settings["$($audioEncType)Path"]
-            $encArgs = ""
-            if ($audioEncType -eq "qaac") {
-                $encArgs = "$($Config.EncoderSettings.Audio) `"$tempWavFile`" -o `"$tempAudioOutFile`""
+            # --- 外部音声エンコーダー共通処理 ---
+            Write-Log "音声ファイルをWAVに変換中..."
+            $wavArgs = "-hide_banner -y $($cutInfo) -i `"$InputFile`" -vn -f wav `"$tempWavFile`""
+            $process = Start-Process $global:Settings.FfmpegPath -ArgumentList $wavArgs -Wait -NoNewWindow -PassThru
+            if ($process.ExitCode -ne 0) {
+                Write-Warning "WAV変換失敗。音声をコピーします。"; $audioOptions = "-c:a copy"
             }
-            elseif ($audioEncType -eq "nero") {
-                $encArgs = "$($Config.EncoderSettings.Audio) -if `"$tempWavFile`" -of `"$tempAudioOutFile`""
+            else {
+                $tempAudioOutFile = Join-Path $tempDir "temp_audio.m4a"
+                $encArgs = ""
+                if ($audioEncType -eq "qaac") {
+                    $encArgs = "$($Config.EncoderSettings.Audio) `"$tempWavFile`" -o `"$tempAudioOutFile`""
+                }
+                elseif ($audioEncType -eq "nero") {
+                    $encArgs = "$($Config.EncoderSettings.Audio) -if `"$tempWavFile`" -of `"$tempAudioOutFile`""
+                }
+                elseif ($audioEncType -eq "fdkaac") {
+                    $encArgs = "$($Config.EncoderSettings.Audio) -o `"$tempAudioOutFile`" `"$tempWavFile`""
+                }
+                
+                Write-Log "$($audioEncType)でエンコード処理中..."
+                try {
+                    $process = Start-Process $encPath -ArgumentList $encArgs -Wait -NoNewWindow -PassThru -ErrorAction Stop
+                    if ($process.ExitCode -eq 0) { $audioOptions = "" } 
+                    else { Write-Warning "$($audioEncType)失敗。音声をコピーします。"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
+                } catch {
+                     Write-Warning "外部エンコーダー実行エラー: $_"
+                     $audioOptions = "-c:a copy"; $tempAudioOutFile = ""
+                }
             }
-            elseif ($audioEncType -eq "fdkaac") {
-                $encArgs = "$($Config.EncoderSettings.Audio) -o `"$tempAudioOutFile`" `"$tempWavFile`""
-            }
-            
-            Write-Log "$($audioEncType)でエンコード処理中..."
-            $process = Start-Process $encPath -ArgumentList $encArgs -Wait -NoNewWindow -PassThru
-            if ($process.ExitCode -eq 0) { $audioOptions = "" } 
-            else { Write-Warning "$($audioEncType)失敗。音声をコピーします。"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
         }
     }
 
@@ -510,6 +540,10 @@ function Invoke-AfterProcessAction {
 # --- スクリプト実行開始 ---
 try {
     Start-MainProcess
+}
+catch {
+    Write-Error "予期せぬエラーが発生しました: $_"
+    $error[0] | Select-Object *
 }
 finally {
     Write-Log "処理を終了します。"
