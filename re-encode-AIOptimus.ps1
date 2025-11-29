@@ -3,12 +3,13 @@
     動画ファイルを一括で再エンコードするPowerShellスクリプトじゃ。
 .DESCRIPTION
     FFmpegを利用して、ドラッグ＆ドロップされた動画ファイルを一括で再エンコードする。
-    対話形式での詳細な設定、テンプレートの利用、高品質な中間ファイルの作成が可能じゃ。
+    対話形式での詳細な設定、テンプレートの利用、高品質な中間ファイルの作成、
+    さらにチャプターや字幕に基づいた分割保存が可能じゃ。
     エンコード設定は get-ffmpegOptions.ps1 で行うぞ。
 .PARAMETER Path
     処理対象の動画ファイルまたはフォルダのパスじゃ。複数指定も可能じゃぞ。
 .NOTES
-    このスクリプトの実行には、ffmpeg や各種外部エンコーダーが必要じゃ。
+    このスクリプトの実行には、ffmpeg, ffprobe や各種外部エンコーダーが必要じゃ。
     `config.user.psd1` に各ツールのパスを正しく設定しておくのじゃぞ。
 #>
 [CmdletBinding()]
@@ -22,6 +23,10 @@ $PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $logFile = Join-Path $PSScriptRoot "re-encode-log-$((Get-Date).ToString('yyyyMMdd-HHmmss')).log"
 Start-Transcript -Path $logFile -Append
 
+# 文字コードの問題を回避するため、コンソールのエンコーディングをUTF-8に設定じゃ
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
 # --- 設定ファイルの読み込み ---
 $configFilePath = Join-Path $PSScriptRoot "config.user.psd1"
 if (-not (Test-Path $configFilePath)) {
@@ -29,7 +34,7 @@ if (-not (Test-Path $configFilePath)) {
     Read-Host "何かキーを押して終了"; exit 1
 }
 $global:Settings = Import-PowerShellDataFile -Path $configFilePath
-$global:Settings.TemplateDir = $PSScriptRoot # テンプレートディレクトリは動的に設定する
+$global:Settings.TemplateDir = $PSScriptRoot
 
 # --- 依存スクリプトの確認 ---
 $optionsScriptPath = Join-Path $PSScriptRoot "get-ffmpegOptions.ps1"
@@ -61,6 +66,21 @@ function Show-Menu {
         }
     }
 }
+
+function Sanitize-FileName {
+    param ([string]$Name)
+    # 禁則文字を全角に置換するのじゃ
+    return $Name -replace '\\', '＼' `
+        -replace '/', '／' `
+        -replace ':', '：' `
+        -replace '\*', '＊' `
+        -replace '\?', '？' `
+        -replace '"', '”' `
+        -replace '<', '＜' `
+        -replace '>', '＞' `
+        -replace '\|', '｜' `
+        -replace '[\r\n]', '' # 改行も削除
+}
 #endregion
 
 #region メイン処理
@@ -74,7 +94,7 @@ function Start-MainProcess {
     $hwAccelOption = if ($hwAccelIndex -gt 0) { "-hwaccel $($hwAccelMap[$hwAccelIndex])" } else { "" }
 
     # --- 実行モード選択 ---
-    $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "中間ファイル作成モード (高画質・MKV・音声コピー)")
+    $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "中間ファイル作成モード (高画質・MKV・音声コピー)", "チャプター/字幕分割モード (分割して再エンコード)")
     $selectedMode = Show-Menu -Title "実行モードを選択してください。" -Choices $modeChoices
     
     $config = $null
@@ -82,6 +102,7 @@ function Start-MainProcess {
         0 { $config = Invoke-InteractiveSetup }
         1 { $config = Invoke-TemplateSelect }
         2 { $config = Invoke-IntermediateMode }
+        3 { $config = Invoke-SplitModeSetup }
     }
     if (-not $config) { Write-Log "設定がキャンセルされたため、処理を中断します。"; return }
 
@@ -94,7 +115,13 @@ function Start-MainProcess {
         Write-Log " [ $fileCount / $totalFiles 個目のファイル処理開始 ]"
         Write-Log " ファイル名: $(Split-Path -Leaf $inputFile)"
         Write-Log "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" -NoTimestamp
-        Invoke-EncodeFile -InputFile $inputFile -Config $config -HwAccelOption $hwAccelOption
+        
+        if ($config.IsSplitMode) {
+            Invoke-SplitEncodeFile -InputFile $inputFile -Config $config -HwAccelOption $hwAccelOption
+        }
+        else {
+            Invoke-EncodeFile -InputFile $inputFile -Config $config -HwAccelOption $hwAccelOption
+        }
     }
     Write-Log "================ 全ての処理が完了しました ================" -NoTimestamp
     Invoke-AfterProcessAction -Action $config.AfterProcessAction
@@ -128,6 +155,7 @@ function Invoke-InteractiveSetup {
     }
 
     $currentConfig = @{
+        IsSplitMode = $false
         EncoderSettings = $encoderSettings; OutputMode = $outputMode; OutputFixedPath = $outputFixedPath
         AfterProcessAction = $afterProcessAction; Extension = $extension; Cut = $cut; Metadata = $metadata
         AdditionalVF = $additionalVF; AdditionalArgs = $additionalArgs
@@ -160,10 +188,207 @@ function Invoke-IntermediateMode {
     $encoderSettings = . $optionsScriptPath -Intermediate
     if (-not $encoderSettings) { Write-Log "エンコード設定が中止されました。"; return $null }
     return @{
+        IsSplitMode = $false
         EncoderSettings = $encoderSettings; OutputMode = "Subfolder"; OutputFixedPath = ""
         AfterProcessAction = "None"; Extension = "mkv"; Cut = "No"; Metadata = "ExifTool"
         AdditionalVF = ""; AdditionalArgs = ""
     }
+}
+
+function Invoke-SplitModeSetup {
+    Write-Log "チャプター/字幕分割モードの設定を行います。"
+    $encoderSettings = . $optionsScriptPath
+    if (-not $encoderSettings) { Write-Log "エンコード設定が中止されました。"; return $null }
+
+    # 分割ソースの選択
+    $splitSource = @("InternalChapter", "ExternalSRT")[(Show-Menu -Title "分割に使用するソースを選択してください" -Choices @("内部チャプターを使用", "外部SRT字幕ファイルを使用"))]
+    
+    # 命名規則の選択
+    $namingStyle = @("Text", "Number")[(Show-Menu -Title "分割後のファイル名規則を選択してください" -Choices @("チャプター/字幕のテキストを使用 (例: 元名_チャプター名.mp4)", "連番のみを使用 (例: 元名_01.mp4)"))]
+
+    $extension = @("mp4", "mov", "mkv")[(Show-Menu -Title "出力ファイルの拡張子を選択してください。" -Choices @("mp4", "mov", "mkv"))]
+    $afterProcessAction = @("None", "Shutdown", "Reboot", "Hibernate")[(Show-Menu -Title "エンコード完了後どうしますか？" -Choices @("何もしない", "シャットダウン", "再起動", "休止"))]
+
+    return @{
+        IsSplitMode        = $true
+        EncoderSettings    = $encoderSettings
+        SplitSource        = $splitSource # InternalChapter or ExternalSRT
+        NamingStyle        = $namingStyle # Text or Number
+        Extension          = $extension
+        AfterProcessAction = $afterProcessAction
+    }
+}
+
+function Invoke-SplitEncodeFile {
+    param ([string]$InputFile, [hashtable]$Config, [string]$HwAccelOption)
+
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($InputFile)
+    $inputDir = Split-Path -Parent $InputFile
+    
+    # 出力先は「元ファイル名」のフォルダ
+    $outputBaseDir = Join-Path $inputDir $baseName
+    if (-not (Test-Path $outputBaseDir)) { New-Item -Path $outputBaseDir -ItemType Directory | Out-Null }
+    
+    $segments = @()
+    $tempDir = Join-Path $outputBaseDir "temp_$baseName"
+    if (-not (Test-Path $tempDir)) { New-Item -Path $tempDir -ItemType Directory | Out-Null }
+
+    if ($Config.SplitSource -eq "ExternalSRT") {
+        $srtFile = Join-Path $inputDir "$baseName.srt"
+        if (-not (Test-Path $srtFile)) {
+            Write-Warning "SRTファイルが見つかりません: $srtFile"
+            Write-Warning "このファイルはスキップします。"
+            return
+        }
+        Write-Log "SRTファイルを解析中... ($srtFile)"
+        # SRT解析 (UTF-8前提)
+        $srtContent = Get-Content $srtFile -Encoding UTF8 -Raw
+        # 正規表現でブロックを取得: Index, TimeRange, Text
+        $regex = [regex] '(?ms)(\d+)\s+(\d{2}:\d{2}:\d{2}[,.]\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2}[,.]\d{3})\s+(.*?)(?=\r?\n\r?\n|\z)'
+        $matches = $regex.Matches($srtContent)
+        
+        foreach ($m in $matches) {
+            $startTime = $m.Groups[2].Value.Replace(',', '.')
+            $endTime = $m.Groups[3].Value.Replace(',', '.')
+            $text = $m.Groups[4].Value -replace '\r?\n', ' ' # 改行をスペースに
+            $segments += @{ Start = $startTime; End = $endTime; Name = $text.Trim() }
+        }
+    }
+    elseif ($Config.SplitSource -eq "InternalChapter") {
+        Write-Log "チャプター情報を取得中..."
+        # ffprobeの出力をUTF-8として読み込む (Mojibake対策)
+        $oldEncoding = [Console]::OutputEncoding
+        try {
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+            $jsonStr = & $global:Settings.FfprobePath -v quiet -print_format json -show_chapters "$InputFile" | Out-String
+        }
+        finally {
+            [Console]::OutputEncoding = $oldEncoding
+        }
+        $json = $jsonStr | ConvertFrom-Json
+        
+        if (-not $json.chapters) {
+            Write-Warning "チャプター情報が見つかりません。"
+            Write-Warning "このファイルはスキップします。"
+            return
+        }
+
+        foreach ($chap in $json.chapters) {
+            $segments += @{ Start = $chap.start_time; End = $chap.end_time; Name = $chap.tags.title }
+        }
+    }
+
+    $count = 1
+    $totalSegments = $segments.Count
+    Write-Log "$totalSegments 個のセグメントを検出しました。"
+
+    foreach ($seg in $segments) {
+        $suffix = ""
+        if ($Config.NamingStyle -eq "Text" -and $seg.Name) {
+            $safeName = Sanitize-FileName -Name $seg.Name
+            $suffix = "_$safeName"
+        }
+        else {
+            $suffix = "_{0:D2}" -f $count
+        }
+        
+        $outputFileName = "${baseName}${suffix}.$($Config.Extension)"
+        $outputFilePath = Join-Path $outputBaseDir $outputFileName
+        
+        # 同名ファイル対策
+        if (Test-Path $outputFilePath) {
+            $suffix += "_{0:D2}" -f $count
+            $outputFileName = "${baseName}${suffix}.$($Config.Extension)"
+            $outputFilePath = Join-Path $outputBaseDir $outputFileName
+        }
+
+        Write-Log "セグメント処理中 [$count/$totalSegments]: $outputFileName ($($seg.Start) -> $($seg.End))"
+        
+        # --- 音声処理の準備 ---
+        $audioOptions = $Config.EncoderSettings.Audio
+        $tempAudioOutFile = ""
+        $audioEncType = $Config.EncoderSettings.AudioType
+        $tempWavFile = Join-Path $tempDir "temp_audio_seg.wav"
+        
+        # 外部エンコーダーを使用する場合
+        if ($audioEncType -eq "qaac" -or $audioEncType -eq "nero" -or $audioEncType -eq "fdkaac") {
+            # 1. WAV切り出し (カット済みのWAVを作成)
+            $wavArgs = @("-hide_banner", "-y", "-ss", "$($seg.Start)", "-to", "$($seg.End)", "-i", "`"$InputFile`"", "-vn", "-f", "wav", "`"$tempWavFile`"")
+            $process = Start-Process $global:Settings.FfmpegPath -ArgumentList $wavArgs -Wait -NoNewWindow -PassThru
+            
+            if ($process.ExitCode -ne 0) {
+                Write-Warning "WAV変換失敗。音声をコピーします。"
+                $audioOptions = "-c:a copy"
+            }
+            else {
+                # 2. 外部エンコーダー実行
+                $tempAudioOutFile = Join-Path $tempDir "temp_audio_seg.m4a"
+                $encPath = $global:Settings["$($audioEncType)Path"]
+                $encArgs = ""
+                
+                if ($audioEncType -eq "qaac") {
+                    $encArgs = "$($Config.EncoderSettings.Audio) `"$tempWavFile`" -o `"$tempAudioOutFile`""
+                }
+                elseif ($audioEncType -eq "nero") {
+                    $encArgs = "$($Config.EncoderSettings.Audio) -if `"$tempWavFile`" -of `"$tempAudioOutFile`""
+                }
+                elseif ($audioEncType -eq "fdkaac") {
+                    $encArgs = "$($Config.EncoderSettings.Audio) -o `"$tempAudioOutFile`" `"$tempWavFile`""
+                }
+                
+                $process = Start-Process $encPath -ArgumentList $encArgs -Wait -NoNewWindow -PassThru
+                if ($process.ExitCode -eq 0) {
+                    $audioOptions = "" # 外部エンコード成功時はffmpeg側の音声オプションは不要
+                }
+                else {
+                    Write-Warning "$($audioEncType)失敗。音声をコピーします。"
+                    $audioOptions = "-c:a copy"; $tempAudioOutFile = ""
+                }
+            }
+        }
+
+        # --- 映像エンコードと結合 ---
+        $ffmpegArgsList = @("-hide_banner", "-y")
+        if ($HwAccelOption) { $ffmpegArgsList += $HwAccelOption.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) }
+        
+        # 映像入力 (シーク指定: 入力前に置くことでタイムスタンプをリセット)
+        $ffmpegArgsList += @("-ss", "$($seg.Start)", "-to", "$($seg.End)")
+        $ffmpegArgsList += @("-i", "`"$InputFile`"")
+
+        # 外部音声入力がある場合
+        if ($tempAudioOutFile) {
+            $ffmpegArgsList += @("-i", "`"$tempAudioOutFile`"")
+        }
+
+        # 重要: チャプター情報とメタデータを削除して、タイムスタンプのズレを防ぐ
+        $ffmpegArgsList += @("-map_chapters", "-1", "-map_metadata", "-1")
+
+        # 映像エンコード設定
+        $splitOptions = [System.StringSplitOptions]::RemoveEmptyEntries
+        $ffmpegArgsList += $Config.EncoderSettings.Video.Split(' ', $splitOptions)
+        
+        # 音声マッピングと設定
+        if ($tempAudioOutFile) {
+            # 外部音声を使う場合: 映像はInput0, 音声はInput1(既にエンコード済なのでコピー)
+            $ffmpegArgsList += @("-map", "0:v:0", "-map", "1:a:0", "-c:a", "copy")
+        }
+        else {
+            # 内部/コピーの場合
+            $ffmpegArgsList += $audioOptions.Split(' ', $splitOptions)
+        }
+
+        $ffmpegArgsList += "`"$outputFilePath`""
+        $finalArgString = $ffmpegArgsList -join ' '
+
+        $process = Start-Process $global:Settings.FfmpegPath -ArgumentList $finalArgString -Wait -NoNewWindow -PassThru
+        if ($process.ExitCode -ne 0) {
+            Write-Error "セグメントエンコードエラー: $outputFileName"
+        }
+        $count++
+    }
+    
+    # 終了後クリーンアップ
+    if (Test-Path $tempDir) { Remove-Item -Path $tempDir -Recurse -Force }
 }
 
 function Invoke-EncodeFile {
