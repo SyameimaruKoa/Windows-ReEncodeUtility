@@ -162,7 +162,7 @@ function Invoke-InteractiveSetup {
     }
     
     $afterProcessAction = @("None", "Shutdown", "Reboot", "Hibernate")[(Show-Menu -Title "エンコード完了後どうしますか？" -Choices @("何もしない", "シャットダウン", "再起動", "休止"))]
-    $extension = @("mp4", "mov", "mkv")[(Show-Menu -Title "出力ファイルの拡張子を選択してください。" -Choices @("mp4", "mov", "mkv"))]
+    $extension = @("mp4", "mov", "mkv", "webm")[(Show-Menu -Title "出力ファイルの拡張子を選択してください。" -Choices @("mp4", "mov", "mkv", "webm"))]
     $cut = @("No", "Yes")[(Show-Menu -Title "動画をカットしますか？ (LosslessCutを使用)" -Choices @("いいえ", "はい"))]
     $metadata = @("ExifTool", "Ffmpeg", "None")[(Show-Menu -Title "動画のメタデータ(撮影日時など)を保持しますか？" -Choices @("ExifToolで全コピー", "ffmpeg形式で一部保持", "保持しない"))]
 
@@ -218,20 +218,18 @@ function Invoke-SplitModeSetup {
     $encoderSettings = . $optionsScriptPath
     if (-not $encoderSettings) { Write-Log "エンコード設定が中止されました。"; return $null }
 
-    # 分割ソースの選択
     $splitSource = @("InternalChapter", "ExternalSRT")[(Show-Menu -Title "分割に使用するソースを選択してください" -Choices @("内部チャプターを使用", "外部SRT字幕ファイルを使用"))]
     
-    # 命名規則の選択
     $namingStyle = @("Text", "Number")[(Show-Menu -Title "分割後のファイル名規則を選択してください" -Choices @("チャプター/字幕のテキストを使用 (例: 元名_チャプター名.mp4)", "連番のみを使用 (例: 元名_01.mp4)"))]
 
-    $extension = @("mp4", "mov", "mkv")[(Show-Menu -Title "出力ファイルの拡張子を選択してください。" -Choices @("mp4", "mov", "mkv"))]
+    $extension = @("mp4", "mov", "mkv", "webm")[(Show-Menu -Title "出力ファイルの拡張子を選択してください。" -Choices @("mp4", "mov", "mkv", "webm"))]
     $afterProcessAction = @("None", "Shutdown", "Reboot", "Hibernate")[(Show-Menu -Title "エンコード完了後どうしますか？" -Choices @("何もしない", "シャットダウン", "再起動", "休止"))]
 
     return @{
         IsSplitMode        = $true
         EncoderSettings    = $encoderSettings
-        SplitSource        = $splitSource # InternalChapter or ExternalSRT
-        NamingStyle        = $namingStyle # Text or Number
+        SplitSource        = $splitSource
+        NamingStyle        = $namingStyle
         Extension          = $extension
         AfterProcessAction = $afterProcessAction
     }
