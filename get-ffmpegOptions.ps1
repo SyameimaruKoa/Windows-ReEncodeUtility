@@ -222,8 +222,8 @@ function Get-EncoderSettings {
         }
         2 {
             # AMD
-            $codecChoices = @("H.265/HEVC", "H.264/AVC", "AV1"); $codecMap = @("hevc_amf", "h264_amf", "av1_amf")
-            $codecIndex = Show-Menu -Title "AMDコーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
+            $codecChoices = @("H.265/HEVC", "H.264/AVC", "AV1 (※RDNA2以降のみ対応)"); $codecMap = @("hevc_amf", "h264_amf", "av1_amf")
+            $codecIndex = Show-Menu -Title "AMDコーデックを選択 (Vega/Polaris系はH.264/H.265のみ)" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
             $baseEncoder = "-c:v $($codecMap[$codecIndex])"
             $qPresets = [ordered]@{ "高品質 (QP:22)" = "-rc cqp -qp_i 22 -qp_p 22 -qp_b 22"; "中品質 (QP:28)" = "-rc cqp -qp_i 28 -qp_p 28 -qp_b 28"; "低品質 (QP:35)" = "-rc cqp -qp_i 35 -qp_p 35 -qp_b 35"; "カスタム品質 (QP)" = "-rc cqp -qp_i {val} -qp_p {val} -qp_b {val}"; "カスタムビットレート" = "-rc vbr_peak -b:v {val}" }
             $pPresets = [ordered]@{ "Quality (高品質)" = "-quality quality"; "Balanced (標準)" = "-quality balanced"; "Speed (速度優先)" = "-quality speed" }
@@ -287,8 +287,9 @@ function Get-IntermediateSettings {
 
     # --- 4. プリセット選択 ---
     $pPresets = [ordered]@{ "veryslow (最高品質)" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "superfast" = "-preset superfast"; "ultrafast (最速)" = "-preset ultrafast" }
-    $pIndex = Show-Menu -Title "エンコード速度のプリセットを選択" -Choices @($pPresets.Keys); if ($pIndex -lt 0) { return $null }
-    $presetOption = $pPresets[($pPresets.Keys)[$pIndex]]
+    $pChoices = @($pPresets.Keys)
+    $pIndex = Show-Menu -Title "エンコード速度のプリセットを選択" -Choices $pChoices; if ($pIndex -lt 0) { return $null }
+    $presetOption = $pPresets[$pChoices[$pIndex]]
 
     $videoSetting = "$baseEncoder $pixFmtOption $crfOption $presetOption"
 

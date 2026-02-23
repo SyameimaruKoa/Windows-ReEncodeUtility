@@ -109,7 +109,15 @@ function Start-MainProcess {
     $hwAccelChoices = @("使用しない (CPUデコード)", "NVIDIA (cuda)", "Intel (qsv)", "AMD (d3d11va)", "Windows汎用 (dxva2)")
     $hwAccelMap = @("", "cuda", "qsv", "d3d11va", "dxva2")
     $hwAccelIndex = Show-Menu -Title "使用するハードウェアデコードを選択してください。" -Choices $hwAccelChoices
-    $hwAccelOption = if ($hwAccelIndex -gt 0) { "-hwaccel $($hwAccelMap[$hwAccelIndex])" } else { "" }
+    $hwAccelOption = ""
+    if ($hwAccelIndex -gt 0) {
+        $selectedHwAccel = $hwAccelMap[$hwAccelIndex]
+        $hwAccelOption = "-hwaccel $selectedHwAccel"
+        # d3d11va/dxva2 使用時は出力フォーマットを指定してGPUメモリ上に保持する
+        if ($selectedHwAccel -eq "d3d11va") {
+            $hwAccelOption += " -hwaccel_output_format d3d11"
+        }
+    }
 
     # --- 実行モード選択 ---
     $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "中間ファイル作成モード (高画質・MKV・音声コピー)", "チャプター/字幕分割モード (分割して再エンコード)")
@@ -552,8 +560,11 @@ function Invoke-EncodeFile {
             Write-Log "ffmpegエンコードが正常に完了しました。"
             if ($Config.Metadata -eq "ExifTool") {
                 Write-Log "ExifToolでメタデータをコピーしています..."
-                $exifArgs = "-api largefilesupport=1 -tagsfromfile `"$InputFile`" -all:all -overwrite_original `"$outputFile`""
-                & $global:Settings.ExifToolPath $exifArgs
+                $exifArgsList = @("-api", "largefilesupport=1", "-tagsfromfile", $InputFile, "-all:all", "-overwrite_original", $outputFile)
+                $exifProcess = Start-Process $global:Settings.ExifToolPath -ArgumentList $exifArgsList -Wait -NoNewWindow -PassThru
+                if ($exifProcess.ExitCode -ne 0) {
+                    Write-Warning "ExifToolの実行に失敗しました。メタデータはコピーされていない可能性があります。"
+                }
                 Remove-Item -Path "$outputFile`_original" -ErrorAction SilentlyContinue
             }
         }
@@ -582,7 +593,11 @@ try {
 }
 catch {
     Write-Error "予期せぬエラーが発生しました: $_"
-    $error[0] | Select-Object *
+    Write-Host "エラー詳細:" -ForegroundColor Red
+    Write-Host "  スクリプト: $($_.InvocationInfo.ScriptName)" -ForegroundColor Red
+    Write-Host "  行番号: $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Red
+    Write-Host "  コマンド: $($_.InvocationInfo.Line.Trim())" -ForegroundColor Red
+    Write-Host "  スタックトレース: $($_.ScriptStackTrace)" -ForegroundColor Yellow
 }
 finally {
     Write-Log "処理を終了します。"
