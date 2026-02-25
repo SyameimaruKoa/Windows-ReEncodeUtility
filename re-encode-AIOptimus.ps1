@@ -280,6 +280,510 @@ function Get-EncoderPath {
 }
 #endregion
 
+#region プラットフォームアップロード機能
+
+function Get-TargetBitrateKbps {
+    param(
+        [double]$MaxFileSizeMB,
+        [double]$DurationSeconds,
+        [double]$AudioBitrateKbps = 128
+    )
+    if ($DurationSeconds -le 0) { return 0 }
+    # コンテナオーバーヘッドを考慮して95%のマージンじゃ
+    $totalBitrateKbps = ($MaxFileSizeMB * 0.95 * 8 * 1024) / $DurationSeconds
+    $videoBitrateKbps = $totalBitrateKbps - $AudioBitrateKbps
+    return [math]::Max(100, [math]::Round($videoBitrateKbps))
+}
+
+function Build-PlatformVideoOptions {
+    param(
+        [string]$HW,           # "NVIDIA", "Intel", "AMD", "CPU"
+        [string]$Codec,        # "H.264", "H.265", "VP9", "AV1"
+        [string]$QualityMode,  # "CRF", "CRF+Maxrate", "Bitrate"
+        [int]$QualityValue,    # CRF/CQ/QP値
+        [string]$Preset,       # エンコード速度プリセット
+        [int]$MaxrateKbps = 0  # CRF+MaxrateまたはBitrateモード用
+    )
+    $encoderMap = @{
+        "NVIDIA+H.264" = "h264_nvenc"; "NVIDIA+H.265" = "hevc_nvenc"; "NVIDIA+AV1" = "av1_nvenc"
+        "Intel+H.264" = "h264_qsv"; "Intel+H.265" = "hevc_qsv"; "Intel+AV1" = "av1_qsv"; "Intel+VP9" = "vp9_qsv"
+        "AMD+H.264" = "h264_amf"; "AMD+H.265" = "hevc_amf"; "AMD+AV1" = "av1_amf"
+        "CPU+H.264" = "libx264"; "CPU+H.265" = "libx265"; "CPU+VP9" = "libvpx-vp9"; "CPU+AV1" = "libsvtav1"
+    }
+    $encoder = $encoderMap["$HW+$Codec"]
+    if (-not $encoder) { return $null }
+
+    $parts = @("-c:v $encoder")
+    switch ($HW) {
+        "NVIDIA" {
+            switch ($QualityMode) {
+                "CRF" { $parts += "-rc vbr -cq $QualityValue" }
+                "CRF+Maxrate" { $parts += "-rc vbr -cq $QualityValue -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k" }
+                "Bitrate" { $parts += "-rc vbr -b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k" }
+            }
+            $parts += "-preset $Preset"
+            $parts += "-tune hq"
+        }
+        "Intel" {
+            switch ($QualityMode) {
+                "CRF" { $parts += "-global_quality $QualityValue" }
+                "CRF+Maxrate" { $parts += "-global_quality $QualityValue -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k" }
+                "Bitrate" { $parts += "-b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k" }
+            }
+            $parts += "-preset $Preset"
+        }
+        "AMD" {
+            switch ($QualityMode) {
+                "CRF" { $parts += "-rc cqp -qp_i $QualityValue -qp_p $QualityValue -qp_b $QualityValue" }
+                "CRF+Maxrate" { $parts += "-rc vbr_peak -qp_i $QualityValue -qp_p $QualityValue -b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k" }
+                "Bitrate" { $parts += "-rc vbr_peak -b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k" }
+            }
+            $parts += "-quality $Preset"
+        }
+        "CPU" {
+            $isVPx = $Codec -match "VP"
+            $isAV1 = $Codec -match "AV1"
+            switch ($QualityMode) {
+                "CRF" {
+                    $parts += "-crf $QualityValue"
+                    if ($isVPx -or $isAV1) { $parts += "-b:v 0" }
+                }
+                "CRF+Maxrate" {
+                    $parts += "-crf $QualityValue"
+                    if ($isVPx) {
+                        $parts += "-b:v ${MaxrateKbps}k"
+                    }
+                    else {
+                        $parts += "-maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
+                    }
+                }
+                "Bitrate" {
+                    $parts += "-b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
+                }
+            }
+            if ($isVPx) { $parts += "-cpu-used $Preset" }
+            elseif ($isAV1) { $parts += "-preset $Preset" }
+            else { $parts += "-preset $Preset" }
+        }
+    }
+
+    return ($parts -join ' ')
+}
+
+function Get-PlatformAutoSettings {
+    param(
+        [hashtable]$PlatformConfig,
+        [string]$HW,
+        [string]$Codec
+    )
+    # プラットフォーム特性に応じた自動設定を返す
+    # 方針: 容量に収めることが最優先 → CRF+Maxrate で品質と容量を両立
+    $codec = $Codec; $qualityValue = 0; $preset = ""; $audioSetting = $null; $scaleFilter = ""; $extension = ""
+    if (-not $codec) { return $null }
+
+    # --- 品質値 (CRF/CQ/QP) --- maxrateが容量制限するため高品質ベースラインを使用
+    $qualityValue = switch ($codec) { "H.264" { 18 }; "H.265" { 22 }; "VP9" { 25 }; "AV1" { 23 } }
+
+    # --- プリセット --- バランス型
+    $preset = switch ($HW) {
+        "NVIDIA" { "p4" }; "Intel" { "medium" }; "AMD" { "balanced" }
+        "CPU" { if ($codec -match "VP|AV1") { "4" } else { "medium" } }
+    }
+
+    # --- 音声 --- 小容量はビットレート節約、それ以外はAAC 128k
+    if ($PlatformConfig.MaxFileSizeMB -le 50) {
+        $audioSetting = @{ Type = "internal"; Options = "-c:a libopus -b:a 64k"; Description = "Opus 64kbps (自動)" }
+        # コンテナがmp4ならOpus非対応なのでAAC
+        if ($PlatformConfig.Extension -eq "mp4" -or $codec -match "H\.26") {
+            $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 96k"; Description = "AAC 96kbps (自動)" }
+        }
+    }
+    else {
+        $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "AAC 128kbps (自動)" }
+    }
+
+    # --- 解像度 ---
+    if ($PlatformConfig.MaxResolution -eq "720p") {
+        $scaleFilter = "scale=1280:-2"
+    }
+    elseif ($PlatformConfig.MaxFileSizeMB -le 50) {
+        $scaleFilter = "scale=854:-2" # Discord等: 480pに縮小
+    }
+    else {
+        $scaleFilter = "scale=1280:-2" # catbox等: 720p
+    }
+
+    # --- コンテナ ---
+    $extension = $PlatformConfig.Extension
+    if (-not $extension) {
+        $extension = switch ($codec) { "VP9" { "webm" }; "AV1" { "mp4" }; default { "mp4" } }
+    }
+
+    return @{
+        Codec = $codec; QualityValue = $qualityValue; Preset = $preset
+        AudioSetting = $audioSetting; ScaleFilter = $scaleFilter; Extension = $extension
+    }
+}
+
+function Invoke-PlatformUploadSetup {
+    Write-Log "プラットフォーム向けアップロード設定を開始します..."
+
+    # --- 1. プラットフォーム選択 ---
+    $platformChoices = @(
+        "Twitter        (上限: 512MB, H.264固定, 720p)",
+        "Discord        (上限: 10MB, コーデック選択可)",
+        "catbox.moe     (上限: 200MB, コーデック選択可)",
+        "uguu.se       (上限: 64MB, コーデック選択可)",
+        "GitHub         (上限: 100MB, コーデック選択可)",
+        "GitHub Release (上限: 2GB, ビットレート上限なし)",
+        "カスタム       (上限サイズを自由に指定)"
+    )
+    $platformIndex = Show-Menu -Title "アップロード先のプラットフォームを選択してください。" -Choices $platformChoices
+    if ($platformIndex -lt 0) { return $null }
+
+    $platformConfig = switch ($platformIndex) {
+        0 { @{ Name = "Twitter"; MaxFileSizeMB = 512; MaxResolution = "720p"; ForcedCodec = "H.264"; AllowedCodecs = @("H.264"); Extension = "mp4"; NoMaxrate = $false } }
+        1 { @{ Name = "Discord"; MaxFileSizeMB = 10; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
+        2 { @{ Name = "catbox.moe"; MaxFileSizeMB = 200; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
+        3 { @{ Name = "uguu.se"; MaxFileSizeMB = 64; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
+        4 { @{ Name = "GitHub"; MaxFileSizeMB = 100; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
+        5 { @{ Name = "GitHub Release"; MaxFileSizeMB = 2048; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $true } }
+        6 {
+            $customSize = 0
+            while ($customSize -le 0) {
+                $input = Read-Host "ファイルサイズ上限をMB単位で入力してください (例: 50)"
+                if ([double]::TryParse($input, [ref]$customSize) -and $customSize -gt 0) { break }
+                Write-Host "  → 0より大きい数値を入力してください。" -ForegroundColor Yellow
+                $customSize = 0
+            }
+            @{ Name = "カスタム (${customSize}MB)"; MaxFileSizeMB = $customSize; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false }
+        }
+    }
+
+    # --- 2. 簡単/詳細モード選択 ---
+    $setupModeIndex = Show-Menu -Title "$($platformConfig.Name) (上限: $($platformConfig.MaxFileSizeMB) MB)`n`nセットアップ方法を選択してください。" -Choices @(
+        "おまかせ (容量に収まるよう自動設定)",
+        "カスタマイズ (品質・コーデック等を自分で選択)"
+    )
+    if ($setupModeIndex -lt 0) { return $null }
+
+    if ($setupModeIndex -eq 0) {
+        return Invoke-PlatformAutoSetup -PlatformConfig $platformConfig
+    }
+    else {
+        return Invoke-PlatformDetailedSetup -PlatformConfig $platformConfig
+    }
+}
+
+function Invoke-PlatformAutoSetup {
+    param([hashtable]$PlatformConfig)
+
+    # --- HWエンコーダー選択 ---
+    $hwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
+    $hwIndex = Show-Menu -Title "使用するハードウェアを選択してください。" -Choices $hwChoices
+    if ($hwIndex -lt 0) { return $null }
+    $selectedHW = @("NVIDIA", "Intel", "AMD", "CPU")[$hwIndex]
+
+    # --- コーデック選択 ---
+    $selectedCodec = $null
+    if ($PlatformConfig.ForcedCodec) {
+        $selectedCodec = $PlatformConfig.ForcedCodec
+        Write-Host "`n  コーデック: $selectedCodec (プラットフォーム制限により固定)`n"
+    }
+    else {
+        $hwCodecMap = @{
+            "NVIDIA" = @("H.264", "H.265", "AV1"); "Intel" = @("H.264", "H.265", "VP9", "AV1")
+            "AMD" = @("H.264", "H.265", "AV1"); "CPU" = @("H.264", "H.265", "VP9", "AV1")
+        }
+        $availableCodecs = @()
+        foreach ($c in $PlatformConfig.AllowedCodecs) {
+            if ($hwCodecMap[$selectedHW] -contains $c) { $availableCodecs += $c }
+        }
+        if ($availableCodecs.Count -eq 0) {
+            Write-Log "選択したハードウェアで使用可能なコーデックがありません。" -Level "ERROR"
+            return $null
+        }
+        elseif ($availableCodecs.Count -eq 1) {
+            $selectedCodec = $availableCodecs[0]
+            Write-Host "`n  コーデック: $selectedCodec`n"
+        }
+        else {
+            $codecIndex = Show-Menu -Title "コーデックを選択してください。" -Choices $availableCodecs
+            if ($codecIndex -lt 0) { return $null }
+            $selectedCodec = $availableCodecs[$codecIndex]
+        }
+    }
+
+    # --- 自動設定を取得 ---
+    $auto = Get-PlatformAutoSettings -PlatformConfig $PlatformConfig -HW $selectedHW -Codec $selectedCodec
+    if (-not $auto) {
+        Write-Log "設定の生成に失敗しました。" -Level "ERROR"
+        return $null
+    }
+
+    # NoMaxrateが有効なプラットフォーム (GitHub Release等) はCRFのみでビットレート上限を設定しない
+    $qualityMode = if ($PlatformConfig.NoMaxrate) { "CRF" } else { "CRF+Maxrate" }
+    $videoOptions = Build-PlatformVideoOptions -HW $selectedHW -Codec $auto.Codec -QualityMode $qualityMode -QualityValue $auto.QualityValue -Preset $auto.Preset -MaxrateKbps 0
+
+    # --- 確認画面 ---
+    $qualityDesc = if ($PlatformConfig.NoMaxrate) { "CRF (品質優先・ビットレート上限なし)" } else { "CRF+Maxrate (容量内で最大品質を自動確保)" }
+    $sizeDisp = if ($PlatformConfig.MaxFileSizeMB -ge 1024) { "$([math]::Round($PlatformConfig.MaxFileSizeMB / 1024, 1)) GB" } else { "$($PlatformConfig.MaxFileSizeMB) MB" }
+    Clear-Host
+    Write-Host "============= おまかせ自動設定 ============="
+    Write-Host "  プラットフォーム : $($PlatformConfig.Name) (上限: $sizeDisp)"
+    Write-Host "  品質方式         : $qualityDesc"
+    Write-Host "  ハードウェア     : $selectedHW"
+    Write-Host "  コーデック       : $($auto.Codec)"
+    Write-Host "  CRFベースライン  : $($auto.QualityValue)"
+    Write-Host "  プリセット       : $($auto.Preset) (標準速度)"
+    Write-Host "  音声             : $($auto.AudioSetting.Description)"
+    Write-Host "  解像度           : $($auto.ScaleFilter)"
+    Write-Host "  出力形式         : .$($auto.Extension)"
+    if (-not $PlatformConfig.NoMaxrate) { Write-Host "  ※maxrateはファイル長から自動計算されます" }
+    Write-Host "============================================"
+
+    $confirm = Show-Menu -Title "この設定でよろしいですか？" -Choices @("はい", "いいえ、やり直します")
+    if ($confirm -eq 1) { return Invoke-PlatformUploadSetup }
+
+    return @{
+        IsSplitMode        = $false
+        PlatformMode       = $true
+        PlatformName       = $PlatformConfig.Name
+        MaxFileSizeMB      = $PlatformConfig.MaxFileSizeMB
+        QualityMode        = $qualityMode
+        QualityValue       = $auto.QualityValue
+        HWEncoder          = $selectedHW
+        CodecName          = $auto.Codec
+        PresetValue        = $auto.Preset
+        EncoderSettings    = @{
+            Video     = $videoOptions
+            Audio     = $auto.AudioSetting.Options
+            AudioType = $auto.AudioSetting.Type
+        }
+        OutputMode         = "Subfolder"
+        OutputFixedPath    = ""
+        AfterProcessAction = "None"
+        Extension          = $auto.Extension
+        Cut                = "No"
+        Metadata           = "None"
+        AdditionalVF       = $auto.ScaleFilter
+        AdditionalArgs     = ""
+    }
+}
+
+function Invoke-PlatformDetailedSetup {
+    param([hashtable]$PlatformConfig)
+
+    Clear-Host
+    Write-Host "  プラットフォーム     : $($PlatformConfig.Name)"
+    Write-Host "  ファイルサイズ上限   : $($PlatformConfig.MaxFileSizeMB) MB"
+    if ($PlatformConfig.MaxResolution) { Write-Host "  最大解像度           : $($PlatformConfig.MaxResolution)" }
+    Write-Host ""
+
+    # NoMaxrateが有効なプラットフォーム (GitHub Release等) はCRFのみでビットレート上限を設定しない
+    $qualityMode = if ($PlatformConfig.NoMaxrate) { "CRF" } else { "CRF+Maxrate" }
+
+    # --- 2. ハードウェアエンコーダー選択 ---
+    $hwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
+    $hwIndex = Show-Menu -Title "使用するハードウェアエンコーダーを選択してください。" -Choices $hwChoices
+    if ($hwIndex -lt 0) { return $null }
+    $selectedHW = @("NVIDIA", "Intel", "AMD", "CPU")[$hwIndex]
+
+    # --- 3. コーデック選択 ---
+    $selectedCodec = $null
+    if ($PlatformConfig.ForcedCodec) {
+        $selectedCodec = $PlatformConfig.ForcedCodec
+        Write-Host "`n  コーデック: $selectedCodec (プラットフォーム制限により固定)`n"
+    }
+    else {
+        $hwCodecMap = @{
+            "NVIDIA" = @("H.264", "H.265", "AV1")
+            "Intel"  = @("H.264", "H.265", "VP9", "AV1")
+            "AMD"    = @("H.264", "H.265", "AV1")
+            "CPU"    = @("H.264", "H.265", "VP9", "AV1")
+        }
+        $availableCodecs = @()
+        foreach ($c in $PlatformConfig.AllowedCodecs) {
+            if ($hwCodecMap[$selectedHW] -contains $c) { $availableCodecs += $c }
+        }
+        if ($availableCodecs.Count -eq 0) {
+            Write-Log "選択したハードウェアで使用可能なコーデックがありません。" -Level "ERROR"
+            return $null
+        }
+        elseif ($availableCodecs.Count -eq 1) {
+            $selectedCodec = $availableCodecs[0]
+            Write-Host "`n  コーデック: $selectedCodec`n"
+        }
+        else {
+            $codecIndex = Show-Menu -Title "コーデックを選択してください。" -Choices $availableCodecs
+            if ($codecIndex -lt 0) { return $null }
+            $selectedCodec = $availableCodecs[$codecIndex]
+        }
+    }
+
+    # --- 4. 品質値 (CRF) は容量に収まる範囲で最大品質を自動設定 ---
+    # maxrateが容量制限を保証するため、CRFは高品質ベースラインを使用
+    $qualityValue = switch ($selectedCodec) {
+        "H.264" { 18 }; "H.265" { 22 }; "VP9" { 25 }; "AV1" { 23 }
+    }
+
+    # --- 5. プリセット (エンコード速度) 選択 ---
+    $presetValue = ""
+    switch ($selectedHW) {
+        "NVIDIA" {
+            $presetChoices = @("P1 (最速)", "P3", "P4 (標準)", "P5", "P7 (最高品質)")
+            $presetMap = @("p1", "p3", "p4", "p5", "p7")
+            $pIndex = Show-Menu -Title "エンコード速度を選択してください。" -Choices $presetChoices -DefaultIndex 2
+            if ($pIndex -lt 0) { return $null }
+            $presetValue = $presetMap[$pIndex]
+        }
+        "Intel" {
+            $presetChoices = @("veryfast (最速)", "fast", "medium (標準)", "slow", "veryslow (最高品質)")
+            $presetMap = @("veryfast", "fast", "medium", "slow", "veryslow")
+            $pIndex = Show-Menu -Title "エンコード速度を選択してください。" -Choices $presetChoices -DefaultIndex 2
+            if ($pIndex -lt 0) { return $null }
+            $presetValue = $presetMap[$pIndex]
+        }
+        "AMD" {
+            $presetChoices = @("Speed (速度優先)", "Balanced (標準)", "Quality (高品質)")
+            $presetMap = @("speed", "balanced", "quality")
+            $pIndex = Show-Menu -Title "エンコード速度を選択してください。" -Choices $presetChoices -DefaultIndex 1
+            if ($pIndex -lt 0) { return $null }
+            $presetValue = $presetMap[$pIndex]
+        }
+        "CPU" {
+            if ($selectedCodec -match "VP|AV1") {
+                $presetChoices = @("0 (最高品質)", "2", "4 (標準)", "6", "8 (最速)")
+                $presetMap = @("0", "2", "4", "6", "8")
+            }
+            else {
+                $presetChoices = @("ultrafast (最速)", "fast", "medium (標準)", "slow", "veryslow (最高品質)")
+                $presetMap = @("ultrafast", "fast", "medium", "slow", "veryslow")
+            }
+            $pIndex = Show-Menu -Title "エンコード速度を選択してください。" -Choices $presetChoices -DefaultIndex 2
+            if ($pIndex -lt 0) { return $null }
+            $presetValue = $presetMap[$pIndex]
+        }
+    }
+
+    # --- 6. 音声設定 ---
+    $audioSetting = @{ Type = "copy"; Options = "-c:a copy"; Description = "音声コピー (-c:a copy)" }
+    if ($PlatformConfig.Name -eq "Twitter") {
+        $audioChoices = @("qaac (AAC-LC)", "qaac (HE-AAC)", "ffmpeg内蔵AAC (128kbps)", "音声コピー (-c:a copy)")
+        $aIndex = Show-Menu -Title "音声エンコーダーを選択してください。(Twitter = AAC必須)" -Choices $audioChoices
+        if ($aIndex -lt 0) { return $null }
+        switch ($aIndex) {
+            0 { $audioSetting = @{ Type = "qaac"; Options = ""; Description = "qaac AAC-LC" } }
+            1 { $audioSetting = @{ Type = "qaac"; Options = "--he"; Description = "qaac HE-AAC" } }
+            2 { $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "ffmpeg AAC 128kbps" } }
+            3 { } # default copy
+        }
+    }
+    else {
+        $audioChoices = @("音声コピー (-c:a copy)", "qaac (AAC-LC)", "qaac (HE-AAC)", "Opus (libopus)", "ffmpeg内蔵AAC (128kbps)", "音声なし (-an)")
+        $aIndex = Show-Menu -Title "音声エンコーダーを選択してください。" -Choices $audioChoices
+        if ($aIndex -lt 0) { return $null }
+        switch ($aIndex) {
+            0 { } # default copy
+            1 { $audioSetting = @{ Type = "qaac"; Options = ""; Description = "qaac AAC-LC" } }
+            2 { $audioSetting = @{ Type = "qaac"; Options = "--he"; Description = "qaac HE-AAC" } }
+            3 {
+                $opusChoices = @("128 kbps", "96 kbps", "64 kbps")
+                $opusIndex = Show-Menu -Title "Opusのビットレートを選択" -Choices $opusChoices
+                if ($opusIndex -lt 0) { return $null }
+                $opusBitrate = @("128k", "96k", "64k")[$opusIndex]
+                $audioSetting = @{ Type = "internal"; Options = "-c:a libopus -b:a $opusBitrate"; Description = "Opus $opusBitrate" }
+            }
+            4 { $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "ffmpeg AAC 128kbps" } }
+            5 { $audioSetting = @{ Type = "none"; Options = "-an"; Description = "音声なし" } }
+        }
+    }
+
+    # --- 7. 解像度選択 ---
+    $scaleFilter = ""
+    if ($PlatformConfig.MaxResolution -eq "720p") {
+        $resChoices = @("720p (1280x720) ※プラットフォーム上限", "480p (854x480)", "元の解像度のまま")
+        $resIndex = Show-Menu -Title "映像の解像度を選択してください。" -Choices $resChoices
+        if ($resIndex -lt 0) { return $null }
+        $scaleFilter = switch ($resIndex) { 0 { "scale=1280:-2" } 1 { "scale=854:-2" } 2 { "" } }
+    }
+    else {
+        $resChoices = @("元の解像度のまま", "1080p (1920x1080)", "720p (1280x720)", "480p (854x480)", "360p (640x360)")
+        $resIndex = Show-Menu -Title "映像の解像度を選択してください。" -Choices $resChoices
+        if ($resIndex -lt 0) { return $null }
+        $scaleFilter = switch ($resIndex) { 0 { "" } 1 { "scale=1920:-2" } 2 { "scale=1280:-2" } 3 { "scale=854:-2" } 4 { "scale=640:-2" } }
+    }
+
+    # --- 8. 出力コンテナ形式 ---
+    $extension = $PlatformConfig.Extension
+    if (-not $extension) {
+        $containerChoices = switch ($selectedCodec) {
+            "H.264" { @("mp4", "mkv") }
+            "H.265" { @("mp4", "mkv") }
+            "VP9" { @("webm", "mkv") }
+            "AV1" { @("mp4", "webm", "mkv") }
+        }
+        if ($containerChoices.Count -eq 1) {
+            $extension = $containerChoices[0]
+        }
+        else {
+            $extIndex = Show-Menu -Title "出力コンテナ形式を選択してください。" -Choices $containerChoices
+            if ($extIndex -lt 0) { return $null }
+            $extension = $containerChoices[$extIndex]
+        }
+    }
+
+    # プレビューオプション生成 (maxrateはエンコード時にファイル長から計算)
+    $previewVideoOptions = Build-PlatformVideoOptions -HW $selectedHW -Codec $selectedCodec -QualityMode $qualityMode -QualityValue $qualityValue -Preset $presetValue -MaxrateKbps 0
+
+    # --- 9. 最終確認 ---
+    $qualityDesc = if ($PlatformConfig.NoMaxrate) { "CRF (品質優先・ビットレート上限なし)" } else { "CRF+Maxrate (容量内で最大品質を自動確保)" }
+    $sizeDisp = if ($PlatformConfig.MaxFileSizeMB -ge 1024) { "$([math]::Round($PlatformConfig.MaxFileSizeMB / 1024, 1)) GB" } else { "$($PlatformConfig.MaxFileSizeMB) MB" }
+    Clear-Host
+    Write-Host "============= プラットフォームアップロード設定 ============="
+    Write-Host "  プラットフォーム : $($PlatformConfig.Name) (上限: $sizeDisp)"
+    Write-Host "  品質方式         : $qualityDesc"
+    Write-Host "  ハードウェア     : $selectedHW"
+    Write-Host "  コーデック       : $selectedCodec"
+    Write-Host "  CRFベースライン  : $qualityValue"
+    Write-Host "  プリセット       : $presetValue"
+    Write-Host "  音声             : $($audioSetting.Description)"
+    Write-Host "  解像度           : $(if ($scaleFilter) { $scaleFilter } else { '元の解像度' })"
+    Write-Host "  出力形式         : .$extension"
+    if (-not $PlatformConfig.NoMaxrate) { Write-Host "  映像オプション   : (maxrateはファイル長から自動計算)" }
+    Write-Host "============================================================"
+
+    $confirm = Show-Menu -Title "この設定でよろしいですか？" -Choices @("はい", "いいえ、やり直します")
+    if ($confirm -eq 1) { return Invoke-PlatformUploadSetup }
+
+    return @{
+        IsSplitMode        = $false
+        PlatformMode       = $true
+        PlatformName       = $PlatformConfig.Name
+        MaxFileSizeMB      = $PlatformConfig.MaxFileSizeMB
+        QualityMode        = $qualityMode
+        QualityValue       = $qualityValue
+        HWEncoder          = $selectedHW
+        CodecName          = $selectedCodec
+        PresetValue        = $presetValue
+        EncoderSettings    = @{
+            Video     = $previewVideoOptions
+            Audio     = $audioSetting.Options
+            AudioType = $audioSetting.Type
+        }
+        OutputMode         = "Subfolder"
+        OutputFixedPath    = ""
+        AfterProcessAction = "None"
+        Extension          = $extension
+        Cut                = "No"
+        Metadata           = "None"
+        AdditionalVF       = $scaleFilter
+        AdditionalArgs     = ""
+    }
+}
+
+#endregion
+
 #region メイン処理
 function Start-MainProcess {
     # ログ出力先が変わるため、ここでのTranscriptは廃止し、各処理関数内で開始する
@@ -300,15 +804,16 @@ function Start-MainProcess {
     }
 
     # --- 実行モード選択 ---
-    $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "中間ファイル作成モード (高画質・MKV・音声コピー)", "チャプター/字幕分割モード (分割して再エンコード)")
+    $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "プラットフォーム向けアップロード (Twitter/Discord/catbox.moe)", "中間ファイル作成モード (高画質・MKV・音声コピー)", "チャプター/字幕分割モード (分割して再エンコード)")
     $selectedMode = Show-Menu -Title "実行モードを選択してください。" -Choices $modeChoices
     
     $config = $null
     switch ($selectedMode) {
         0 { $config = Invoke-InteractiveSetup }
         1 { $config = Invoke-TemplateSelect }
-        2 { $config = Invoke-IntermediateMode }
-        3 { $config = Invoke-SplitModeSetup }
+        2 { $config = Invoke-PlatformUploadSetup }
+        3 { $config = Invoke-IntermediateMode }
+        4 { $config = Invoke-SplitModeSetup }
     }
     if (-not $config) { Write-Log "設定がキャンセルされたため、処理を中断します。"; return }
 
@@ -654,6 +1159,39 @@ function Invoke-EncodeFile {
         Write-Log (Get-MediaInfoString -FilePath $InputFile)
         $inputDuration = Get-InputDuration -FilePath $InputFile
 
+        # --- プラットフォームモード: ビットレート計算とファイルサイズ予測 ---
+        $currentVideoOptions = $Config.EncoderSettings.Video
+        if ($Config.PlatformMode) {
+            $sizeDisp = if ($Config.MaxFileSizeMB -ge 1024) { "$([math]::Round($Config.MaxFileSizeMB / 1024, 1)) GB" } else { "$($Config.MaxFileSizeMB) MB" }
+
+            if ($Config.QualityMode -eq "CRF") {
+                # CRFのみ (ビットレート上限なし) - 品質優先、サイズはエンコード後に確認
+                Write-Log "映像オプション: $currentVideoOptions"
+                $durationStr = [TimeSpan]::FromSeconds($inputDuration).ToString("hh\:mm\:ss")
+                Write-Log "========= ファイルサイズ情報 =========" -NoTimestamp
+                Write-Log "プラットフォーム    : $($Config.PlatformName) (上限: $sizeDisp)"
+                Write-Log "入力ファイル長      : $durationStr ($([math]::Round($inputDuration))秒)"
+                Write-Log "品質方式            : CRF $($Config.QualityValue) (ビットレート上限なし)"
+                Write-Log "※エンコード後にファイルサイズを確認してください"
+                Write-Log ""
+            }
+            else {
+                # CRF+Maxrate: ファイル長からmaxrateを自動計算して映像オプションを再生成
+                $targetBitrateKbps = Get-TargetBitrateKbps -MaxFileSizeMB $Config.MaxFileSizeMB -DurationSeconds $inputDuration
+                $currentVideoOptions = Build-PlatformVideoOptions -HW $Config.HWEncoder -Codec $Config.CodecName -QualityMode $Config.QualityMode -QualityValue $Config.QualityValue -Preset $Config.PresetValue -MaxrateKbps $targetBitrateKbps
+                Write-Log "映像オプション (自動計算): $currentVideoOptions"
+
+                # ファイルサイズ予測表示
+                $durationStr = [TimeSpan]::FromSeconds($inputDuration).ToString("hh\:mm\:ss")
+                Write-Log "========= ファイルサイズ予測 =========" -NoTimestamp
+                Write-Log "プラットフォーム    : $($Config.PlatformName) (上限: $sizeDisp)"
+                Write-Log "入力ファイル長      : $durationStr ($([math]::Round($inputDuration))秒)"
+                Write-Log "映像最大ビットレート: ~$targetBitrateKbps kbps (音声128kbps想定)"
+                Write-Log "品質方式            : CRF $($Config.QualityValue) + maxrate ${targetBitrateKbps}kbps"
+                Write-Log ""
+            }
+        }
+
         $outputFile = Join-Path $outputDir "$baseName.$($Config.Extension)"
         $tempDir = Join-Path $outputDir "temp_$baseName"; if (-not (Test-Path $tempDir)) { New-Item -Path $tempDir -ItemType Directory | Out-Null }
 
@@ -711,6 +1249,7 @@ function Invoke-EncodeFile {
             }
         }
 
+        # --- エンコード実行 ---
         $ffmpegArgsList = @("-hide_banner", "-y")
         if ($HwAccelOption) { $ffmpegArgsList += $HwAccelOption.Split(' ', $splitOptions) }
         $ffmpegArgsList += $cutInfo.Split(' ', $splitOptions)
@@ -719,7 +1258,7 @@ function Invoke-EncodeFile {
         if ($tempAudioOutFile) { $ffmpegArgsList += @("-i", "`"$tempAudioOutFile`"") }
         if ($useFfmpegMetadata) { $ffmpegArgsList += @("-i", "`"$ffmpegMetadataFile`"") }
         if ($cutInfo) { $ffmpegArgsList += @("-ss", "0") }
-        $ffmpegArgsList += $Config.EncoderSettings.Video.Split(' ', $splitOptions)
+        $ffmpegArgsList += $currentVideoOptions.Split(' ', $splitOptions)
         if ($Config.AdditionalVF) { $ffmpegArgsList += @("-vf", "`"$($Config.AdditionalVF)`"") }
         if ($Config.AdditionalArgs) { $ffmpegArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
 
@@ -734,7 +1273,7 @@ function Invoke-EncodeFile {
 
         Write-Log "========= ffmpeg エンコード実行 =========" -NoTimestamp
         $result = Invoke-FfmpegEncode -Arguments $finalArgString -DurationSeconds $inputDuration
-        
+
         if ($result.ExitCode -ne 0) {
             Write-Log "ffmpegエンコード失敗 (終了コード: $($result.ExitCode))" -Level "ERROR"
             if ($global:Settings.NotifyScriptPath) { & $global:Settings.NotifyScriptPath "$baseName EncodeError" }
@@ -745,11 +1284,28 @@ function Invoke-EncodeFile {
             # --- 出力ファイル情報をログに記録 ---
             if (Test-Path $outputFile) {
                 $outSize = (Get-Item $outputFile).Length
+                $outSizeMB = [math]::Round($outSize / 1MB, 2)
                 $inSize = (Get-Item $InputFile).Length
                 $ratio = if ($inSize -gt 0) { [math]::Round($outSize / $inSize * 100, 1) } else { 0 }
                 Write-Log "========= 出力ファイル情報 =========" -NoTimestamp
                 Write-Log "出力パス  : $outputFile"
-                Write-Log "出力サイズ: $([math]::Round($outSize / 1MB, 2)) MB (元ファイルの ${ratio}%)"
+                Write-Log "出力サイズ: $outSizeMB MB (元ファイルの ${ratio}%)"
+
+                # --- プラットフォームモード: サイズ超過時の警告 ---
+                if ($Config.PlatformMode -and $outSizeMB -gt $Config.MaxFileSizeMB) {
+                    $sizeDispWarn = if ($Config.MaxFileSizeMB -ge 1024) { "$([math]::Round($Config.MaxFileSizeMB / 1024, 1)) GB" } else { "$($Config.MaxFileSizeMB) MB" }
+                    Write-Log "ファイルサイズ上限超過: $outSizeMB MB > $sizeDispWarn" -Level "WARN"
+                    if ($Config.QualityMode -eq "CRF") {
+                        Write-Log "  CRFモード (ビットレート上限なし) のため、サイズが大きくなりました。CRF値を上げてください。" -Level "WARN"
+                    }
+                    else {
+                        Write-Log "  maxrateで制限していますが、コンテナオーバーヘッド等で超過した可能性があります。" -Level "WARN"
+                    }
+                }
+                elseif ($Config.PlatformMode) {
+                    $sizeDispOK = if ($Config.MaxFileSizeMB -ge 1024) { "$([math]::Round($Config.MaxFileSizeMB / 1024, 1)) GB" } else { "$($Config.MaxFileSizeMB) MB" }
+                    Write-Log "ファイルサイズ: OK ($outSizeMB MB / 上限 $sizeDispOK)"
+                }
             }
 
             if ($Config.Metadata -eq "ExifTool") {
