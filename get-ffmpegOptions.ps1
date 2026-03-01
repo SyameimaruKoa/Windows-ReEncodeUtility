@@ -16,30 +16,34 @@ param (
 )
 
 # --- 対話メニュー関数 ---
-function Show-Menu {
-    param (
-        [string]$Title,
-        [string[]]$Choices,
-        [int]$DefaultIndex = 0
-    )
-    $currentIndex = $DefaultIndex
-    while ($true) {
-        Clear-Host
-        Write-Host "$Title`n"
-        for ($i = 0; $i -lt $Choices.Length; $i++) {
-            if ($i -eq $currentIndex) {
-                Write-Host -ForegroundColor Black -BackgroundColor White " > $($Choices[$i])"
+# グローバルスコープに Show-Menu が定義されていない場合のみローカルで定義する
+# (re-encode-AIOptimus.ps1 から呼ばれる場合は既にグローバルに存在する)
+if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction SilentlyContinue)) {
+    function Show-Menu {
+        param (
+            [string]$Title,
+            [string[]]$Choices,
+            [int]$DefaultIndex = 0
+        )
+        $currentIndex = $DefaultIndex
+        while ($true) {
+            Clear-Host
+            Write-Host "$Title`n"
+            for ($i = 0; $i -lt $Choices.Length; $i++) {
+                if ($i -eq $currentIndex) {
+                    Write-Host -ForegroundColor Black -BackgroundColor White " > $($Choices[$i])"
+                }
+                else {
+                    Write-Host "   $($Choices[$i])"
+                }
             }
-            else {
-                Write-Host "   $($Choices[$i])"
+            $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            switch ($key.VirtualKeyCode) {
+                38 { if ($currentIndex -gt 0) { $currentIndex-- } } # UpArrow
+                40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } } # DownArrow
+                13 { return $currentIndex } # Enter
+                27 { return -1 } # Escape
             }
-        }
-        $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-        switch ($key.VirtualKeyCode) {
-            38 { if ($currentIndex -gt 0) { $currentIndex-- } } # UpArrow
-            40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } } # DownArrow
-            13 { return $currentIndex } # Enter
-            27 { return -1 } # Escape
         }
     }
 }
@@ -102,8 +106,13 @@ function Get-EncoderSettings {
     $audioMenuTitle = "--- 音声エンコード設定 ---"
 
     # 外部エンコーダーの存在チェック
+    # 外部エンコーダーの存在チェック (共通関数が利用可能ならそれを使用)
     $hasQaac = $false; $hasNero = $false; $hasFdkaac = $false
-    if ($global:Settings) {
+    if (Get-Command -Name 'Get-ExternalEncoderAvailability' -CommandType Function -ErrorAction SilentlyContinue) {
+        $extEnc = Get-ExternalEncoderAvailability
+        $hasQaac = $extEnc.HasQaac; $hasNero = $extEnc.HasNero; $hasFdkaac = $extEnc.HasFdkaac
+    }
+    elseif ($global:Settings) {
         if ($global:Settings.QaacPath) { try { $null = Get-Command $global:Settings.QaacPath -ErrorAction Stop; $hasQaac = $true } catch {} }
         if ($global:Settings.NeroAacEncPath) { try { $null = Get-Command $global:Settings.NeroAacEncPath -ErrorAction Stop; $hasNero = $true } catch {} }
         if ($global:Settings.FdkaacPath) { try { $null = Get-Command $global:Settings.FdkaacPath -ErrorAction Stop; $hasFdkaac = $true } catch {} }
@@ -135,91 +144,23 @@ function Get-EncoderSettings {
             $audioSetting.Description = "音声なし (-an)"
         }
         "qaac" {
-            # qaac: HE-AACはTVBR非対応のためCVBR使用
-            $qaacChoices = @("AAC-LC TVBR 91 (~192kbps)", "AAC-LC TVBR 73 (~160kbps)", "AAC-LC TVBR 64 (~128kbps)", "HE-AAC CVBR 80kbps", "HE-AAC CVBR 64kbps", "HE-AAC CVBR 48kbps", "カスタム")
-            $qaacIndex = Show-Menu -Title "qaac品質を選択 (LC=TVBR / HE=CVBR)" -Choices $qaacChoices
-            if ($qaacIndex -lt 0) { return $null }
-            $audioSetting.Type = "qaac"
-            if ($qaacIndex -eq 6) {
-                $profileChoices = @("AAC-LC (TVBR品質指定)", "HE-AAC (CVBRビットレート指定)")
-                $pIndex = Show-Menu -Title "qaacプロファイルを選択" -Choices $profileChoices
-                if ($pIndex -lt 0) { return $null }
-                if ($pIndex -eq 0) {
-                    $tvbrVal = [int](Read-Host "TVBR値を入力 (0 ~ 127)")
-                    $audioSetting.Options = "--tvbr $tvbrVal"
-                    $audioSetting.Description = "qaac AAC-LC TVBR $tvbrVal"
-                }
-                else {
-                    $cvbrVal = [int](Read-Host "CVBRビットレートを入力 (kbps, 例: 64)")
-                    $audioSetting.Options = "--he --cvbr $cvbrVal"
-                    $audioSetting.Description = "qaac HE-AAC CVBR ${cvbrVal}kbps"
-                }
-            }
-            elseif ($qaacIndex -le 2) {
-                $tvbrVal = @(91, 73, 64)[$qaacIndex]
-                $audioSetting.Options = "--tvbr $tvbrVal"
-                $audioSetting.Description = "qaac AAC-LC TVBR $tvbrVal"
-            }
-            else {
-                $cvbrVal = @(80, 64, 48)[$qaacIndex - 3]
-                $audioSetting.Options = "--he --cvbr $cvbrVal"
-                $audioSetting.Description = "qaac HE-AAC CVBR ${cvbrVal}kbps"
-            }
+            $result = Select-QaacOptions; if (-not $result) { return $null }
+            $audioSetting = $result
         }
         "nero" {
-            # Nero AAC: 品質選択→HE/LC自動判定 (≤-q0.40:HE / >-q0.40:LC)
-            $neroChoices = @("高品質 (-q 0.65)", "標準品質 (-q 0.50)", "通常品質 (-q 0.35)", "低品質 (-q 0.20)", "カスタム")
-            $neroIndex = Show-Menu -Title "Nero AAC品質を選択 (≤-q0.40:HE / >-q0.40:LC 自動)" -Choices $neroChoices
-            if ($neroIndex -lt 0) { return $null }
-            $audioSetting.Type = "nero"
-            if ($neroIndex -eq 4) {
-                $qVal = [double](Read-Host "品質値を入力 (0.0 ~ 1.0)")
-            }
-            else {
-                $qVal = @(0.65, 0.50, 0.35, 0.20)[$neroIndex]
-            }
-            $heFlag = if ($qVal -le 0.40) { "-he " } else { "" }
-            $profileName = if ($qVal -le 0.40) { "HE-AAC" } else { "AAC-LC" }
-            $audioSetting.Options = "${heFlag}-q $qVal"
-            $audioSetting.Description = "Nero $profileName -q $qVal"
+            $result = Select-NeroOptions; if (-not $result) { return $null }
+            $audioSetting = $result
         }
         "fdkaac" {
-            # fdkaac: 品質選択→HE/LC自動判定 (≤VBR3:HE / ≥VBR4:LC)
-            $fdkChoices = @("最高品質 (VBR 5)", "高品質 (VBR 4)", "標準品質 (VBR 3)", "低品質 (VBR 2)", "カスタム")
-            $fdkIndex = Show-Menu -Title "fdkaac品質を選択 (≤VBR3:HE / ≥VBR4:LC 自動)" -Choices $fdkChoices
-            if ($fdkIndex -lt 0) { return $null }
-            $audioSetting.Type = "fdkaac"
-            if ($fdkIndex -eq 4) {
-                $vbrVal = [int](Read-Host "VBR値を入力 (1 ~ 5)")
-            }
-            else {
-                $vbrVal = @(5, 4, 3, 2)[$fdkIndex]
-            }
-            $heFlag = if ($vbrVal -le 3) { "-p 5 " } else { "" }
-            $profileName = if ($vbrVal -le 3) { "HE-AAC" } else { "AAC-LC" }
-            $audioSetting.Options = "${heFlag}-m $vbrVal"
-            $audioSetting.Description = "fdkaac $profileName VBR $vbrVal"
+            $result = Select-FdkaacOptions; if (-not $result) { return $null }
+            $audioSetting = $result
         }
         "opus" {
-            # Opus
-            $opusChoices = @("192 kbps", "160 kbps", "128 kbps", "96 kbps", "64 kbps", "48 kbps", "カスタム")
-            $opusIndex = Show-Menu -Title "Opusのビットレートを選択" -Choices $opusChoices
-            if ($opusIndex -lt 0) { return $null }
-            $audioSetting.Type = "internal"
-            if ($opusIndex -eq 6) {
-                $brVal = Read-Host "ビットレートを入力 (例: 32k)"
-                $audioSetting.Options = "-c:a libopus -b:a $brVal"
-                $audioSetting.Description = "Opus: カスタムビットレート ($brVal)"
-            }
-            else {
-                $opusBitrateMap = @("192k", "160k", "128k", "96k", "64k", "48k")
-                $bitrate = $opusBitrateMap[$opusIndex]
-                $audioSetting.Options = "-c:a libopus -b:a $bitrate"
-                $audioSetting.Description = "Opus: $($opusChoices[$opusIndex])"
-            }
+            $result = Select-OpusOptions; if (-not $result) { return $null }
+            $audioSetting = $result
         }
         "vorbis" {
-            # Vorbis
+            # Vorbis (get-ffmpegOptions.ps1 専用)
             $vorbisChoices = @("高品質 (q:a 6)", "標準品質 (q:a 4)", "カスタム")
             $vorbisIndex = Show-Menu -Title "Vorbisの品質を選択" -Choices $vorbisChoices
             if ($vorbisIndex -lt 0) { return $null }
