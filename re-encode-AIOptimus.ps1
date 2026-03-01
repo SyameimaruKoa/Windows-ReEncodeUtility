@@ -810,7 +810,8 @@ function Invoke-PlatformDetailedSetup {
                 if ($opusIndex -eq 5) {
                     $brVal = Read-Host "ビットレートを入力 (例: 24k)"
                     $opusBitrate = $brVal
-                } else {
+                }
+                else {
                     $opusBitrate = @("128k", "96k", "64k", "48k", "32k")[$opusIndex]
                 }
                 $audioSetting = @{ Type = "internal"; Options = "-c:a libopus -b:a $opusBitrate"; Description = "Opus $opusBitrate" }
@@ -920,9 +921,14 @@ function Start-MainProcess {
     if ($hwAccelIndex -gt 0) {
         $selectedHwAccel = $hwAccelMap[$hwAccelIndex]
         $hwAccelOption = "-hwaccel $selectedHwAccel"
-        # d3d11va/dxva2 使用時は出力フォーマットを指定してGPUメモリ上に保持する
+        # d3d11va (AMD等) 使用時は出力フォーマットd3d11でGPUメモリ上に保持する
+        # ※ソフトウェアフィルターやCPUエンコーダー使用時は hwdownload が自動挿入される
         if ($selectedHwAccel -eq "d3d11va") {
             $hwAccelOption += " -hwaccel_output_format d3d11"
+        }
+        # NVIDIA cuda 使用時も出力フォーマットcudaでGPUメモリ上に保持する
+        if ($selectedHwAccel -eq "cuda") {
+            $hwAccelOption += " -hwaccel_output_format cuda"
         }
     }
 
@@ -1221,7 +1227,15 @@ function Invoke-SplitEncodeFile {
 
             $splitOptions = [System.StringSplitOptions]::RemoveEmptyEntries
             $ffmpegArgsList += $Config.EncoderSettings.Video.Split(' ', $splitOptions)
-            
+
+            # --- HWデコード (d3d11/cuda) 使用時のフィルター互換性処理 ---
+            $needsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda)'
+            $isHwEncoder = $Config.EncoderSettings.Video -match '-c:v\s+\S+_(amf|nvenc|qsv)'
+            if ($needsHwDownload -and -not $isHwEncoder) {
+                $ffmpegArgsList += @("-vf", "`"hwdownload,format=nv12`"")
+                Write-Log "HWデコード互換: CPUエンコーダー用に hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
+            }
+
             if ($tempAudioOutFile) {
                 $ffmpegArgsList += @("-map", "0:v:0", "-map", "1:a:0", "-c:a", "copy")
             }
@@ -1406,7 +1420,29 @@ function Invoke-EncodeFile {
         if ($useFfmpegMetadata) { $ffmpegArgsList += @("-i", "`"$ffmpegMetadataFile`"") }
         if ($cutInfo) { $ffmpegArgsList += @("-ss", "0") }
         $ffmpegArgsList += $currentVideoOptions.Split(' ', $splitOptions)
-        if ($Config.AdditionalVF) { $ffmpegArgsList += @("-vf", "`"$($Config.AdditionalVF)`"") }
+
+        # --- HWデコード (d3d11/cuda) 使用時のフィルター互換性処理 ---
+        # d3d11/cuda出力フォーマット使用時、ソフトウェアフィルターやCPUエンコーダーのために
+        # hwdownload,format=nv12 を自動挿入してGPU→CPU転送を行う
+        $needsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda)'
+        $isHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv)'
+        $resolvedVF = $Config.AdditionalVF
+
+        if ($needsHwDownload) {
+            if ($resolvedVF) {
+                # ソフトウェアフィルターがある場合: hwdownload を先頭に挿入
+                $resolvedVF = "hwdownload,format=nv12,$resolvedVF"
+                Write-Log "HWデコード互換: フィルターに hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
+            }
+            elseif (-not $isHwEncoder) {
+                # フィルター無し + CPUエンコーダーの場合: hwdownload フィルターを追加
+                $resolvedVF = "hwdownload,format=nv12"
+                Write-Log "HWデコード互換: CPUエンコーダー用に hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
+            }
+            # HWエンコーダー + フィルター無しの場合はゼロコピーパスのため何もしない
+        }
+
+        if ($resolvedVF) { $ffmpegArgsList += @("-vf", "`"$resolvedVF`"") }
         if ($Config.AdditionalArgs) { $ffmpegArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
 
         $inputCount = 1; $audioInputIndex = 0; $metadataInputIndex = 0
