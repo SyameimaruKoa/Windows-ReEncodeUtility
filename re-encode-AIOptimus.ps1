@@ -914,8 +914,8 @@ function Start-MainProcess {
     Write-Log -Message "=============== エンコード処理開始 ===============" -NoTimestamp
 
     # --- ハードウェアデコード選択 ---
-    $hwAccelChoices = @("使用しない (CPUデコード)", "NVIDIA (cuda)", "Intel (qsv)", "AMD (d3d11va)", "Windows汎用 (dxva2)")
-    $hwAccelMap = @("", "cuda", "qsv", "d3d11va", "dxva2")
+    $hwAccelChoices = @("使用しない (CPUデコード)", "NVIDIA (cuda)", "Intel (qsv)", "AMD (d3d11va)", "Windows汎用 (dxva2)", "Vulkan (vulkan)")
+    $hwAccelMap = @("", "cuda", "qsv", "d3d11va", "dxva2", "vulkan")
     $hwAccelIndex = Show-Menu -Title "使用するハードウェアデコードを選択してください。" -Choices $hwAccelChoices
     $hwAccelOption = ""
     if ($hwAccelIndex -gt 0) {
@@ -929,6 +929,10 @@ function Start-MainProcess {
         # NVIDIA cuda 使用時も出力フォーマットcudaでGPUメモリ上に保持する
         if ($selectedHwAccel -eq "cuda") {
             $hwAccelOption += " -hwaccel_output_format cuda"
+        }
+        # Vulkan 使用時は出力フォーマットvulkanでGPUメモリ上に保持する
+        if ($selectedHwAccel -eq "vulkan") {
+            $hwAccelOption += " -hwaccel_output_format vulkan"
         }
     }
 
@@ -1228,12 +1232,13 @@ function Invoke-SplitEncodeFile {
             $splitOptions = [System.StringSplitOptions]::RemoveEmptyEntries
             $ffmpegArgsList += $Config.EncoderSettings.Video.Split(' ', $splitOptions)
 
-            # --- HWデコード (d3d11/cuda) 使用時のフィルター互換性処理 ---
-            $needsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda)'
+            # --- HWデコード (d3d11/cuda/vulkan) 使用時のフィルター互換性処理 ---
+            $needsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan)'
+            $isVulkanDecode = $HwAccelOption -match '-hwaccel\s+vulkan'
             $isHwEncoder = $Config.EncoderSettings.Video -match '-c:v\s+\S+_(amf|nvenc|qsv)'
-            if ($needsHwDownload -and -not $isHwEncoder) {
+            if ($needsHwDownload -and ($isVulkanDecode -or -not $isHwEncoder)) {
                 $ffmpegArgsList += @("-vf", "`"hwdownload,format=nv12`"")
-                Write-Log "HWデコード互換: CPUエンコーダー用に hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
+                Write-Log "HWデコード互換: hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
             }
 
             if ($tempAudioOutFile) {
@@ -1421,10 +1426,11 @@ function Invoke-EncodeFile {
         if ($cutInfo) { $ffmpegArgsList += @("-ss", "0") }
         $ffmpegArgsList += $currentVideoOptions.Split(' ', $splitOptions)
 
-        # --- HWデコード (d3d11/cuda) 使用時のフィルター互換性処理 ---
-        # d3d11/cuda出力フォーマット使用時、ソフトウェアフィルターやCPUエンコーダーのために
+        # --- HWデコード (d3d11/cuda/vulkan) 使用時のフィルター互換性処理 ---
+        # d3d11/cuda/vulkan出力フォーマット使用時、ソフトウェアフィルターやCPUエンコーダーのために
         # hwdownload,format=nv12 を自動挿入してGPU→CPU転送を行う
-        $needsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda)'
+        $needsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan)'
+        $isVulkanDecode = $HwAccelOption -match '-hwaccel\s+vulkan'
         $isHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv)'
         $resolvedVF = $Config.AdditionalVF
 
@@ -1434,10 +1440,10 @@ function Invoke-EncodeFile {
                 $resolvedVF = "hwdownload,format=nv12,$resolvedVF"
                 Write-Log "HWデコード互換: フィルターに hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
             }
-            elseif (-not $isHwEncoder) {
-                # フィルター無し + CPUエンコーダーの場合: hwdownload フィルターを追加
+            elseif ($isVulkanDecode -or -not $isHwEncoder) {
+                # フィルター無し + (Vulkanデコード または CPUエンコーダー) の場合: hwdownload フィルターを追加
                 $resolvedVF = "hwdownload,format=nv12"
-                Write-Log "HWデコード互換: CPUエンコーダー用に hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
+                Write-Log "HWデコード互換: hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
             }
             # HWエンコーダー + フィルター無しの場合はゼロコピーパスのため何もしない
         }
