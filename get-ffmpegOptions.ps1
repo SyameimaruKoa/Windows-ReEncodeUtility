@@ -98,67 +98,109 @@ function Get-DetailedVideoOption {
 
 # --- メイン処理 ---
 function Get-EncoderSettings {
-    # --- 1. 音声コーデック選択 ---
+    # --- 1. 音声コーデック選択 (利用可能なもののみ表示) ---
     $audioMenuTitle = "--- 音声エンコード設定 ---"
-    $audioChoices = @(
-        "音声をコピー (-c:a copy)", "音声なし (-an)", "qaac (外部 AAC)", "Nero AAC (外部 AAC)", "fdkaac (外部 AAC)", "Opus (libopus)", "Vorbis (libvorbis)"
-    )
+
+    # 外部エンコーダーの存在チェック
+    $hasQaac = $false; $hasNero = $false; $hasFdkaac = $false
+    if ($global:Settings) {
+        if ($global:Settings.QaacPath) { try { $null = Get-Command $global:Settings.QaacPath -ErrorAction Stop; $hasQaac = $true } catch {} }
+        if ($global:Settings.NeroAacEncPath) { try { $null = Get-Command $global:Settings.NeroAacEncPath -ErrorAction Stop; $hasNero = $true } catch {} }
+        if ($global:Settings.FdkaacPath) { try { $null = Get-Command $global:Settings.FdkaacPath -ErrorAction Stop; $hasFdkaac = $true } catch {} }
+    }
+
+    # 動的メニュー構築
+    $audioMenu = @()
+    $audioMenu += @{ Key = "copy"; Label = "音声をコピー (-c:a copy)" }
+    $audioMenu += @{ Key = "none"; Label = "音声なし (-an)" }
+    if ($hasQaac) { $audioMenu += @{ Key = "qaac"; Label = "qaac (AAC 自動HE/LC)" } }
+    if ($hasNero) { $audioMenu += @{ Key = "nero"; Label = "Nero AAC (外部 自動HE/LC)" } }
+    if ($hasFdkaac) { $audioMenu += @{ Key = "fdkaac"; Label = "fdkaac (外部 自動HE/LC)" } }
+    $audioMenu += @{ Key = "opus"; Label = "Opus (libopus)" }
+    $audioMenu += @{ Key = "vorbis"; Label = "Vorbis (libvorbis)" }
+
+    $audioChoices = @($audioMenu | ForEach-Object { $_.Label })
     $audioIndex = Show-Menu -Title $audioMenuTitle -Choices $audioChoices
     if ($audioIndex -lt 0) { return $null }
+    $selectedAudioKey = $audioMenu[$audioIndex].Key
 
     $audioSetting = @{ Type = "copy"; Options = "-c:a copy"; Description = "音声をコピー (-c:a copy)" }
-    switch ($audioIndex) {
-        0 {
+    switch ($selectedAudioKey) {
+        "copy" {
             # デフォルト値を使用するため何もしない
         }
-        1 {
+        "none" {
             $audioSetting.Type = "none"
             $audioSetting.Options = "-an"
             $audioSetting.Description = "音声なし (-an)"
         }
-        2 {
-            # qaac
-            $qaacChoices = @("AAC-LC (標準)", "HE-AAC")
-            $qaacIndex = Show-Menu -Title "qaacタイプを選択" -Choices $qaacChoices
+        "qaac" {
+            # qaac: HE-AACはTVBR非対応のためCVBR使用
+            $qaacChoices = @("AAC-LC TVBR 91 (~192kbps)", "AAC-LC TVBR 73 (~160kbps)", "AAC-LC TVBR 64 (~128kbps)", "HE-AAC CVBR 80kbps", "HE-AAC CVBR 64kbps", "HE-AAC CVBR 48kbps", "カスタム")
+            $qaacIndex = Show-Menu -Title "qaac品質を選択 (LC=TVBR / HE=CVBR)" -Choices $qaacChoices
             if ($qaacIndex -lt 0) { return $null }
-            $qaacType = if ($qaacIndex -eq 1) { "--he" } else { "" }
             $audioSetting.Type = "qaac"
-            $audioSetting.Options = $qaacType
-            $audioSetting.Description = "qaac: $($qaacChoices[$qaacIndex])"
+            if ($qaacIndex -eq 6) {
+                $profileChoices = @("AAC-LC (TVBR品質指定)", "HE-AAC (CVBRビットレート指定)")
+                $pIndex = Show-Menu -Title "qaacプロファイルを選択" -Choices $profileChoices
+                if ($pIndex -lt 0) { return $null }
+                if ($pIndex -eq 0) {
+                    $tvbrVal = [int](Read-Host "TVBR値を入力 (0 ~ 127)")
+                    $audioSetting.Options = "--tvbr $tvbrVal"
+                    $audioSetting.Description = "qaac AAC-LC TVBR $tvbrVal"
+                }
+                else {
+                    $cvbrVal = [int](Read-Host "CVBRビットレートを入力 (kbps, 例: 64)")
+                    $audioSetting.Options = "--he --cvbr $cvbrVal"
+                    $audioSetting.Description = "qaac HE-AAC CVBR ${cvbrVal}kbps"
+                }
+            }
+            elseif ($qaacIndex -le 2) {
+                $tvbrVal = @(91, 73, 64)[$qaacIndex]
+                $audioSetting.Options = "--tvbr $tvbrVal"
+                $audioSetting.Description = "qaac AAC-LC TVBR $tvbrVal"
+            }
+            else {
+                $cvbrVal = @(80, 64, 48)[$qaacIndex - 3]
+                $audioSetting.Options = "--he --cvbr $cvbrVal"
+                $audioSetting.Description = "qaac HE-AAC CVBR ${cvbrVal}kbps"
+            }
         }
-        3 {
-            # Nero AAC
-            $neroChoices = @("高品質 (-q 0.65)", "標準品質 (-q 0.50)", "通常品質 (-q 0.35)", "カスタム")
-            $neroIndex = Show-Menu -Title "NeroAACの品質を選択" -Choices $neroChoices
+        "nero" {
+            # Nero AAC: 品質選択→HE/LC自動判定 (≤-q0.40:HE / >-q0.40:LC)
+            $neroChoices = @("高品質 (-q 0.65)", "標準品質 (-q 0.50)", "通常品質 (-q 0.35)", "低品質 (-q 0.20)", "カスタム")
+            $neroIndex = Show-Menu -Title "Nero AAC品質を選択 (≤-q0.40:HE / >-q0.40:LC 自動)" -Choices $neroChoices
             if ($neroIndex -lt 0) { return $null }
             $audioSetting.Type = "nero"
-            if ($neroIndex -eq 3) {
-                $qVal = Read-Host "品質値を入力 (0.0 ~ 1.0)"
-                $audioSetting.Options = "-q $qVal"
-                $audioSetting.Description = "Nero AAC: カスタム品質 (-q $qVal)"
+            if ($neroIndex -eq 4) {
+                $qVal = [double](Read-Host "品質値を入力 (0.0 ~ 1.0)")
             }
             else {
-                $audioSetting.Options = @("-q 0.65", "-q 0.50", "-q 0.35")[$neroIndex]
-                $audioSetting.Description = "Nero AAC: $($neroChoices[$neroIndex])"
+                $qVal = @(0.65, 0.50, 0.35, 0.20)[$neroIndex]
             }
+            $heFlag = if ($qVal -le 0.40) { "-he " } else { "" }
+            $profileName = if ($qVal -le 0.40) { "HE-AAC" } else { "AAC-LC" }
+            $audioSetting.Options = "${heFlag}-q $qVal"
+            $audioSetting.Description = "Nero $profileName -q $qVal"
         }
-        4 {
-            # fdkaac
-            $fdkChoices = @("最高品質 (VBR 5)", "高品質 (VBR 4)", "標準品質 (VBR 3)", "カスタム")
-            $fdkIndex = Show-Menu -Title "fdkaacの品質(VBR)を選択" -Choices $fdkChoices
+        "fdkaac" {
+            # fdkaac: 品質選択→HE/LC自動判定 (≤VBR3:HE / ≥VBR4:LC)
+            $fdkChoices = @("最高品質 (VBR 5)", "高品質 (VBR 4)", "標準品質 (VBR 3)", "低品質 (VBR 2)", "カスタム")
+            $fdkIndex = Show-Menu -Title "fdkaac品質を選択 (≤VBR3:HE / ≥VBR4:LC 自動)" -Choices $fdkChoices
             if ($fdkIndex -lt 0) { return $null }
             $audioSetting.Type = "fdkaac"
-            if ($fdkIndex -eq 3) {
-                $qVal = Read-Host "品質値を入力 (1 ~ 5)"
-                $audioSetting.Options = "-m $qVal"
-                $audioSetting.Description = "fdkaac: カスタム品質 (VBR $qVal)"
+            if ($fdkIndex -eq 4) {
+                $vbrVal = [int](Read-Host "VBR値を入力 (1 ~ 5)")
             }
             else {
-                $audioSetting.Options = @("-m 5", "-m 4", "-m 3")[$fdkIndex]
-                $audioSetting.Description = "fdkaac: $($fdkChoices[$fdkIndex])"
+                $vbrVal = @(5, 4, 3, 2)[$fdkIndex]
             }
+            $heFlag = if ($vbrVal -le 3) { "-p 5 " } else { "" }
+            $profileName = if ($vbrVal -le 3) { "HE-AAC" } else { "AAC-LC" }
+            $audioSetting.Options = "${heFlag}-m $vbrVal"
+            $audioSetting.Description = "fdkaac $profileName VBR $vbrVal"
         }
-        5 {
+        "opus" {
             # Opus
             $opusChoices = @("192 kbps", "160 kbps", "128 kbps", "96 kbps", "64 kbps", "48 kbps", "カスタム")
             $opusIndex = Show-Menu -Title "Opusのビットレートを選択" -Choices $opusChoices
@@ -176,7 +218,7 @@ function Get-EncoderSettings {
                 $audioSetting.Description = "Opus: $($opusChoices[$opusIndex])"
             }
         }
-        6 {
+        "vorbis" {
             # Vorbis
             $vorbisChoices = @("高品質 (q:a 6)", "標準品質 (q:a 4)", "カスタム")
             $vorbisIndex = Show-Menu -Title "Vorbisの品質を選択" -Choices $vorbisChoices
@@ -194,17 +236,40 @@ function Get-EncoderSettings {
         }
     }
 
-    # --- 2. 映像ハードウェア選択 ---
+    # --- 2. 映像ハードウェア選択 (対応HWのみ表示) ---
     $hwMenuTitle = "--- 映像エンコードに使用するハードウェア ---"
-    $hwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
+    $allHwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
+    $allHwKeys = @("NVIDIA", "Intel", "AMD", "CPU")
+    $hwInfo = $global:HardwareInfo
+    $hwChoices = @(); $hwKeys = @()
+    for ($i = 0; $i -lt $allHwChoices.Length; $i++) {
+        $show = $true
+        if ($hwInfo) {
+            switch ($allHwKeys[$i]) {
+                "NVIDIA" { $show = $hwInfo.HasNvidia }
+                "Intel" { $show = $hwInfo.HasIntel }
+                "AMD" { $show = $hwInfo.HasAMD }
+                "CPU" { $show = $true }
+            }
+        }
+        if ($show) { $hwChoices += $allHwChoices[$i]; $hwKeys += $allHwKeys[$i] }
+    }
     $hwIndex = Show-Menu -Title $hwMenuTitle -Choices $hwChoices
     if ($hwIndex -lt 0) { return $null }
+    $selectedHW = $hwKeys[$hwIndex]
 
     $videoSetting = ""
-    switch ($hwIndex) {
-        0 {
+    switch ($selectedHW) {
+        "NVIDIA" {
             # NVIDIA
-            $codecChoices = @("H.265/HEVC", "H.264/AVC", "AV1", "VP9"); $codecMap = @("hevc_nvenc", "h264_nvenc", "av1_nvenc", "vp9_nvenc")
+            $allCodecChoices = @("H.265/HEVC", "H.264/AVC", "AV1", "VP9"); $allCodecMap = @("hevc_nvenc", "h264_nvenc", "av1_nvenc", "vp9_nvenc")
+            $codecChoices = @(); $codecMap = @()
+            for ($ci = 0; $ci -lt $allCodecChoices.Length; $ci++) {
+                if (-not $hwInfo -or $hwInfo.AvailableEncoders.Count -eq 0 -or $hwInfo.AvailableEncoders -contains $allCodecMap[$ci]) {
+                    $codecChoices += $allCodecChoices[$ci]; $codecMap += $allCodecMap[$ci]
+                }
+            }
+            if ($codecChoices.Count -eq 0) { Write-Host "利用可能なNVIDIAコーデックがありません。" -ForegroundColor Red; return $null }
             $codecIndex = Show-Menu -Title "NVIDIAコーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
             $baseEncoder = "-c:v $($codecMap[$codecIndex])"
             $qPresets = [ordered]@{ "高品質 (CQ:23)" = "-rc vbr -cq 23"; "中品質 (CQ:28)" = "-rc vbr -cq 28"; "高速 (CQ:32)" = "-rc vbr -cq 32"; "カスタム品質 (CQ)" = "-rc vbr -cq {val}"; "カスタムビットレート" = "-rc vbr -b:v {val}" }
@@ -212,25 +277,39 @@ function Get-EncoderSettings {
             $tPresets = [ordered]@{ "HQ (高品質)" = "-tune hq"; "LL (低遅延)" = "-tune ll"; "ULL (超低遅延)" = "-tune ull" }
             $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets -TuneOptions $tPresets
         }
-        1 {
+        "Intel" {
             # Intel
-            $codecChoices = @("H.265/HEVC", "H.264/AVC", "AV1", "VP9"); $codecMap = @("hevc_qsv", "h264_qsv", "av1_qsv", "vp9_qsv")
+            $allCodecChoices = @("H.265/HEVC", "H.264/AVC", "AV1", "VP9"); $allCodecMap = @("hevc_qsv", "h264_qsv", "av1_qsv", "vp9_qsv")
+            $codecChoices = @(); $codecMap = @()
+            for ($ci = 0; $ci -lt $allCodecChoices.Length; $ci++) {
+                if (-not $hwInfo -or $hwInfo.AvailableEncoders.Count -eq 0 -or $hwInfo.AvailableEncoders -contains $allCodecMap[$ci]) {
+                    $codecChoices += $allCodecChoices[$ci]; $codecMap += $allCodecMap[$ci]
+                }
+            }
+            if ($codecChoices.Count -eq 0) { Write-Host "利用可能なIntelコーデックがありません。" -ForegroundColor Red; return $null }
             $codecIndex = Show-Menu -Title "Intelコーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
             $baseEncoder = "-c:v $($codecMap[$codecIndex])"
             $qPresets = [ordered]@{ "高品質 (GQ:20)" = "-global_quality 20"; "中品質 (GQ:25)" = "-global_quality 25"; "低品質 (GQ:30)" = "-global_quality 30"; "カスタム品質 (GQ)" = "-global_quality {val}"; "カスタムビットレート" = "-b:v {val}" }
             $pPresets = [ordered]@{ "veryslow (最高品質)" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "veryfast (最速)" = "-preset veryfast" }
             $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
         }
-        2 {
+        "AMD" {
             # AMD
-            $codecChoices = @("H.265/HEVC", "H.264/AVC", "AV1 (※RDNA2以降のみ対応)"); $codecMap = @("hevc_amf", "h264_amf", "av1_amf")
-            $codecIndex = Show-Menu -Title "AMDコーデックを選択 (Vega/Polaris系はH.264/H.265のみ)" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
+            $allCodecChoices = @("H.265/HEVC", "H.264/AVC", "AV1 (※RDNA2以降のみ対応)"); $allCodecMap = @("hevc_amf", "h264_amf", "av1_amf")
+            $codecChoices = @(); $codecMap = @()
+            for ($ci = 0; $ci -lt $allCodecChoices.Length; $ci++) {
+                if (-not $hwInfo -or $hwInfo.AvailableEncoders.Count -eq 0 -or $hwInfo.AvailableEncoders -contains $allCodecMap[$ci]) {
+                    $codecChoices += $allCodecChoices[$ci]; $codecMap += $allCodecMap[$ci]
+                }
+            }
+            if ($codecChoices.Count -eq 0) { Write-Host "利用可能なAMDコーデックがありません。" -ForegroundColor Red; return $null }
+            $codecIndex = Show-Menu -Title "AMDコーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
             $baseEncoder = "-c:v $($codecMap[$codecIndex])"
             $qPresets = [ordered]@{ "高品質 (QP:22)" = "-rc cqp -qp_i 22 -qp_p 22 -qp_b 22"; "中品質 (QP:28)" = "-rc cqp -qp_i 28 -qp_p 28 -qp_b 28"; "低品質 (QP:35)" = "-rc cqp -qp_i 35 -qp_p 35 -qp_b 35"; "カスタム品質 (QP)" = "-rc cqp -qp_i {val} -qp_p {val} -qp_b {val}"; "カスタムビットレート" = "-rc vbr_peak -b:v {val}" }
             $pPresets = [ordered]@{ "Quality (高品質)" = "-quality quality"; "Balanced (標準)" = "-quality balanced"; "Speed (速度優先)" = "-quality speed" }
             $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
         }
-        3 {
+        "CPU" {
             # CPU
             $codecChoices = @("H.265/HEVC (libx265)", "H.264/AVC (libx264)", "AV1 (libsvtav1) ※高速", "AV1 (libaom-av1) ※高品質・非常に低速", "AV1 (rav1e) ※中速", "VP9 (libvpx-vp9)", "VP8 (libvpx)")
             $codecIndex = Show-Menu -Title "CPUコーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }

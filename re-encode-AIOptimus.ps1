@@ -215,6 +215,47 @@ function Invoke-FfmpegEncode {
                 $_ -match '(Input #|Output #|Stream #|Stream mapping|frame=.*Lsize=|video:.*audio:)'
             }
             if ($sLines) { Write-Log "[ffmpeg サマリー]`n$($sLines -join "`n")" }
+
+            # GPU/HW処理情報をログに記録
+            # NOTE: Stream mappingの "(h264 (native) -> ...)" は実際のhwaccel使用有無を正確に表さないため、
+            # 実行引数(-hwaccel/-c:v/hwdownload)を優先して判定する。
+            $hwLines = ($stderr -split "`r?`n") | Where-Object {
+                $_ -match '(hwaccel|Hardware|hw_device|Device type|Using auto|AMF|NVENC|QSV|VAAPI|VDPAU|CUDA|D3D11|Vulkan|VideoToolbox)'
+            }
+
+            $hwAccelType = ""
+            if ($Arguments -match '(?:^|\s)-hwaccel\s+(\S+)') { $hwAccelType = $Matches[1] }
+
+            $hwOutputFmt = ""
+            if ($Arguments -match '(?:^|\s)-hwaccel_output_format\s+(\S+)') { $hwOutputFmt = $Matches[1] }
+
+            $videoEncoder = ""
+            if ($Arguments -match '(?:^|\s)-c:v\s+(\S+)') { $videoEncoder = $Matches[1] }
+
+            $decodePath = if ($hwAccelType) { "GPU ($hwAccelType)" } else { "CPU" }
+            $encodePath = if ($videoEncoder -match '_(amf|nvenc|qsv|vaapi|videotoolbox)') {
+                "GPU ($($Matches[1]))"
+            }
+            else {
+                "CPU"
+            }
+
+            $transferPath = @()
+            if ($Arguments -match '(?:^|\s)-vf\s+"[^"]*hwdownload') { $transferPath += "GPU→CPU転送: 有効 (hwdownload)" }
+            if ($Arguments -match '(?:^|\s)-vf\s+"[^"]*hwupload') { $transferPath += "CPU→GPU転送: 有効 (hwupload)" }
+
+            $gpuInfo = @("  デコード: $decodePath / エンコード: $encodePath")
+            if ($hwOutputFmt) { $gpuInfo += "  HW出力フォーマット: $hwOutputFmt" }
+            if ($videoEncoder) { $gpuInfo += "  映像エンコーダー: $videoEncoder" }
+            foreach ($tp in $transferPath) { $gpuInfo += "  $tp" }
+
+            if ($hwLines -or $gpuInfo) {
+                $logMsg = "[GPU/HW処理情報]"
+                if ($hwLines) { $logMsg += "`n$($hwLines -join "`n")" }
+                if ($gpuInfo) { $logMsg += "`n$($gpuInfo -join "`n")" }
+                Write-Log $logMsg
+            }
+
             $errLines = ($stderr -split "`r?`n") | Where-Object {
                 $_ -match '(Error|Could not|Invalid|No such|Unknown|Unrecognized|not found)'
             }
@@ -282,6 +323,137 @@ function Get-EncoderPath {
     
     return $global:Settings[$configKey]
 }
+
+function Get-AvailableHardware {
+    <#
+    .SYNOPSIS
+        テストエンコード/デコードを実行してハードウェア・コーデックの実対応状況を検出する。
+        各エンコーダーで実際にテストエンコードし、成功したもののみ有効とする。
+        結果はグローバル変数にキャッシュされ、2回目以降は即座に返される。
+    #>
+    if ($global:HardwareInfo) { return $global:HardwareInfo }
+
+    $info = @{
+        AvailableEncoders = @()
+        AvailableHwAccels = @()
+        HasNvidia         = $false
+        HasIntel          = $false
+        HasAMD            = $false
+    }
+
+    try {
+        $ffmpegPath = $global:Settings.FfmpegPath
+
+        # --- HWエンコーダー実機検出 (テストエンコード) ---
+        $testEncoders = @(
+            'h264_nvenc', 'hevc_nvenc', 'av1_nvenc',
+            'h264_qsv', 'hevc_qsv', 'av1_qsv', 'vp9_qsv',
+            'h264_amf', 'hevc_amf', 'av1_amf'
+        )
+
+        foreach ($enc in $testEncoders) {
+            try {
+                $null = & $ffmpegPath -hide_banner -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 5 -c:v $enc -f null NUL 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    $info.AvailableEncoders += $enc
+                }
+            }
+            catch {}
+        }
+
+        $info.HasNvidia = @($info.AvailableEncoders | Where-Object { $_ -match '_nvenc$' }).Count -gt 0
+        $info.HasIntel = @($info.AvailableEncoders | Where-Object { $_ -match '_qsv$' }).Count -gt 0
+        $info.HasAMD = @($info.AvailableEncoders | Where-Object { $_ -match '_amf$' }).Count -gt 0
+
+        # --- HWアクセル (デコード) 実機検出 ---
+        # -hwaccel は -i より前に指定する必要があるため、引数を直接展開する
+        foreach ($accel in @('cuda', 'qsv', 'd3d11va', 'dxva2', 'vulkan')) {
+            try {
+                $null = & $ffmpegPath -hide_banner -hwaccel $accel -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 5 -c:v rawvideo -f null NUL 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    $info.AvailableHwAccels += $accel
+                }
+            }
+            catch {}
+        }
+
+        Write-Log "ハードウェアスキャン完了: NVIDIA=$($info.HasNvidia) Intel=$($info.HasIntel) AMD=$($info.HasAMD)" -Level "DEBUG"
+        Write-Log "  エンコーダー: [$($info.AvailableEncoders -join ', ')]" -Level "DEBUG"
+        Write-Log "  HWアクセル  : [$($info.AvailableHwAccels -join ', ')]" -Level "DEBUG"
+    }
+    catch {
+        Write-Log "ハードウェアスキャンに失敗しました: $_" -Level "WARN"
+    }
+
+    $global:HardwareInfo = $info
+    return $info
+}
+
+function Get-FilteredHwChoices {
+    <#
+    .SYNOPSIS
+        ハードウェアスキャン結果に基づき、対応するHWエンコーダーのみの選択肢を返す。
+        CPUは常に含まれる。
+    .OUTPUTS
+        @{ Choices = [string[]]; Keys = [string[]]; OriginalIndices = [int[]] }
+    #>
+    $allChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
+    $allKeys = @("NVIDIA", "Intel", "AMD", "CPU")
+    $hwInfo = $global:HardwareInfo
+
+    $filteredChoices = @()
+    $filteredKeys = @()
+    $filteredIndices = @()
+
+    for ($i = 0; $i -lt $allChoices.Length; $i++) {
+        $show = $true
+        if ($hwInfo) {
+            switch ($allKeys[$i]) {
+                "NVIDIA" { $show = $hwInfo.HasNvidia }
+                "Intel" { $show = $hwInfo.HasIntel }
+                "AMD" { $show = $hwInfo.HasAMD }
+                "CPU" { $show = $true }
+            }
+        }
+        if ($show) {
+            $filteredChoices += $allChoices[$i]
+            $filteredKeys += $allKeys[$i]
+            $filteredIndices += $i
+        }
+    }
+
+    return @{ Choices = $filteredChoices; Keys = $filteredKeys; OriginalIndices = $filteredIndices }
+}
+
+function Get-FilteredCodecChoices {
+    <#
+    .SYNOPSIS
+        指定ハードウェアで利用可能なコーデックのみをフィルタして返す。
+    .PARAMETER Choices
+        コーデック表示名の配列 (例: @("H.265/HEVC", "H.264/AVC", "AV1"))
+    .PARAMETER EncoderNames
+        FFmpegエンコーダー名の配列 (例: @("hevc_nvenc", "h264_nvenc", "av1_nvenc"))
+    .OUTPUTS
+        @{ Choices = [string[]]; EncoderNames = [string[]]; OriginalIndices = [int[]] }
+    #>
+    param(
+        [string[]]$Choices,
+        [string[]]$EncoderNames
+    )
+    $hwInfo = $global:HardwareInfo
+    if (-not $hwInfo -or $hwInfo.AvailableEncoders.Count -eq 0) {
+        # スキャン結果なし → 全て表示
+        return @{ Choices = $Choices; EncoderNames = $EncoderNames; OriginalIndices = @(0..($Choices.Length - 1)) }
+    }
+
+    $fc = @(); $fe = @(); $fi = @()
+    for ($i = 0; $i -lt $Choices.Length; $i++) {
+        if ($hwInfo.AvailableEncoders -contains $EncoderNames[$i]) {
+            $fc += $Choices[$i]; $fe += $EncoderNames[$i]; $fi += $i
+        }
+    }
+    return @{ Choices = $fc; EncoderNames = $fe; OriginalIndices = $fi }
+}
 #endregion
 
 #region プラットフォームアップロード機能
@@ -291,17 +463,26 @@ function Get-AudioBitrateFromOptions {
     .SYNOPSIS
         音声オプション文字列から音声ビットレート(kbps)を取得する。
         外部エンコーダーの場合は先行エンコード後に Get-AudioBitrateFromFile で実測すること。
+        コピーモードの場合は SourceBitrateKbps を渡すか、0ならffprobeで取得済みの値を使用。
     #>
     param(
         [string]$AudioOptions,
-        [string]$AudioType
+        [string]$AudioType,
+        [int]$SourceBitrateKbps = 0
     )
     # 音声なしの場合
     if ($AudioType -eq "none" -or $AudioOptions -eq "-an") { return 0 }
-    # 音声コピーの場合は入力ファイルの音声ビットレートを推定できないので128kbpsを仮定
-    if ($AudioType -eq "copy" -or $AudioOptions -eq "-c:a copy") { return 128 }
+    # 音声コピーの場合: ソースビットレートが渡されていればそれを使用
+    if ($AudioType -eq "copy" -or $AudioOptions -eq "-c:a copy") {
+        if ($SourceBitrateKbps -gt 0) { return $SourceBitrateKbps }
+        return 128
+    }
     # -b:a XXXk パターンを解析
     if ($AudioOptions -match '-b:a\s+(\d+)k') {
+        return [int]$Matches[1]
+    }
+    # qaac --cvbr <bitrate> パターンを解析 (HE-AAC CVBR)
+    if ($AudioOptions -match '--cvbr\s+(\d+)') {
         return [int]$Matches[1]
     }
     # qaac/nero/fdkaac 等の外部エンコーダーは先行エンコード後に実測するため、ここでは仮に128kbpsを返す
@@ -327,6 +508,45 @@ function Get-AudioBitrateFromFile {
         return $bitrateKbps
     }
     catch { return 128 }
+}
+
+function Get-SourceAudioInfo {
+    <#
+    .SYNOPSIS
+        入力ファイルの音声ストリーム情報 (コーデック名・ビットレート) をffprobeで取得する。
+    #>
+    param([string]$FilePath)
+    try {
+        $jsonStr = & $global:Settings.FfprobePath -v quiet -print_format json -show_streams -select_streams a:0 "$FilePath" 2>$null | Out-String
+        $json = $jsonStr | ConvertFrom-Json
+        $stream = $json.streams | Select-Object -First 1
+        if (-not $stream) { return @{ CodecName = ""; BitrateKbps = 0 } }
+        $br = if ($stream.bit_rate) { [math]::Round([double]$stream.bit_rate / 1000) } else { 0 }
+        return @{ CodecName = $stream.codec_name; BitrateKbps = $br }
+    }
+    catch { return @{ CodecName = ""; BitrateKbps = 0 } }
+}
+
+function Test-AudioCodecCompatibility {
+    <#
+    .SYNOPSIS
+        音声コーデックが出力コンテナに対応しているかチェックする。
+    #>
+    param(
+        [string]$CodecName,
+        [string]$ContainerExtension
+    )
+    $compatMap = @{
+        "mp4"  = @("aac", "ac3", "eac3", "mp3", "alac", "flac", "opus")
+        "m4a"  = @("aac", "alac")
+        "webm" = @("opus", "vorbis")
+        "mkv"  = @("aac", "ac3", "eac3", "mp3", "alac", "flac", "opus", "vorbis", "pcm_s16le", "pcm_s24le", "pcm_f32le", "dts", "truehd")
+        "avi"  = @("mp3", "ac3", "pcm_s16le", "aac")
+        "mov"  = @("aac", "ac3", "eac3", "mp3", "alac", "flac", "opus", "pcm_s16le", "pcm_s24le")
+    }
+    $supported = $compatMap[$ContainerExtension]
+    if (-not $supported) { return $true }  # 不明なコンテナ → 互換ありと仮定
+    return ($CodecName -in $supported)
 }
 
 function Get-TargetBitrateKbps {
@@ -427,7 +647,17 @@ function Build-PlatformVideoOptions {
                     }
                 }
                 "Bitrate" {
-                    $parts += "-b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
+                    if ($isAV1Svt) {
+                        # SVT-AV1: Bitrateモードではmaxrate/bufsize非対応。目標ビットレートのみ指定
+                        $parts += "-b:v ${MaxrateKbps}k"
+                    }
+                    elseif ($isAV1Aom -or $isAV1Rav1e -or $isVPx) {
+                        # AV1/VPx系はターゲットビットレートのみ指定
+                        $parts += "-b:v ${MaxrateKbps}k"
+                    }
+                    else {
+                        $parts += "-b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
+                    }
                 }
             }
             # マルチスレッド設定
@@ -465,16 +695,62 @@ function Get-PlatformAutoSettings {
         "CPU" { if ($codec -match "VP|AV1") { "4" } else { "medium" } }
     }
 
-    # --- 音声 --- 小容量はビットレート節約、それ以外はAAC 128k
+    # --- コンテナ --- (音声判定で必要なため先に決定)
+    $extension = $PlatformConfig.Extension
+    if (-not $extension) {
+        $extension = switch ($codec) { "VP9" { "webm" }; "AV1" { "webm" }; default { "mp4" } }
+    }
+
+    # --- 音声 --- MP4コンテナ時の優先度: qaac > fdkaac > NeroAAC > ffmpeg内蔵AAC / WebM時: Opus
+    # 外部エンコーダーの存在チェック
+    $hasQaac = $false; $hasNero = $false; $hasFdkaac = $false
+    if ($global:Settings) {
+        if ($global:Settings.QaacPath) { try { $null = Get-Command $global:Settings.QaacPath -ErrorAction Stop; $hasQaac = $true } catch {} }
+        if ($global:Settings.FdkaacPath) { try { $null = Get-Command $global:Settings.FdkaacPath -ErrorAction Stop; $hasFdkaac = $true } catch {} }
+        if ($global:Settings.NeroAacEncPath) { try { $null = Get-Command $global:Settings.NeroAacEncPath -ErrorAction Stop; $hasNero = $true } catch {} }
+    }
+
+    # HE-AAC/AAC-LC 自動判定: qaac HE=CVBR/LC=TVBR, fdkaac VBR≤3=HE/≥4=LC, nero -q≤0.40=HE/>0.40=LC
+    $needsAAC = ($extension -eq "mp4")
     if ($PlatformConfig.MaxFileSizeMB -le 50) {
-        $audioSetting = @{ Type = "internal"; Options = "-c:a libopus -b:a 64k"; Description = "Opus 64kbps (自動)" }
-        # コンテナがmp4ならOpus非対応なのでAAC
-        if ($PlatformConfig.Extension -eq "mp4" -or $codec -match "H\.26") {
-            $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 96k"; Description = "AAC 96kbps (自動)" }
+        if ($needsAAC) {
+            # MP4コンテナ: 外部エンコーダー優先 (小容量向け低ビットレート → HE-AAC CVBR)
+            if ($hasQaac) {
+                $audioSetting = @{ Type = "qaac"; Options = "--he --cvbr 64"; Description = "qaac HE-AAC CVBR 64kbps (自動)" }
+            }
+            elseif ($hasFdkaac) {
+                $audioSetting = @{ Type = "fdkaac"; Options = "-p 5 -m 3"; Description = "fdkaac HE-AAC VBR 3 (自動)" }
+            }
+            elseif ($hasNero) {
+                $audioSetting = @{ Type = "nero"; Options = "-he -q 0.35"; Description = "Nero HE-AAC -q 0.35 (自動)" }
+            }
+            else {
+                $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 96k"; Description = "AAC-LC 96kbps (自動/HE非対応)" }
+            }
+        }
+        else {
+            $audioSetting = @{ Type = "internal"; Options = "-c:a libopus -b:a 64k"; Description = "Opus 64kbps (自動)" }
         }
     }
     else {
-        $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "AAC 128kbps (自動)" }
+        if ($needsAAC) {
+            # MP4コンテナ: 外部エンコーダー優先 (通常品質 → AAC-LC自動)
+            if ($hasQaac) {
+                $audioSetting = @{ Type = "qaac"; Options = "--tvbr 64"; Description = "qaac AAC-LC TVBR 64 (自動)" }
+            }
+            elseif ($hasFdkaac) {
+                $audioSetting = @{ Type = "fdkaac"; Options = "-m 4"; Description = "fdkaac AAC-LC VBR 4 (自動)" }
+            }
+            elseif ($hasNero) {
+                $audioSetting = @{ Type = "nero"; Options = "-q 0.50"; Description = "Nero AAC-LC -q 0.50 (自動)" }
+            }
+            else {
+                $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "AAC-LC 128kbps (自動)" }
+            }
+        }
+        else {
+            $audioSetting = @{ Type = "internal"; Options = "-c:a libopus -b:a 128k"; Description = "Opus 128kbps (自動)" }
+        }
     }
 
     # --- 解像度 ---
@@ -486,12 +762,6 @@ function Get-PlatformAutoSettings {
     }
     else {
         $scaleFilter = "scale=1280:-2" # catbox等: 720p
-    }
-
-    # --- コンテナ ---
-    $extension = $PlatformConfig.Extension
-    if (-not $extension) {
-        $extension = switch ($codec) { "VP9" { "webm" }; "AV1" { "mp4" }; default { "mp4" } }
     }
 
     return @{
@@ -553,26 +823,35 @@ function Invoke-PlatformUploadSetup {
 function Invoke-PlatformAutoSetup {
     param([hashtable]$PlatformConfig)
 
-    # --- HWエンコーダー選択 ---
-    $hwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
-    $hwIndex = Show-Menu -Title "使用するハードウェアを選択してください。" -Choices $hwChoices
+    # --- HWエンコーダー選択 (対応HWのみ表示) ---
+    $hwFiltered = Get-FilteredHwChoices
+    $hwIndex = Show-Menu -Title "使用するハードウェアを選択してください。" -Choices $hwFiltered.Choices
     if ($hwIndex -lt 0) { return $null }
-    $selectedHW = @("NVIDIA", "Intel", "AMD", "CPU")[$hwIndex]
+    $selectedHW = $hwFiltered.Keys[$hwIndex]
 
-    # --- コーデック選択 ---
+    # --- コーデック選択 (HWスキャン結果で更にフィルタ) ---
     $selectedCodec = $null
     if ($PlatformConfig.ForcedCodec) {
         $selectedCodec = $PlatformConfig.ForcedCodec
         Write-Host "`n  コーデック: $selectedCodec (プラットフォーム制限により固定)`n"
     }
     else {
+        # ハードウェアごとの基本対応コーデックとエンコーダー名
         $hwCodecMap = @{
-            "NVIDIA" = @("H.264", "H.265", "AV1"); "Intel" = @("H.264", "H.265", "VP9", "AV1")
-            "AMD" = @("H.264", "H.265", "AV1"); "CPU" = @("H.264", "H.265", "VP9", "AV1")
+            "NVIDIA" = @(@{Codec = "H.264"; Enc = "h264_nvenc" }, @{Codec = "H.265"; Enc = "hevc_nvenc" }, @{Codec = "AV1"; Enc = "av1_nvenc" })
+            "Intel"  = @(@{Codec = "H.264"; Enc = "h264_qsv" }, @{Codec = "H.265"; Enc = "hevc_qsv" }, @{Codec = "VP9"; Enc = "vp9_qsv" }, @{Codec = "AV1"; Enc = "av1_qsv" })
+            "AMD"    = @(@{Codec = "H.264"; Enc = "h264_amf" }, @{Codec = "H.265"; Enc = "hevc_amf" }, @{Codec = "AV1"; Enc = "av1_amf" })
+            "CPU"    = @(@{Codec = "H.264"; Enc = "libx264" }, @{Codec = "H.265"; Enc = "libx265" }, @{Codec = "VP9"; Enc = "libvpx-vp9" }, @{Codec = "AV1"; Enc = "libsvtav1" })
         }
+        $hwInfo = $global:HardwareInfo
         $availableCodecs = @()
-        foreach ($c in $PlatformConfig.AllowedCodecs) {
-            if ($hwCodecMap[$selectedHW] -contains $c) { $availableCodecs += $c }
+        foreach ($entry in $hwCodecMap[$selectedHW]) {
+            # プラットフォームの許可リストにあり、かつHW対応しているコーデックのみ
+            if ($PlatformConfig.AllowedCodecs -contains $entry.Codec) {
+                if ($selectedHW -eq "CPU" -or -not $hwInfo -or $hwInfo.AvailableEncoders.Count -eq 0 -or $hwInfo.AvailableEncoders -contains $entry.Enc) {
+                    $availableCodecs += $entry.Codec
+                }
+            }
         }
         if ($availableCodecs.Count -eq 0) {
             Write-Log "選択したハードウェアで使用可能なコーデックがありません。" -Level "ERROR"
@@ -623,6 +902,7 @@ function Invoke-PlatformAutoSetup {
     return @{
         IsSplitMode        = $false
         PlatformMode       = $true
+        TwoPassMode        = $false
         PlatformName       = $PlatformConfig.Name
         MaxFileSizeMB      = $PlatformConfig.MaxFileSizeMB
         QualityMode        = $qualityMode
@@ -658,14 +938,15 @@ function Invoke-PlatformDetailedSetup {
 
     # NoMaxrateが有効なプラットフォーム (GitHub Release等) はCRFのみでビットレート上限を設定しない
     $qualityMode = if ($PlatformConfig.NoMaxrate) { "CRF" } else { "CRF+Maxrate" }
+    $twoPassMode = $false
 
-    # --- 2. ハードウェアエンコーダー選択 ---
-    $hwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
-    $hwIndex = Show-Menu -Title "使用するハードウェアエンコーダーを選択してください。" -Choices $hwChoices
+    # --- 2. ハードウェアエンコーダー選択 (対応HWのみ表示) ---
+    $hwFiltered = Get-FilteredHwChoices
+    $hwIndex = Show-Menu -Title "使用するハードウェアエンコーダーを選択してください。" -Choices $hwFiltered.Choices
     if ($hwIndex -lt 0) { return $null }
-    $selectedHW = @("NVIDIA", "Intel", "AMD", "CPU")[$hwIndex]
+    $selectedHW = $hwFiltered.Keys[$hwIndex]
 
-    # --- 3. コーデック選択 ---
+    # --- 3. コーデック選択 (HWスキャン結果で更にフィルタ) ---
     $selectedCodec = $null
     if ($PlatformConfig.ForcedCodec) {
         $selectedCodec = $PlatformConfig.ForcedCodec
@@ -673,14 +954,19 @@ function Invoke-PlatformDetailedSetup {
     }
     else {
         $hwCodecMap = @{
-            "NVIDIA" = @("H.264", "H.265", "AV1")
-            "Intel"  = @("H.264", "H.265", "VP9", "AV1")
-            "AMD"    = @("H.264", "H.265", "AV1")
-            "CPU"    = @("H.264", "H.265", "VP9", "AV1")
+            "NVIDIA" = @(@{Codec = "H.264"; Enc = "h264_nvenc" }, @{Codec = "H.265"; Enc = "hevc_nvenc" }, @{Codec = "AV1"; Enc = "av1_nvenc" })
+            "Intel"  = @(@{Codec = "H.264"; Enc = "h264_qsv" }, @{Codec = "H.265"; Enc = "hevc_qsv" }, @{Codec = "VP9"; Enc = "vp9_qsv" }, @{Codec = "AV1"; Enc = "av1_qsv" })
+            "AMD"    = @(@{Codec = "H.264"; Enc = "h264_amf" }, @{Codec = "H.265"; Enc = "hevc_amf" }, @{Codec = "AV1"; Enc = "av1_amf" })
+            "CPU"    = @(@{Codec = "H.264"; Enc = "libx264" }, @{Codec = "H.265"; Enc = "libx265" }, @{Codec = "VP9"; Enc = "libvpx-vp9" }, @{Codec = "AV1"; Enc = "libsvtav1" })
         }
+        $hwInfo = $global:HardwareInfo
         $availableCodecs = @()
-        foreach ($c in $PlatformConfig.AllowedCodecs) {
-            if ($hwCodecMap[$selectedHW] -contains $c) { $availableCodecs += $c }
+        foreach ($entry in $hwCodecMap[$selectedHW]) {
+            if ($PlatformConfig.AllowedCodecs -contains $entry.Codec) {
+                if ($selectedHW -eq "CPU" -or -not $hwInfo -or $hwInfo.AvailableEncoders.Count -eq 0 -or $hwInfo.AvailableEncoders -contains $entry.Enc) {
+                    $availableCodecs += $entry.Codec
+                }
+            }
         }
         if ($availableCodecs.Count -eq 0) {
             Write-Log "選択したハードウェアで使用可能なコーデックがありません。" -Level "ERROR"
@@ -720,6 +1006,24 @@ function Invoke-PlatformDetailedSetup {
             Write-Host "  マルチスレッド設定: -tiles 4 (自動適用)" -ForegroundColor Cyan
             Write-Host "  ※ CRF+Maxrateモードでは品質指定なしのビットレートモードで動作します。`n" -ForegroundColor Cyan
             Read-Host "  Enterキーで続行"
+        }
+    }
+
+    # --- 3.6 品質方式選択 ---
+    if (-not $PlatformConfig.NoMaxrate) {
+        if ($selectedHW -eq "CPU") {
+            $modeChoices = @("CRF+Maxrate (1pass / 品質バランス)", "2pass Bitrate (容量優先)")
+            $modeIndex = Show-Menu -Title "品質方式を選択してください。" -Choices $modeChoices -DefaultIndex 0
+            if ($modeIndex -lt 0) { return $null }
+            if ($modeIndex -eq 1) {
+                $qualityMode = "Bitrate"
+                $twoPassMode = $true
+            }
+        }
+        else {
+            Write-Host "`n  ℹ 2passはCPUエンコーダーのみ対応のため、CRF+Maxrate(1pass)を使用します。`n" -ForegroundColor Cyan
+            $qualityMode = "CRF+Maxrate"
+            $twoPassMode = $false
         }
     }
 
@@ -765,8 +1069,9 @@ function Invoke-PlatformDetailedSetup {
             }
             elseif ($selectedCodec -eq "AV1") {
                 # libsvtav1
-                $presetChoices = @("0 (最高品質 / 非常に遅い)", "2 (高品質寄り)", "4 (標準)", "6 (速い)", "8 (かなり速い)", "10 (最速寄り)", "13 (最速 / 品質低下)")
-                $presetMap = @("0", "2", "4", "6", "8", "10", "13")
+                # SVT-AV1はM10+で警告(自動化用途)が出るため、実用域(0-10)に制限
+                $presetChoices = @("0 (最高品質 / 非常に遅い)", "2 (高品質寄り)", "4 (標準)", "6 (速い)", "8 (かなり速い)", "10 (最速寄り)")
+                $presetMap = @("0", "2", "4", "6", "8", "10")
             }
             elseif ($selectedCodec -match "VP") {
                 $presetChoices = @("0 (最高品質 / 非常に遅い)", "2 (高品質寄り)", "4 (標準)", "6 (速い)", "8 (最速 / 品質低下)")
@@ -782,28 +1087,170 @@ function Invoke-PlatformDetailedSetup {
         }
     }
 
-    # --- 6. 音声設定 ---
+    # --- 6. 音声設定 (利用可能な外部エンコーダーのみ表示) ---
+    $hasQaac = $false; $hasNero = $false; $hasFdkaac = $false
+    if ($global:Settings) {
+        if ($global:Settings.QaacPath) { try { $null = Get-Command $global:Settings.QaacPath -ErrorAction Stop; $hasQaac = $true } catch {} }
+        if ($global:Settings.NeroAacEncPath) { try { $null = Get-Command $global:Settings.NeroAacEncPath -ErrorAction Stop; $hasNero = $true } catch {} }
+        if ($global:Settings.FdkaacPath) { try { $null = Get-Command $global:Settings.FdkaacPath -ErrorAction Stop; $hasFdkaac = $true } catch {} }
+    }
     $audioSetting = @{ Type = "copy"; Options = "-c:a copy"; Description = "音声コピー (-c:a copy)" }
     if ($PlatformConfig.Name -eq "Twitter") {
-        $audioChoices = @("qaac (AAC-LC)", "qaac (HE-AAC)", "ffmpeg内蔵AAC (128kbps)", "音声コピー (-c:a copy)")
-        $aIndex = Show-Menu -Title "音声エンコーダーを選択してください。(Twitter = AAC必須)" -Choices $audioChoices
+        # Twitter: AAC必須 動的メニュー
+        $twitterAudioMenu = @()
+        if ($hasQaac) {
+            $twitterAudioMenu += @{ Key = "qaac"; Label = "qaac (AAC 自動HE/LC)" }
+        }
+        if ($hasNero) {
+            $twitterAudioMenu += @{ Key = "nero"; Label = "Nero AAC (外部 自動HE/LC)" }
+        }
+        if ($hasFdkaac) {
+            $twitterAudioMenu += @{ Key = "fdkaac"; Label = "fdkaac (外部 自動HE/LC)" }
+        }
+        $twitterAudioMenu += @{ Key = "ffaac"; Label = "ffmpeg内蔵AAC-LC (HE非対応)" }
+        $twitterAudioMenu += @{ Key = "copy"; Label = "音声コピー (-c:a copy)" }
+
+        $twitterAudioChoices = @($twitterAudioMenu | ForEach-Object { $_.Label })
+        $aIndex = Show-Menu -Title "音声エンコーダーを選択してください。(Twitter = AAC必須)" -Choices $twitterAudioChoices
         if ($aIndex -lt 0) { return $null }
-        switch ($aIndex) {
-            0 { $audioSetting = @{ Type = "qaac"; Options = ""; Description = "qaac AAC-LC" } }
-            1 { $audioSetting = @{ Type = "qaac"; Options = "--he"; Description = "qaac HE-AAC" } }
-            2 { $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "ffmpeg AAC 128kbps" } }
-            3 { } # default copy
+        switch ($twitterAudioMenu[$aIndex].Key) {
+            "qaac" {
+                # HE-AACはTVBR非対応のためCVBR使用
+                $qaacChoices = @("AAC-LC TVBR 91 (~192kbps)", "AAC-LC TVBR 73 (~160kbps)", "AAC-LC TVBR 64 (~128kbps)", "HE-AAC CVBR 80kbps", "HE-AAC CVBR 64kbps", "HE-AAC CVBR 48kbps", "カスタム")
+                $qaacIndex = Show-Menu -Title "qaac品質を選択 (LC=TVBR / HE=CVBR)" -Choices $qaacChoices
+                if ($qaacIndex -lt 0) { return $null }
+                if ($qaacIndex -eq 6) {
+                    $profileChoices = @("AAC-LC (TVBR品質指定)", "HE-AAC (CVBRビットレート指定)")
+                    $pIndex = Show-Menu -Title "qaacプロファイルを選択" -Choices $profileChoices
+                    if ($pIndex -lt 0) { return $null }
+                    if ($pIndex -eq 0) {
+                        $tvbrVal = [int](Read-Host "TVBR値を入力 (0 ~ 127)")
+                        $audioSetting = @{ Type = "qaac"; Options = "--tvbr $tvbrVal"; Description = "qaac AAC-LC TVBR $tvbrVal" }
+                    }
+                    else {
+                        $cvbrVal = [int](Read-Host "CVBRビットレートを入力 (kbps, 例: 64)")
+                        $audioSetting = @{ Type = "qaac"; Options = "--he --cvbr $cvbrVal"; Description = "qaac HE-AAC CVBR ${cvbrVal}kbps" }
+                    }
+                }
+                elseif ($qaacIndex -le 2) {
+                    $tvbrVal = @(91, 73, 64)[$qaacIndex]
+                    $audioSetting = @{ Type = "qaac"; Options = "--tvbr $tvbrVal"; Description = "qaac AAC-LC TVBR $tvbrVal" }
+                }
+                else {
+                    $cvbrVal = @(80, 64, 48)[$qaacIndex - 3]
+                    $audioSetting = @{ Type = "qaac"; Options = "--he --cvbr $cvbrVal"; Description = "qaac HE-AAC CVBR ${cvbrVal}kbps" }
+                }
+            }
+            "nero" {
+                $neroChoices = @("高品質 (-q 0.65)", "標準品質 (-q 0.50)", "通常品質 (-q 0.35)", "低品質 (-q 0.20)", "カスタム")
+                $neroIndex = Show-Menu -Title "Nero AAC品質を選択 (≤-q0.40:HE / >-q0.40:LC 自動)" -Choices $neroChoices
+                if ($neroIndex -lt 0) { return $null }
+                if ($neroIndex -eq 4) {
+                    $qVal = [double](Read-Host "品質値を入力 (0.0 ~ 1.0)")
+                }
+                else {
+                    $qVal = @(0.65, 0.50, 0.35, 0.20)[$neroIndex]
+                }
+                $heFlag = if ($qVal -le 0.40) { "-he " } else { "" }
+                $profileName = if ($qVal -le 0.40) { "HE-AAC" } else { "AAC-LC" }
+                $audioSetting = @{ Type = "nero"; Options = "${heFlag}-q $qVal"; Description = "Nero $profileName -q $qVal" }
+            }
+            "fdkaac" {
+                $fdkChoices = @("最高品質 (VBR 5)", "高品質 (VBR 4)", "標準品質 (VBR 3)", "低品質 (VBR 2)", "カスタム")
+                $fdkIndex = Show-Menu -Title "fdkaac品質を選択 (≤VBR3:HE / ≥VBR4:LC 自動)" -Choices $fdkChoices
+                if ($fdkIndex -lt 0) { return $null }
+                if ($fdkIndex -eq 4) {
+                    $vbrVal = [int](Read-Host "VBR値を入力 (1 ~ 5)")
+                }
+                else {
+                    $vbrVal = @(5, 4, 3, 2)[$fdkIndex]
+                }
+                $heFlag = if ($vbrVal -le 3) { "-p 5 " } else { "" }
+                $profileName = if ($vbrVal -le 3) { "HE-AAC" } else { "AAC-LC" }
+                $audioSetting = @{ Type = "fdkaac"; Options = "${heFlag}-m $vbrVal"; Description = "fdkaac $profileName VBR $vbrVal" }
+            }
+            "ffaac" { $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "ffmpeg AAC-LC 128kbps (HE非対応)" } }
+            "copy" { } # default copy
         }
     }
     else {
-        $audioChoices = @("音声コピー (-c:a copy)", "qaac (AAC-LC)", "qaac (HE-AAC)", "Opus (libopus)", "ffmpeg内蔵AAC (128kbps)", "音声なし (-an)")
-        $aIndex = Show-Menu -Title "音声エンコーダーを選択してください。" -Choices $audioChoices
+        # その他: 動的メニュー
+        $generalAudioMenu = @()
+        $generalAudioMenu += @{ Key = "copy"; Label = "音声コピー (-c:a copy)" }
+        if ($hasQaac) {
+            $generalAudioMenu += @{ Key = "qaac"; Label = "qaac (AAC 自動HE/LC)" }
+        }
+        if ($hasNero) {
+            $generalAudioMenu += @{ Key = "nero"; Label = "Nero AAC (外部 自動HE/LC)" }
+        }
+        if ($hasFdkaac) {
+            $generalAudioMenu += @{ Key = "fdkaac"; Label = "fdkaac (外部 自動HE/LC)" }
+        }
+        $generalAudioMenu += @{ Key = "opus"; Label = "Opus (libopus)" }
+        $generalAudioMenu += @{ Key = "ffaac"; Label = "ffmpeg内蔵AAC-LC (HE非対応)" }
+        $generalAudioMenu += @{ Key = "none"; Label = "音声なし (-an)" }
+
+        $generalAudioChoices = @($generalAudioMenu | ForEach-Object { $_.Label })
+        $aIndex = Show-Menu -Title "音声エンコーダーを選択してください。" -Choices $generalAudioChoices
         if ($aIndex -lt 0) { return $null }
-        switch ($aIndex) {
-            0 { } # default copy
-            1 { $audioSetting = @{ Type = "qaac"; Options = ""; Description = "qaac AAC-LC" } }
-            2 { $audioSetting = @{ Type = "qaac"; Options = "--he"; Description = "qaac HE-AAC" } }
-            3 {
+        switch ($generalAudioMenu[$aIndex].Key) {
+            "copy" { } # default copy
+            "qaac" {
+                # HE-AACはTVBR非対応のためCVBR使用
+                $qaacChoices = @("AAC-LC TVBR 91 (~192kbps)", "AAC-LC TVBR 73 (~160kbps)", "AAC-LC TVBR 64 (~128kbps)", "HE-AAC CVBR 80kbps", "HE-AAC CVBR 64kbps", "HE-AAC CVBR 48kbps", "カスタム")
+                $qaacIndex = Show-Menu -Title "qaac品質を選択 (LC=TVBR / HE=CVBR)" -Choices $qaacChoices
+                if ($qaacIndex -lt 0) { return $null }
+                if ($qaacIndex -eq 6) {
+                    $profileChoices = @("AAC-LC (TVBR品質指定)", "HE-AAC (CVBRビットレート指定)")
+                    $pIndex = Show-Menu -Title "qaacプロファイルを選択" -Choices $profileChoices
+                    if ($pIndex -lt 0) { return $null }
+                    if ($pIndex -eq 0) {
+                        $tvbrVal = [int](Read-Host "TVBR値を入力 (0 ~ 127)")
+                        $audioSetting = @{ Type = "qaac"; Options = "--tvbr $tvbrVal"; Description = "qaac AAC-LC TVBR $tvbrVal" }
+                    }
+                    else {
+                        $cvbrVal = [int](Read-Host "CVBRビットレートを入力 (kbps, 例: 64)")
+                        $audioSetting = @{ Type = "qaac"; Options = "--he --cvbr $cvbrVal"; Description = "qaac HE-AAC CVBR ${cvbrVal}kbps" }
+                    }
+                }
+                elseif ($qaacIndex -le 2) {
+                    $tvbrVal = @(91, 73, 64)[$qaacIndex]
+                    $audioSetting = @{ Type = "qaac"; Options = "--tvbr $tvbrVal"; Description = "qaac AAC-LC TVBR $tvbrVal" }
+                }
+                else {
+                    $cvbrVal = @(80, 64, 48)[$qaacIndex - 3]
+                    $audioSetting = @{ Type = "qaac"; Options = "--he --cvbr $cvbrVal"; Description = "qaac HE-AAC CVBR ${cvbrVal}kbps" }
+                }
+            }
+            "nero" {
+                $neroChoices = @("高品質 (-q 0.65)", "標準品質 (-q 0.50)", "通常品質 (-q 0.35)", "低品質 (-q 0.20)", "カスタム")
+                $neroIndex = Show-Menu -Title "Nero AAC品質を選択 (≤-q0.40:HE / >-q0.40:LC 自動)" -Choices $neroChoices
+                if ($neroIndex -lt 0) { return $null }
+                if ($neroIndex -eq 4) {
+                    $qVal = [double](Read-Host "品質値を入力 (0.0 ~ 1.0)")
+                }
+                else {
+                    $qVal = @(0.65, 0.50, 0.35, 0.20)[$neroIndex]
+                }
+                $heFlag = if ($qVal -le 0.40) { "-he " } else { "" }
+                $profileName = if ($qVal -le 0.40) { "HE-AAC" } else { "AAC-LC" }
+                $audioSetting = @{ Type = "nero"; Options = "${heFlag}-q $qVal"; Description = "Nero $profileName -q $qVal" }
+            }
+            "fdkaac" {
+                $fdkChoices = @("最高品質 (VBR 5)", "高品質 (VBR 4)", "標準品質 (VBR 3)", "低品質 (VBR 2)", "カスタム")
+                $fdkIndex = Show-Menu -Title "fdkaac品質を選択 (≤VBR3:HE / ≥VBR4:LC 自動)" -Choices $fdkChoices
+                if ($fdkIndex -lt 0) { return $null }
+                if ($fdkIndex -eq 4) {
+                    $vbrVal = [int](Read-Host "VBR値を入力 (1 ~ 5)")
+                }
+                else {
+                    $vbrVal = @(5, 4, 3, 2)[$fdkIndex]
+                }
+                $heFlag = if ($vbrVal -le 3) { "-p 5 " } else { "" }
+                $profileName = if ($vbrVal -le 3) { "HE-AAC" } else { "AAC-LC" }
+                $audioSetting = @{ Type = "fdkaac"; Options = "${heFlag}-m $vbrVal"; Description = "fdkaac $profileName VBR $vbrVal" }
+            }
+            "opus" {
                 $opusChoices = @("128 kbps", "96 kbps", "64 kbps", "48 kbps", "32 kbps", "カスタム")
                 $opusIndex = Show-Menu -Title "Opusのビットレートを選択" -Choices $opusChoices
                 if ($opusIndex -lt 0) { return $null }
@@ -816,8 +1263,8 @@ function Invoke-PlatformDetailedSetup {
                 }
                 $audioSetting = @{ Type = "internal"; Options = "-c:a libopus -b:a $opusBitrate"; Description = "Opus $opusBitrate" }
             }
-            4 { $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "ffmpeg AAC 128kbps" } }
-            5 { $audioSetting = @{ Type = "none"; Options = "-an"; Description = "音声なし" } }
+            "ffaac" { $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "ffmpeg AAC-LC 128kbps (HE非対応)" } }
+            "none" { $audioSetting = @{ Type = "none"; Options = "-an"; Description = "音声なし" } }
         }
     }
 
@@ -859,7 +1306,15 @@ function Invoke-PlatformDetailedSetup {
     $previewVideoOptions = Build-PlatformVideoOptions -HW $selectedHW -Codec $selectedCodec -QualityMode $qualityMode -QualityValue $qualityValue -Preset $presetValue -MaxrateKbps 0 -SpecificEncoder $specificEncoder
 
     # --- 9. 最終確認 ---
-    $qualityDesc = if ($PlatformConfig.NoMaxrate) { "CRF (品質優先・ビットレート上限なし)" } else { "CRF+Maxrate (容量内で最大品質を自動確保)" }
+    $qualityDesc = if ($PlatformConfig.NoMaxrate) {
+        "CRF (品質優先・ビットレート上限なし)"
+    }
+    elseif ($twoPassMode) {
+        "2pass Bitrate (容量内でサイズ安定を優先)"
+    }
+    else {
+        "CRF+Maxrate (容量内で最大品質を自動確保)"
+    }
     $sizeDisp = if ($PlatformConfig.MaxFileSizeMB -ge 1024) { "$([math]::Round($PlatformConfig.MaxFileSizeMB / 1024, 1)) GB" } else { "$($PlatformConfig.MaxFileSizeMB) MB" }
     $encoderDisp = if ($specificEncoder) { "$selectedCodec ($specificEncoder)" } else { $selectedCodec }
     Clear-Host
@@ -882,6 +1337,7 @@ function Invoke-PlatformDetailedSetup {
     return @{
         IsSplitMode        = $false
         PlatformMode       = $true
+        TwoPassMode        = $twoPassMode
         PlatformName       = $PlatformConfig.Name
         MaxFileSizeMB      = $PlatformConfig.MaxFileSizeMB
         QualityMode        = $qualityMode
@@ -913,9 +1369,39 @@ function Start-MainProcess {
     # ログ出力先が変わるため、ここでのTranscriptは廃止し、各処理関数内で開始する
     Write-Log -Message "=============== エンコード処理開始 ===============" -NoTimestamp
 
-    # --- ハードウェアデコード選択 ---
-    $hwAccelChoices = @("使用しない (CPUデコード)", "NVIDIA (cuda)", "Intel (qsv)", "AMD (d3d11va)", "Windows汎用 (dxva2)", "Vulkan (vulkan)")
-    $hwAccelMap = @("", "cuda", "qsv", "d3d11va", "dxva2", "vulkan")
+    # --- ハードウェア自動スキャン ---
+    Write-Log "ハードウェアをスキャン中..."
+    $null = Get-AvailableHardware
+
+    # --- ハードウェアデコード選択 (対応HWのみ表示) ---
+    $allAccelChoices = @(
+        @{ Label = "使用しない (CPUデコード)"; Accel = "" },
+        @{ Label = "NVIDIA (cuda)"; Accel = "cuda" },
+        @{ Label = "Intel (qsv)"; Accel = "qsv" },
+        @{ Label = "AMD (d3d11va)"; Accel = "d3d11va" },
+        @{ Label = "Windows汎用 (dxva2)"; Accel = "dxva2" },
+        @{ Label = "Vulkan (vulkan)"; Accel = "vulkan" }
+    )
+    $hwInfo = $global:HardwareInfo
+    $filteredAccel = @()
+    foreach ($entry in $allAccelChoices) {
+        if ($entry.Accel -eq "") {
+            # CPUデコードは常に表示
+            $filteredAccel += $entry
+        }
+        elseif ($hwInfo -and $hwInfo.AvailableHwAccels.Count -gt 0) {
+            if ($hwInfo.AvailableHwAccels -contains $entry.Accel) {
+                $filteredAccel += $entry
+            }
+        }
+        else {
+            # スキャン結果なし → 全て表示
+            $filteredAccel += $entry
+        }
+    }
+    $hwAccelChoices = @($filteredAccel | ForEach-Object { $_.Label })
+    $hwAccelMap = @($filteredAccel | ForEach-Object { $_.Accel })
+
     $hwAccelIndex = Show-Menu -Title "使用するハードウェアデコードを選択してください。" -Choices $hwAccelChoices
     $hwAccelOption = ""
     if ($hwAccelIndex -gt 0) {
@@ -934,6 +1420,9 @@ function Start-MainProcess {
         if ($selectedHwAccel -eq "vulkan") {
             $hwAccelOption += " -hwaccel_output_format vulkan"
         }
+        # HWデコード使用時はサーフェスプール不足を防ぐため extra_hw_frames を追加
+        # デフォルトのプールサイズ(33)では60fps等の高フレームレート映像で不足するため64に拡張
+        $hwAccelOption += " -extra_hw_frames 64"
     }
 
     # --- 実行モード選択 ---
@@ -1179,16 +1668,32 @@ function Invoke-SplitEncodeFile {
                 $encPath = Get-EncoderPath -Type $audioEncType
 
                 if (-not (Test-CommandExists -Command $encPath)) {
-                    Write-Log "外部エンコーダー '$encPath' が見つかりません。音声コピーモードに切り替えます。" -Level "WARN"
-                    $audioOptions = "-c:a copy"
+                    Write-Log "外部エンコーダー '$encPath' が見つかりません。" -Level "WARN"
+                    $srcInfo = Get-SourceAudioInfo -FilePath $InputFile
+                    if ($srcInfo.CodecName -and (Test-AudioCodecCompatibility -CodecName $srcInfo.CodecName -ContainerExtension $Config.Extension)) {
+                        Write-Log "ソース音声 ($($srcInfo.CodecName), $($srcInfo.BitrateKbps)kbps) は .$($Config.Extension) と互換 → コピーモード" -Level "WARN"
+                        $audioOptions = "-c:a copy"
+                    }
+                    else {
+                        Write-Log "ソース音声 ($($srcInfo.CodecName)) は .$($Config.Extension) と非互換 → 音声を除去します" -Level "WARN"
+                        $audioOptions = "-an"
+                    }
                 }
                 else {
                     $wavArgsStr = "-hide_banner -loglevel error -y -ss $($seg.Start) -to $($seg.End) -i `"$InputFile`" -vn -map_chapters -1 -map_metadata -1 -f wav `"$tempWavFile`""
                     $result = Invoke-ExternalProcess -FilePath $global:Settings.FfmpegPath -Arguments $wavArgsStr -Label "WAV切り出し中..."
                     
                     if ($result.ExitCode -ne 0) {
-                        Write-Log "WAV変換失敗。音声をコピーします。" -Level "WARN"
-                        $audioOptions = "-c:a copy"
+                        Write-Log "WAV変換失敗。" -Level "WARN"
+                        $srcInfo = Get-SourceAudioInfo -FilePath $InputFile
+                        if ($srcInfo.CodecName -and (Test-AudioCodecCompatibility -CodecName $srcInfo.CodecName -ContainerExtension $Config.Extension)) {
+                            Write-Log "ソース音声 ($($srcInfo.CodecName), $($srcInfo.BitrateKbps)kbps) は .$($Config.Extension) と互換 → コピーモード" -Level "WARN"
+                            $audioOptions = "-c:a copy"
+                        }
+                        else {
+                            Write-Log "ソース音声 ($($srcInfo.CodecName)) は .$($Config.Extension) と非互換 → 音声を除去します" -Level "WARN"
+                            $audioOptions = "-an"
+                        }
                     }
                     else {
                         $tempAudioOutFile = Join-Path $tempDir "temp_audio_seg.m4a"
@@ -1209,8 +1714,17 @@ function Invoke-SplitEncodeFile {
                             $audioOptions = ""
                         }
                         else {
-                            Write-Log "$($audioEncType)失敗 (終了コード: $($result.ExitCode))。音声をコピーします。" -Level "WARN"
-                            $audioOptions = "-c:a copy"; $tempAudioOutFile = ""
+                            Write-Log "$($audioEncType)失敗 (終了コード: $($result.ExitCode))。" -Level "WARN"
+                            $srcInfo = Get-SourceAudioInfo -FilePath $InputFile
+                            if ($srcInfo.CodecName -and (Test-AudioCodecCompatibility -CodecName $srcInfo.CodecName -ContainerExtension $Config.Extension)) {
+                                Write-Log "ソース音声 ($($srcInfo.CodecName), $($srcInfo.BitrateKbps)kbps) は .$($Config.Extension) と互換 → コピーモード" -Level "WARN"
+                                $audioOptions = "-c:a copy"
+                            }
+                            else {
+                                Write-Log "ソース音声 ($($srcInfo.CodecName)) は .$($Config.Extension) と非互換 → 音声を除去します" -Level "WARN"
+                                $audioOptions = "-an"
+                            }
+                            $tempAudioOutFile = ""
                         }
                     }
                 }
@@ -1307,6 +1821,7 @@ function Invoke-EncodeFile {
         $cutInfo = ""; $useFfmpegMetadata = $false
         $ffmpegMetadataFile = Join-Path $tempDir "ffmpeg_metadata.txt"
         $splitOptions = [System.StringSplitOptions]::RemoveEmptyEntries
+        $passLogBase = ""
 
         if ($Config.Metadata -eq "Ffmpeg") {
             $metaArgs = "-hide_banner -loglevel error -y -i `"$InputFile`" -f ffmetadata `"$ffmpegMetadataFile`""
@@ -1324,20 +1839,42 @@ function Invoke-EncodeFile {
         # --- 外部エンコーダーによる先行音声エンコード ---
         $audioOptions = $Config.EncoderSettings.Audio; $tempAudioOutFile = ""
         $tempWavFile = Join-Path $tempDir "temp_audio.wav"
+        $sourceAudioBitrateKbps = 0  # コピー/フォールバック時のソース音声ビットレート
         
         $audioEncType = $Config.EncoderSettings.AudioType
         if ($audioEncType -eq "qaac" -or $audioEncType -eq "nero" -or $audioEncType -eq "fdkaac") {
             $encPath = Get-EncoderPath -Type $audioEncType
 
             if (-not (Test-CommandExists -Command $encPath)) {
-                Write-Log "外部エンコーダー '$encPath' が見つかりません。音声コピーモード (-c:a copy) に切り替えます。" -Level "WARN"
-                $audioOptions = "-c:a copy"
+                Write-Log "外部エンコーダー '$encPath' が見つかりません。" -Level "WARN"
+                $srcInfo = Get-SourceAudioInfo -FilePath $InputFile
+                $sourceAudioBitrateKbps = $srcInfo.BitrateKbps
+                if ($srcInfo.CodecName -and (Test-AudioCodecCompatibility -CodecName $srcInfo.CodecName -ContainerExtension $Config.Extension)) {
+                    Write-Log "ソース音声 ($($srcInfo.CodecName), $($srcInfo.BitrateKbps)kbps) は .$($Config.Extension) と互換 → コピーモード" -Level "WARN"
+                    $audioOptions = "-c:a copy"
+                }
+                else {
+                    Write-Log "ソース音声 ($($srcInfo.CodecName)) は .$($Config.Extension) と非互換 → 音声を除去します" -Level "WARN"
+                    $audioOptions = "-an"
+                    $sourceAudioBitrateKbps = 0
+                }
             }
             else {
                 $wavArgs = "-hide_banner -loglevel error -y $($cutInfo) -i `"$InputFile`" -vn -f wav `"$tempWavFile`""
                 $result = Invoke-ExternalProcess -FilePath $global:Settings.FfmpegPath -Arguments $wavArgs -Label "音声ファイルをWAVに変換中..."
                 if ($result.ExitCode -ne 0) {
-                    Write-Log "WAV変換失敗。音声をコピーします。" -Level "WARN"; $audioOptions = "-c:a copy"
+                    Write-Log "WAV変換失敗。" -Level "WARN"
+                    $srcInfo = Get-SourceAudioInfo -FilePath $InputFile
+                    $sourceAudioBitrateKbps = $srcInfo.BitrateKbps
+                    if ($srcInfo.CodecName -and (Test-AudioCodecCompatibility -CodecName $srcInfo.CodecName -ContainerExtension $Config.Extension)) {
+                        Write-Log "ソース音声 ($($srcInfo.CodecName), $($srcInfo.BitrateKbps)kbps) は .$($Config.Extension) と互換 → コピーモード" -Level "WARN"
+                        $audioOptions = "-c:a copy"
+                    }
+                    else {
+                        Write-Log "ソース音声 ($($srcInfo.CodecName)) は .$($Config.Extension) と非互換 → 音声を除去します" -Level "WARN"
+                        $audioOptions = "-an"
+                        $sourceAudioBitrateKbps = 0
+                    }
                 }
                 else {
                     $tempAudioOutFile = Join-Path $tempDir "temp_audio.m4a"
@@ -1354,7 +1891,21 @@ function Invoke-EncodeFile {
                     
                     $result = Invoke-ExternalProcess -FilePath $encPath -Arguments $encArgs -Label "$($audioEncType)でエンコード処理中..."
                     if ($result.ExitCode -eq 0) { $audioOptions = "" } 
-                    else { Write-Log "$($audioEncType)失敗 (終了コード: $($result.ExitCode))。音声をコピーします。" -Level "WARN"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
+                    else {
+                        Write-Log "$($audioEncType)失敗 (終了コード: $($result.ExitCode))。" -Level "WARN"
+                        $srcInfo = Get-SourceAudioInfo -FilePath $InputFile
+                        $sourceAudioBitrateKbps = $srcInfo.BitrateKbps
+                        if ($srcInfo.CodecName -and (Test-AudioCodecCompatibility -CodecName $srcInfo.CodecName -ContainerExtension $Config.Extension)) {
+                            Write-Log "ソース音声 ($($srcInfo.CodecName), $($srcInfo.BitrateKbps)kbps) は .$($Config.Extension) と互換 → コピーモード" -Level "WARN"
+                            $audioOptions = "-c:a copy"
+                        }
+                        else {
+                            Write-Log "ソース音声 ($($srcInfo.CodecName)) は .$($Config.Extension) と非互換 → 音声を除去します" -Level "WARN"
+                            $audioOptions = "-an"
+                            $sourceAudioBitrateKbps = 0
+                        }
+                        $tempAudioOutFile = ""
+                    }
                 }
             }
         }
@@ -1386,9 +1937,28 @@ function Invoke-EncodeFile {
                     $audioBrSource = "実測"
                     Write-Log "音声ファイル実測: $tempAudioOutFile ($([math]::Round((Get-Item $tempAudioOutFile).Length / 1KB)) KB / ${actualAudioKbps} kbps)" -Level "DEBUG"
                 }
+                elseif ($audioOptions -eq "-c:a copy" -and $sourceAudioBitrateKbps -gt 0) {
+                    # コピーモード: ffprobeで取得済みのソース音声ビットレートを使用
+                    $actualAudioKbps = $sourceAudioBitrateKbps
+                    $audioBrSource = "ソース実測"
+                    Write-Log "ソース音声ビットレート: ${actualAudioKbps} kbps (ffprobe)" -Level "DEBUG"
+                }
+                elseif ($audioOptions -eq "-c:a copy") {
+                    # コピーモード (ユーザー指定): ソースファイルからビットレートを取得
+                    $srcInfo = Get-SourceAudioInfo -FilePath $InputFile
+                    if ($srcInfo.BitrateKbps -gt 0) {
+                        $actualAudioKbps = $srcInfo.BitrateKbps
+                        $audioBrSource = "ソース実測"
+                        Write-Log "ソース音声ビットレート: ${actualAudioKbps} kbps (ffprobe)" -Level "DEBUG"
+                    }
+                    else {
+                        $actualAudioKbps = 128
+                        $audioBrSource = "推定"
+                    }
+                }
                 else {
-                    $actualAudioKbps = Get-AudioBitrateFromOptions -AudioOptions $Config.EncoderSettings.Audio -AudioType $Config.EncoderSettings.AudioType
-                    $audioBrSource = if ($audioOptions -eq "-an" -or $audioEncType -eq "none") { "音声なし" } elseif ($Config.EncoderSettings.Audio -match '-b:a\s+\d+k') { "設定値" } else { "推定" }
+                    $actualAudioKbps = Get-AudioBitrateFromOptions -AudioOptions $audioOptions -AudioType $Config.EncoderSettings.AudioType -SourceBitrateKbps $sourceAudioBitrateKbps
+                    $audioBrSource = if ($audioOptions -eq "-an" -or $audioEncType -eq "none") { "音声なし" } elseif ($audioOptions -match '-b:a\s+\d+k') { "設定値" } else { "推定" }
                 }
                 # コーデック別のマージンファクター (SVT-AV1のcapped CRFはオーバーシュートしやすいため厳しめ)
                 $marginFactor = 0.92
@@ -1410,13 +1980,64 @@ function Invoke-EncodeFile {
                 Write-Log "入力ファイル長      : $durationStr ($([math]::Round($inputDuration))秒)"
                 Write-Log "音声ビットレート    : ${actualAudioKbps} kbps (${audioBrSource})"
                 Write-Log "映像最大ビットレート: ~$targetBitrateKbps kbps (${audioBrDesc}を差し引き)"
-                Write-Log "品質方式            : CRF $($Config.QualityValue) + maxrate ${targetBitrateKbps}kbps (マージン: $([math]::Round($marginFactor * 100))%)"
+                if ($Config.TwoPassMode) {
+                    Write-Log "品質方式            : 2pass Bitrate ${targetBitrateKbps}kbps (マージン: $([math]::Round($marginFactor * 100))%)"
+                }
+                else {
+                    Write-Log "品質方式            : CRF $($Config.QualityValue) + maxrate ${targetBitrateKbps}kbps (マージン: $([math]::Round($marginFactor * 100))%)"
+                }
                 Write-Log ""
             }
         }
 
+        # --- 2passモード (CPUのみ) ---
+        $isDashInput = ([System.IO.Path]::GetExtension($InputFile).ToLowerInvariant() -eq ".mpd")
+        if ($Config.PlatformMode -and $Config.TwoPassMode) {
+            $passLogBase = Join-Path ([System.IO.Path]::GetTempPath()) ("ff2pass-" + [System.IO.Path]::GetRandomFileName())
+            $pass1VideoOptions = "$currentVideoOptions -pass 1 -passlogfile $passLogBase"
+            $pass1ArgsList = @("-hide_banner", "-y")
+            if ($isDashInput) {
+                $pass1ArgsList += @("-fflags", "+genpts")
+            }
+            if ($HwAccelOption) { $pass1ArgsList += $HwAccelOption.Split(' ', $splitOptions) }
+            $pass1ArgsList += $cutInfo.Split(' ', $splitOptions)
+            $pass1ArgsList += @("-i", "`"$InputFile`"")
+            if ($cutInfo) { $pass1ArgsList += @("-ss", "0") }
+            $pass1ArgsList += $pass1VideoOptions.Split(' ', $splitOptions)
+
+            $pass1NeedsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan)'
+            $pass1IsVulkanDecode = $HwAccelOption -match '-hwaccel\s+vulkan'
+            $pass1IsHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv)'
+            $pass1ResolvedVF = $Config.AdditionalVF
+            if ($pass1NeedsHwDownload) {
+                if ($pass1ResolvedVF) {
+                    $pass1ResolvedVF = "hwdownload,format=nv12,$pass1ResolvedVF"
+                }
+                elseif ($pass1IsVulkanDecode -or -not $pass1IsHwEncoder) {
+                    $pass1ResolvedVF = "hwdownload,format=nv12"
+                }
+            }
+            if ($pass1ResolvedVF) { $pass1ArgsList += @("-vf", "`"$pass1ResolvedVF`"") }
+            if ($Config.AdditionalArgs) { $pass1ArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
+            $pass1ArgsList += @("-an", "-f", "null", "NUL")
+
+            Write-Log "========= 2pass: 1st pass 実行 =========" -NoTimestamp
+            $pass1Result = Invoke-FfmpegEncode -Arguments ($pass1ArgsList -join ' ') -DurationSeconds $inputDuration
+            if ($pass1Result.ExitCode -ne 0) {
+                Write-Log "2pass 1st pass 失敗 (終了コード: $($pass1Result.ExitCode))" -Level "ERROR"
+                return
+            }
+
+            $currentVideoOptions = "$currentVideoOptions -pass 2 -passlogfile $passLogBase"
+            Write-Log "2pass: 1st pass 完了。2nd passを開始します。"
+        }
+
         # --- エンコード実行 ---
         $ffmpegArgsList = @("-hide_banner", "-y")
+        if ($isDashInput) {
+            # DASH入力はタイムスタンプ欠落/逆行が発生しやすいためPTS生成を有効化
+            $ffmpegArgsList += @("-fflags", "+genpts")
+        }
         if ($HwAccelOption) { $ffmpegArgsList += $HwAccelOption.Split(' ', $splitOptions) }
         $ffmpegArgsList += $cutInfo.Split(' ', $splitOptions)
         $ffmpegArgsList += @("-i", "`"$InputFile`"")
@@ -1507,6 +2128,10 @@ function Invoke-EncodeFile {
             }
         }
 
+        if ($passLogBase) {
+            Remove-Item -Path "$passLogBase*" -Force -ErrorAction SilentlyContinue
+            Write-Log "2passログをクリーンアップしました。" -Level "DEBUG"
+        }
         if (Test-Path $tempDir) { Remove-Item -Path $tempDir -Recurse -Force; Write-Log "一時ファイルをクリーンアップしました。" -Level "DEBUG" }
         Write-Log "ファイル「$(Split-Path -Leaf $InputFile)」の処理が完了しました。"
     }
