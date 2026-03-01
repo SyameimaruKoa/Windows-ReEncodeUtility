@@ -160,17 +160,18 @@ function Get-EncoderSettings {
         }
         5 {
             # Opus
-            $opusChoices = @("192 kbps", "160 kbps", "128 kbps", "カスタム")
+            $opusChoices = @("192 kbps", "160 kbps", "128 kbps", "96 kbps", "64 kbps", "48 kbps", "カスタム")
             $opusIndex = Show-Menu -Title "Opusのビットレートを選択" -Choices $opusChoices
             if ($opusIndex -lt 0) { return $null }
             $audioSetting.Type = "internal"
-            if ($opusIndex -eq 3) {
-                $brVal = Read-Host "ビットレートを入力 (例: 128k)"
+            if ($opusIndex -eq 6) {
+                $brVal = Read-Host "ビットレートを入力 (例: 32k)"
                 $audioSetting.Options = "-c:a libopus -b:a $brVal"
                 $audioSetting.Description = "Opus: カスタムビットレート ($brVal)"
             }
             else {
-                $bitrate = @("192k", "160k", "128k")[$opusIndex]
+                $opusBitrateMap = @("192k", "160k", "128k", "96k", "64k", "48k")
+                $bitrate = $opusBitrateMap[$opusIndex]
                 $audioSetting.Options = "-c:a libopus -b:a $bitrate"
                 $audioSetting.Description = "Opus: $($opusChoices[$opusIndex])"
             }
@@ -231,7 +232,7 @@ function Get-EncoderSettings {
         }
         3 {
             # CPU
-            $codecChoices = @("H.265/HEVC (libx265)", "H.264/AVC (libx264)", "AV1 (libsvtav1)", "AV1 (libaom-av1)", "VP9 (libvpx-vp9)", "VP8 (libvpx)")
+            $codecChoices = @("H.265/HEVC (libx265)", "H.264/AVC (libx264)", "AV1 (libsvtav1) ※高速", "AV1 (libaom-av1) ※高品質・非常に低速", "AV1 (rav1e) ※中速", "VP9 (libvpx-vp9)", "VP8 (libvpx)")
             $codecIndex = Show-Menu -Title "CPUコーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
             $codecName = $codecChoices[$codecIndex]
             $baseEncoder = "-c:v $($codecName.Split(' ')[1].Trim('()'))"
@@ -243,14 +244,38 @@ function Get-EncoderSettings {
             }
             elseif ($codecName -match "VP") {
                 $qPresets = [ordered]@{ "高品質 (CRF:30)" = "-crf 30 -b:v 0"; "中品質 (CRF:35)" = "-crf 35 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
-                $pPresets = [ordered]@{ "0 (最高品質)" = "-cpu-used 0"; "1" = "-cpu-used 1"; "2" = "-cpu-used 2"; "3" = "-cpu-used 3"; "4 (標準)" = "-cpu-used 4"; "5" = "-cpu-used 5"; "6" = "-cpu-used 6"; "7" = "-cpu-used 7"; "8 (最速)" = "-cpu-used 8" }
+                $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-cpu-used 0"; "1 (高品質)" = "-cpu-used 1"; "2" = "-cpu-used 2"; "3 (バランス型)" = "-cpu-used 3"; "4 (標準)" = "-cpu-used 4"; "5 (やや速い)" = "-cpu-used 5"; "6 (速い)" = "-cpu-used 6"; "7 (かなり速い)" = "-cpu-used 7"; "8 (最速 / 品質低下)" = "-cpu-used 8" }
                 $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
             }
             elseif ($codecName -match "AV1") {
-                $qPresets = [ordered]@{ "高品質 (CRF:20)" = "-crf 20 -b:v 0"; "中品質 (CRF:30)" = "-crf 30 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
-                $speedParam = if ($codecName -match "svt") { "-preset" } else { "-cpu-used" }
-                $pPresets = [ordered]@{ "0 (最高品質)" = "$speedParam 0"; "1" = "$speedParam 1"; "2" = "$speedParam 2"; "3" = "$speedParam 3"; "4 (標準)" = "$speedParam 4"; "5" = "$speedParam 5"; "6" = "$speedParam 6"; "7" = "$speedParam 7"; "8 (最速)" = "$speedParam 8" }
-                $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
+                if ($codecName -match "svt") {
+                    # libsvtav1: 高速AV1エンコーダー (自動マルチスレッド)
+                    $qPresets = [ordered]@{ "高品質 (CRF:20)" = "-crf 20"; "中品質 (CRF:30)" = "-crf 30"; "カスタム品質 (CRF)" = "-crf {val}" }
+                    $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-preset 0"; "2 (高品質寄り)" = "-preset 2"; "4 (標準)" = "-preset 4"; "6 (速い)" = "-preset 6"; "8 (かなり速い)" = "-preset 8"; "10 (最速寄り)" = "-preset 10"; "13 (最速 / 品質低下)" = "-preset 13" }
+                    $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
+                }
+                elseif ($codecName -match "aom") {
+                    # libaom-av1: リファレンス実装 (高品質だが非常に低速)
+                    Write-Host "`n  ⚠ 警告: libaom-av1は非常に低速です。" -ForegroundColor Yellow
+                    Write-Host "  エンコード時間がlibsvtav1の10倍以上かかる場合があります。" -ForegroundColor Yellow
+                    Write-Host "  品質を最優先する場合にのみ推奨します。`n" -ForegroundColor Yellow
+                    Read-Host "  Enterキーで続行"
+                    # マルチスレッド設定: 行ベース並列化 + タイル分割
+                    $baseEncoder += " -row-mt 1 -tiles 2x2"
+                    $qPresets = [ordered]@{ "高品質 (CRF:20)" = "-crf 20 -b:v 0"; "中品質 (CRF:30)" = "-crf 30 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
+                    $pPresets = [ordered]@{ "0 (最高品質 / 極めて遅い)" = "-cpu-used 0"; "1 (高品質 / 非常に遅い)" = "-cpu-used 1"; "2 (高品質寄り / 遅い)" = "-cpu-used 2"; "3 (バランス型)" = "-cpu-used 3"; "4 (標準)" = "-cpu-used 4"; "5 (やや速い)" = "-cpu-used 5"; "6 (速い)" = "-cpu-used 6"; "8 (最速 / 品質低下)" = "-cpu-used 8" }
+                    $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
+                }
+                elseif ($codecName -match "rav1e") {
+                    # rav1e: Rust製AV1エンコーダー (中速)
+                    Write-Host "`n  ℹ rav1eはlibsvtav1より低速ですが、libaom-av1よりは高速です。" -ForegroundColor Cyan
+                    Write-Host "  品質指定はQP (Quantizer Parameter: 0-255) を使用します。`n" -ForegroundColor Cyan
+                    # マルチスレッド設定: タイル分割
+                    $baseEncoder += " -tiles 4"
+                    $qPresets = [ordered]@{ "高品質 (QP:80)" = "-qp 80"; "中品質 (QP:120)" = "-qp 120"; "低品質 (QP:160)" = "-qp 160"; "カスタム品質 (QP 0-255)" = "-qp {val}" }
+                    $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-speed 0"; "2 (高品質寄り)" = "-speed 2"; "4 (バランス型)" = "-speed 4"; "6 (標準)" = "-speed 6"; "8 (速い)" = "-speed 8"; "10 (最速 / 品質低下)" = "-speed 10" }
+                    $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
+                }
             }
         }
     }

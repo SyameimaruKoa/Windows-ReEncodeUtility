@@ -182,9 +182,13 @@ function Invoke-FfmpegEncode {
                     $progContent = Get-Content $progressFile -ErrorAction SilentlyContinue
                     $outTimeLine = $progContent | Where-Object { $_ -match '^out_time=' } | Select-Object -Last 1
                     $speedLine = $progContent | Where-Object { $_ -match '^speed=' } | Select-Object -Last 1
+                    $fpsLine = $progContent | Where-Object { $_ -match '^fps=' } | Select-Object -Last 1
+                    $bitrateLine = $progContent | Where-Object { $_ -match '^bitrate=' } | Select-Object -Last 1
                     if ($outTimeLine) {
                         $outTime = (($outTimeLine -split '=', 2)[1]).Trim()
                         $speed = if ($speedLine) { (($speedLine -split '=', 2)[1]).Trim() } else { "N/A" }
+                        $fps = if ($fpsLine) { (($fpsLine -split '=', 2)[1]).Trim() } else { "N/A" }
+                        $bitrate = if ($bitrateLine) { (($bitrateLine -split '=', 2)[1]).Trim() } else { "N/A" }
                         $pct = ""
                         if ($DurationSeconds -gt 0 -and $outTime -ne "N/A") {
                             try {
@@ -193,7 +197,7 @@ function Invoke-FfmpegEncode {
                             }
                             catch {}
                         }
-                        Write-Host "`r  進捗: $outTime / 速度: $speed$pct       " -NoNewline
+                        Write-Host "`r  進捗: $outTime / 速度: $speed$pct / fps: $fps / bitrate: $bitrate       " -NoNewline
                     }
                 }
                 catch {}
@@ -282,27 +286,73 @@ function Get-EncoderPath {
 
 #region プラットフォームアップロード機能
 
+function Get-AudioBitrateFromOptions {
+    <#
+    .SYNOPSIS
+        音声オプション文字列から音声ビットレート(kbps)を取得する。
+        外部エンコーダーの場合は先行エンコード後に Get-AudioBitrateFromFile で実測すること。
+    #>
+    param(
+        [string]$AudioOptions,
+        [string]$AudioType
+    )
+    # 音声なしの場合
+    if ($AudioType -eq "none" -or $AudioOptions -eq "-an") { return 0 }
+    # 音声コピーの場合は入力ファイルの音声ビットレートを推定できないので128kbpsを仮定
+    if ($AudioType -eq "copy" -or $AudioOptions -eq "-c:a copy") { return 128 }
+    # -b:a XXXk パターンを解析
+    if ($AudioOptions -match '-b:a\s+(\d+)k') {
+        return [int]$Matches[1]
+    }
+    # qaac/nero/fdkaac 等の外部エンコーダーは先行エンコード後に実測するため、ここでは仮に128kbpsを返す
+    if ($AudioType -eq "qaac" -or $AudioType -eq "nero" -or $AudioType -eq "fdkaac") { return 128 }
+    # VBR品質指定 (libvorbis -q:a X) の場合は推定不能のため128kbpsを仮定
+    return 128
+}
+
+function Get-AudioBitrateFromFile {
+    <#
+    .SYNOPSIS
+        完成した音声ファイルのサイズと動画長からビットレート(kbps)を実測する。
+    #>
+    param(
+        [string]$AudioFilePath,
+        [double]$DurationSeconds
+    )
+    if (-not (Test-Path $AudioFilePath) -or $DurationSeconds -le 0) { return 128 }
+    try {
+        $fileSizeBytes = (Get-Item $AudioFilePath).Length
+        $bitrateKbps = [math]::Round(($fileSizeBytes * 8) / ($DurationSeconds * 1000))
+        if ($bitrateKbps -le 0) { return 128 }
+        return $bitrateKbps
+    }
+    catch { return 128 }
+}
+
 function Get-TargetBitrateKbps {
     param(
         [double]$MaxFileSizeMB,
         [double]$DurationSeconds,
-        [double]$AudioBitrateKbps = 128
+        [double]$AudioBitrateKbps = 128,
+        [double]$MarginFactor = 0.90
     )
     if ($DurationSeconds -le 0) { return 0 }
-    # コンテナオーバーヘッドを考慮して95%のマージンじゃ
-    $totalBitrateKbps = ($MaxFileSizeMB * 0.95 * 8 * 1024) / $DurationSeconds
+    # コンテナオーバーヘッドとエンコーダーのビットレート超過を考慮したマージンじゃ
+    # コーデック別マージン例: H.264/H.265=0.92, VP9=0.88, SVT-AV1=0.82
+    $totalBitrateKbps = ($MaxFileSizeMB * $MarginFactor * 8 * 1024) / $DurationSeconds
     $videoBitrateKbps = $totalBitrateKbps - $AudioBitrateKbps
     return [math]::Max(100, [math]::Round($videoBitrateKbps))
 }
 
 function Build-PlatformVideoOptions {
     param(
-        [string]$HW,           # "NVIDIA", "Intel", "AMD", "CPU"
-        [string]$Codec,        # "H.264", "H.265", "VP9", "AV1"
-        [string]$QualityMode,  # "CRF", "CRF+Maxrate", "Bitrate"
-        [int]$QualityValue,    # CRF/CQ/QP値
-        [string]$Preset,       # エンコード速度プリセット
-        [int]$MaxrateKbps = 0  # CRF+MaxrateまたはBitrateモード用
+        [string]$HW,              # "NVIDIA", "Intel", "AMD", "CPU"
+        [string]$Codec,           # "H.264", "H.265", "VP9", "AV1"
+        [string]$QualityMode,     # "CRF", "CRF+Maxrate", "Bitrate"
+        [int]$QualityValue,       # CRF/CQ/QP値
+        [string]$Preset,          # エンコード速度プリセット
+        [int]$MaxrateKbps = 0,    # CRF+MaxrateまたはBitrateモード用
+        [string]$SpecificEncoder = ""  # CPU AV1: "libsvtav1", "libaom-av1", "rav1e" を指定可
     )
     $encoderMap = @{
         "NVIDIA+H.264" = "h264_nvenc"; "NVIDIA+H.265" = "hevc_nvenc"; "NVIDIA+AV1" = "av1_nvenc"
@@ -312,6 +362,8 @@ function Build-PlatformVideoOptions {
     }
     $encoder = $encoderMap["$HW+$Codec"]
     if (-not $encoder) { return $null }
+    # SpecificEncoder指定時はエンコーダーを上書き (CPU AV1で libaom-av1/rav1e を使う場合)
+    if ($SpecificEncoder) { $encoder = $SpecificEncoder }
 
     $parts = @("-c:v $encoder")
     switch ($HW) {
@@ -343,26 +395,49 @@ function Build-PlatformVideoOptions {
         "CPU" {
             $isVPx = $Codec -match "VP"
             $isAV1 = $Codec -match "AV1"
+            $isAV1Svt = $encoder -eq "libsvtav1"
+            $isAV1Aom = $encoder -eq "libaom-av1"
+            $isAV1Rav1e = $encoder -eq "rav1e"
             switch ($QualityMode) {
                 "CRF" {
-                    $parts += "-crf $QualityValue"
-                    if ($isVPx -or $isAV1) { $parts += "-b:v 0" }
+                    if ($isAV1Rav1e) { $parts += "-qp $QualityValue" }
+                    else { $parts += "-crf $QualityValue" }
+                    if ($isVPx -or $isAV1Aom) { $parts += "-b:v 0" }
                 }
                 "CRF+Maxrate" {
-                    $parts += "-crf $QualityValue"
                     if ($isVPx) {
+                        # VP8/VP9: CRF + ターゲットビットレートで制御
+                        $parts += "-crf $QualityValue -b:v ${MaxrateKbps}k"
+                    }
+                    elseif ($isAV1Svt) {
+                        # SVT-AV1: capped CRF (bufsize=maxrateで厳密に制御)
+                        $parts += "-crf $QualityValue -maxrate ${MaxrateKbps}k -bufsize ${MaxrateKbps}k"
+                    }
+                    elseif ($isAV1Aom) {
+                        # libaom-av1: constrained quality (CRF + ターゲットビットレート)
+                        $parts += "-crf $QualityValue -b:v ${MaxrateKbps}k"
+                    }
+                    elseif ($isAV1Rav1e) {
+                        # rav1e: CRF+Maxrate非対応のためビットレートモードで代替
                         $parts += "-b:v ${MaxrateKbps}k"
                     }
                     else {
-                        $parts += "-maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
+                        # H.264/H.265: VBV制御
+                        $parts += "-crf $QualityValue -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
                     }
                 }
                 "Bitrate" {
                     $parts += "-b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
                 }
             }
+            # マルチスレッド設定
+            if ($isAV1Aom) { $parts += "-row-mt 1 -tiles 2x2" }
+            if ($isAV1Rav1e) { $parts += "-tiles 4" }
+            # 速度/プリセット設定
             if ($isVPx) { $parts += "-cpu-used $Preset" }
-            elseif ($isAV1) { $parts += "-preset $Preset" }
+            elseif ($isAV1Svt) { $parts += "-preset $Preset" }
+            elseif ($isAV1Aom) { $parts += "-cpu-used $Preset" }
+            elseif ($isAV1Rav1e) { $parts += "-speed $Preset" }
             else { $parts += "-preset $Preset" }
         }
     }
@@ -555,6 +630,7 @@ function Invoke-PlatformAutoSetup {
         HWEncoder          = $selectedHW
         CodecName          = $auto.Codec
         PresetValue        = $auto.Preset
+        SpecificEncoder    = ""
         EncoderSettings    = @{
             Video     = $videoOptions
             Audio     = $auto.AudioSetting.Options
@@ -621,10 +697,37 @@ function Invoke-PlatformDetailedSetup {
         }
     }
 
+    # --- 3.5 AV1エンコーダー詳細選択 (CPU のみ) ---
+    $specificEncoder = ""
+    if ($selectedHW -eq "CPU" -and $selectedCodec -eq "AV1") {
+        $av1EncoderChoices = @(
+            "libsvtav1 (高速 / 推奨)",
+            "libaom-av1 (最高品質 / ⚠ 非常に低速)",
+            "rav1e (中速 / 実験的)"
+        )
+        $av1EncIndex = Show-Menu -Title "AV1エンコーダーを選択してください。" -Choices $av1EncoderChoices
+        if ($av1EncIndex -lt 0) { return $null }
+        $specificEncoder = @("libsvtav1", "libaom-av1", "rav1e")[$av1EncIndex]
+
+        if ($specificEncoder -eq "libaom-av1") {
+            Write-Host "`n  ⚠ 警告: libaom-av1は非常に低速です。" -ForegroundColor Yellow
+            Write-Host "  エンコード時間がlibsvtav1の10倍以上かかる場合があります。" -ForegroundColor Yellow
+            Write-Host "  マルチスレッド設定: -row-mt 1 -tiles 2x2 (自動適用)`n" -ForegroundColor Yellow
+            Read-Host "  Enterキーで続行"
+        }
+        elseif ($specificEncoder -eq "rav1e") {
+            Write-Host "`n  ℹ rav1eはlibsvtav1より低速ですが、libaom-av1よりは高速です。" -ForegroundColor Cyan
+            Write-Host "  マルチスレッド設定: -tiles 4 (自動適用)" -ForegroundColor Cyan
+            Write-Host "  ※ CRF+Maxrateモードでは品質指定なしのビットレートモードで動作します。`n" -ForegroundColor Cyan
+            Read-Host "  Enterキーで続行"
+        }
+    }
+
     # --- 4. 品質値 (CRF) は容量に収まる範囲で最大品質を自動設定 ---
     # maxrateが容量制限を保証するため、CRFは高品質ベースラインを使用
     $qualityValue = switch ($selectedCodec) {
-        "H.264" { 18 }; "H.265" { 22 }; "VP9" { 25 }; "AV1" { 23 }
+        "H.264" { 18 }; "H.265" { 22 }; "VP9" { 25 }
+        "AV1" { if ($specificEncoder -eq "rav1e") { 100 } else { 23 } }
     }
 
     # --- 5. プリセット (エンコード速度) 選択 ---
@@ -652,8 +755,21 @@ function Invoke-PlatformDetailedSetup {
             $presetValue = $presetMap[$pIndex]
         }
         "CPU" {
-            if ($selectedCodec -match "VP|AV1") {
-                $presetChoices = @("0 (最高品質)", "2", "4 (標準)", "6", "8 (最速)")
+            if ($selectedCodec -eq "AV1" -and $specificEncoder -eq "libaom-av1") {
+                $presetChoices = @("0 (最高品質 / 極めて遅い)", "1 (高品質 / 非常に遅い)", "2 (高品質寄り / 遅い)", "3 (バランス型)", "4 (標準)", "6 (速い)", "8 (最速 / 品質低下)")
+                $presetMap = @("0", "1", "2", "3", "4", "6", "8")
+            }
+            elseif ($selectedCodec -eq "AV1" -and $specificEncoder -eq "rav1e") {
+                $presetChoices = @("0 (最高品質 / 非常に遅い)", "2 (高品質寄り)", "4 (バランス型)", "6 (標準)", "8 (速い)", "10 (最速 / 品質低下)")
+                $presetMap = @("0", "2", "4", "6", "8", "10")
+            }
+            elseif ($selectedCodec -eq "AV1") {
+                # libsvtav1
+                $presetChoices = @("0 (最高品質 / 非常に遅い)", "2 (高品質寄り)", "4 (標準)", "6 (速い)", "8 (かなり速い)", "10 (最速寄り)", "13 (最速 / 品質低下)")
+                $presetMap = @("0", "2", "4", "6", "8", "10", "13")
+            }
+            elseif ($selectedCodec -match "VP") {
+                $presetChoices = @("0 (最高品質 / 非常に遅い)", "2 (高品質寄り)", "4 (標準)", "6 (速い)", "8 (最速 / 品質低下)")
                 $presetMap = @("0", "2", "4", "6", "8")
             }
             else {
@@ -688,10 +804,15 @@ function Invoke-PlatformDetailedSetup {
             1 { $audioSetting = @{ Type = "qaac"; Options = ""; Description = "qaac AAC-LC" } }
             2 { $audioSetting = @{ Type = "qaac"; Options = "--he"; Description = "qaac HE-AAC" } }
             3 {
-                $opusChoices = @("128 kbps", "96 kbps", "64 kbps")
+                $opusChoices = @("128 kbps", "96 kbps", "64 kbps", "48 kbps", "32 kbps", "カスタム")
                 $opusIndex = Show-Menu -Title "Opusのビットレートを選択" -Choices $opusChoices
                 if ($opusIndex -lt 0) { return $null }
-                $opusBitrate = @("128k", "96k", "64k")[$opusIndex]
+                if ($opusIndex -eq 5) {
+                    $brVal = Read-Host "ビットレートを入力 (例: 24k)"
+                    $opusBitrate = $brVal
+                } else {
+                    $opusBitrate = @("128k", "96k", "64k", "48k", "32k")[$opusIndex]
+                }
                 $audioSetting = @{ Type = "internal"; Options = "-c:a libopus -b:a $opusBitrate"; Description = "Opus $opusBitrate" }
             }
             4 { $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "ffmpeg AAC 128kbps" } }
@@ -734,18 +855,19 @@ function Invoke-PlatformDetailedSetup {
     }
 
     # プレビューオプション生成 (maxrateはエンコード時にファイル長から計算)
-    $previewVideoOptions = Build-PlatformVideoOptions -HW $selectedHW -Codec $selectedCodec -QualityMode $qualityMode -QualityValue $qualityValue -Preset $presetValue -MaxrateKbps 0
+    $previewVideoOptions = Build-PlatformVideoOptions -HW $selectedHW -Codec $selectedCodec -QualityMode $qualityMode -QualityValue $qualityValue -Preset $presetValue -MaxrateKbps 0 -SpecificEncoder $specificEncoder
 
     # --- 9. 最終確認 ---
     $qualityDesc = if ($PlatformConfig.NoMaxrate) { "CRF (品質優先・ビットレート上限なし)" } else { "CRF+Maxrate (容量内で最大品質を自動確保)" }
     $sizeDisp = if ($PlatformConfig.MaxFileSizeMB -ge 1024) { "$([math]::Round($PlatformConfig.MaxFileSizeMB / 1024, 1)) GB" } else { "$($PlatformConfig.MaxFileSizeMB) MB" }
+    $encoderDisp = if ($specificEncoder) { "$selectedCodec ($specificEncoder)" } else { $selectedCodec }
     Clear-Host
     Write-Host "============= プラットフォームアップロード設定 ============="
     Write-Host "  プラットフォーム : $($PlatformConfig.Name) (上限: $sizeDisp)"
     Write-Host "  品質方式         : $qualityDesc"
     Write-Host "  ハードウェア     : $selectedHW"
-    Write-Host "  コーデック       : $selectedCodec"
-    Write-Host "  CRFベースライン  : $qualityValue"
+    Write-Host "  コーデック       : $encoderDisp"
+    Write-Host "  品質ベースライン  : $qualityValue"
     Write-Host "  プリセット       : $presetValue"
     Write-Host "  音声             : $($audioSetting.Description)"
     Write-Host "  解像度           : $(if ($scaleFilter) { $scaleFilter } else { '元の解像度' })"
@@ -766,6 +888,7 @@ function Invoke-PlatformDetailedSetup {
         HWEncoder          = $selectedHW
         CodecName          = $selectedCodec
         PresetValue        = $presetValue
+        SpecificEncoder    = $specificEncoder
         EncoderSettings    = @{
             Video     = $previewVideoOptions
             Audio     = $audioSetting.Options
@@ -1159,39 +1282,6 @@ function Invoke-EncodeFile {
         Write-Log (Get-MediaInfoString -FilePath $InputFile)
         $inputDuration = Get-InputDuration -FilePath $InputFile
 
-        # --- プラットフォームモード: ビットレート計算とファイルサイズ予測 ---
-        $currentVideoOptions = $Config.EncoderSettings.Video
-        if ($Config.PlatformMode) {
-            $sizeDisp = if ($Config.MaxFileSizeMB -ge 1024) { "$([math]::Round($Config.MaxFileSizeMB / 1024, 1)) GB" } else { "$($Config.MaxFileSizeMB) MB" }
-
-            if ($Config.QualityMode -eq "CRF") {
-                # CRFのみ (ビットレート上限なし) - 品質優先、サイズはエンコード後に確認
-                Write-Log "映像オプション: $currentVideoOptions"
-                $durationStr = [TimeSpan]::FromSeconds($inputDuration).ToString("hh\:mm\:ss")
-                Write-Log "========= ファイルサイズ情報 =========" -NoTimestamp
-                Write-Log "プラットフォーム    : $($Config.PlatformName) (上限: $sizeDisp)"
-                Write-Log "入力ファイル長      : $durationStr ($([math]::Round($inputDuration))秒)"
-                Write-Log "品質方式            : CRF $($Config.QualityValue) (ビットレート上限なし)"
-                Write-Log "※エンコード後にファイルサイズを確認してください"
-                Write-Log ""
-            }
-            else {
-                # CRF+Maxrate: ファイル長からmaxrateを自動計算して映像オプションを再生成
-                $targetBitrateKbps = Get-TargetBitrateKbps -MaxFileSizeMB $Config.MaxFileSizeMB -DurationSeconds $inputDuration
-                $currentVideoOptions = Build-PlatformVideoOptions -HW $Config.HWEncoder -Codec $Config.CodecName -QualityMode $Config.QualityMode -QualityValue $Config.QualityValue -Preset $Config.PresetValue -MaxrateKbps $targetBitrateKbps
-                Write-Log "映像オプション (自動計算): $currentVideoOptions"
-
-                # ファイルサイズ予測表示
-                $durationStr = [TimeSpan]::FromSeconds($inputDuration).ToString("hh\:mm\:ss")
-                Write-Log "========= ファイルサイズ予測 =========" -NoTimestamp
-                Write-Log "プラットフォーム    : $($Config.PlatformName) (上限: $sizeDisp)"
-                Write-Log "入力ファイル長      : $durationStr ($([math]::Round($inputDuration))秒)"
-                Write-Log "映像最大ビットレート: ~$targetBitrateKbps kbps (音声128kbps想定)"
-                Write-Log "品質方式            : CRF $($Config.QualityValue) + maxrate ${targetBitrateKbps}kbps"
-                Write-Log ""
-            }
-        }
-
         $outputFile = Join-Path $outputDir "$baseName.$($Config.Extension)"
         $tempDir = Join-Path $outputDir "temp_$baseName"; if (-not (Test-Path $tempDir)) { New-Item -Path $tempDir -ItemType Directory | Out-Null }
 
@@ -1212,6 +1302,7 @@ function Invoke-EncodeFile {
             else { Write-Log "カット位置が未入力のため、カットしません。" -Level "WARN" }
         }
 
+        # --- 外部エンコーダーによる先行音声エンコード ---
         $audioOptions = $Config.EncoderSettings.Audio; $tempAudioOutFile = ""
         $tempWavFile = Join-Path $tempDir "temp_audio.wav"
         
@@ -1246,6 +1337,62 @@ function Invoke-EncodeFile {
                     if ($result.ExitCode -eq 0) { $audioOptions = "" } 
                     else { Write-Log "$($audioEncType)失敗 (終了コード: $($result.ExitCode))。音声をコピーします。" -Level "WARN"; $audioOptions = "-c:a copy"; $tempAudioOutFile = "" }
                 }
+            }
+        }
+
+        # --- プラットフォームモード: ビットレート計算とファイルサイズ予測 ---
+        # 外部エンコーダーの先行エンコード完了後に実行し、実測ビットレートを使用する
+        $currentVideoOptions = $Config.EncoderSettings.Video
+        if ($Config.PlatformMode) {
+            $sizeDisp = if ($Config.MaxFileSizeMB -ge 1024) { "$([math]::Round($Config.MaxFileSizeMB / 1024, 1)) GB" } else { "$($Config.MaxFileSizeMB) MB" }
+
+            if ($Config.QualityMode -eq "CRF") {
+                # CRFのみ (ビットレート上限なし) - 品質優先、サイズはエンコード後に確認
+                Write-Log "映像オプション: $currentVideoOptions"
+                $durationStr = [TimeSpan]::FromSeconds($inputDuration).ToString("hh\:mm\:ss")
+                Write-Log "========= ファイルサイズ情報 =========" -NoTimestamp
+                Write-Log "プラットフォーム    : $($Config.PlatformName) (上限: $sizeDisp)"
+                Write-Log "入力ファイル長      : $durationStr ($([math]::Round($inputDuration))秒)"
+                Write-Log "品質方式            : CRF $($Config.QualityValue) (ビットレート上限なし)"
+                Write-Log "※エンコード後にファイルサイズを確認してください"
+                Write-Log ""
+            }
+            else {
+                # CRF+Maxrate: ファイル長からmaxrateを自動計算して映像オプションを再生成
+                # 外部エンコーダーで先行エンコード済みの場合は完成ファイルから実測
+                $actualAudioKbps = 0
+                $audioBrSource = ""
+                if ($tempAudioOutFile -and (Test-Path $tempAudioOutFile)) {
+                    $actualAudioKbps = Get-AudioBitrateFromFile -AudioFilePath $tempAudioOutFile -DurationSeconds $inputDuration
+                    $audioBrSource = "実測"
+                    Write-Log "音声ファイル実測: $tempAudioOutFile ($([math]::Round((Get-Item $tempAudioOutFile).Length / 1KB)) KB / ${actualAudioKbps} kbps)" -Level "DEBUG"
+                }
+                else {
+                    $actualAudioKbps = Get-AudioBitrateFromOptions -AudioOptions $Config.EncoderSettings.Audio -AudioType $Config.EncoderSettings.AudioType
+                    $audioBrSource = if ($audioOptions -eq "-an" -or $audioEncType -eq "none") { "音声なし" } elseif ($Config.EncoderSettings.Audio -match '-b:a\s+\d+k') { "設定値" } else { "推定" }
+                }
+                # コーデック別のマージンファクター (SVT-AV1のcapped CRFはオーバーシュートしやすいため厳しめ)
+                $marginFactor = 0.92
+                $specificEnc = if ($Config.SpecificEncoder) { $Config.SpecificEncoder } else { "" }
+                switch -Regex ($Config.CodecName) {
+                    "AV1" { $marginFactor = if ($specificEnc -eq "libsvtav1" -or -not $specificEnc) { 0.82 } else { 0.88 } }
+                    "VP9" { $marginFactor = 0.88 }
+                    default { $marginFactor = 0.92 }
+                }
+                $targetBitrateKbps = Get-TargetBitrateKbps -MaxFileSizeMB $Config.MaxFileSizeMB -DurationSeconds $inputDuration -AudioBitrateKbps $actualAudioKbps -MarginFactor $marginFactor
+                $currentVideoOptions = Build-PlatformVideoOptions -HW $Config.HWEncoder -Codec $Config.CodecName -QualityMode $Config.QualityMode -QualityValue $Config.QualityValue -Preset $Config.PresetValue -MaxrateKbps $targetBitrateKbps -SpecificEncoder $specificEnc
+                Write-Log "映像オプション (自動計算): $currentVideoOptions"
+
+                # ファイルサイズ予測表示
+                $audioBrDesc = if ($actualAudioKbps -eq 0) { "音声なし" } else { "音声${actualAudioKbps}kbps (${audioBrSource})" }
+                $durationStr = [TimeSpan]::FromSeconds($inputDuration).ToString("hh\:mm\:ss")
+                Write-Log "========= ファイルサイズ予測 =========" -NoTimestamp
+                Write-Log "プラットフォーム    : $($Config.PlatformName) (上限: $sizeDisp)"
+                Write-Log "入力ファイル長      : $durationStr ($([math]::Round($inputDuration))秒)"
+                Write-Log "音声ビットレート    : ${actualAudioKbps} kbps (${audioBrSource})"
+                Write-Log "映像最大ビットレート: ~$targetBitrateKbps kbps (${audioBrDesc}を差し引き)"
+                Write-Log "品質方式            : CRF $($Config.QualityValue) + maxrate ${targetBitrateKbps}kbps (マージン: $([math]::Round($marginFactor * 100))%)"
+                Write-Log ""
             }
         }
 
