@@ -692,11 +692,6 @@ function Get-AvailableHardware {
         } finally {
             Remove-Item -LiteralPath $testClipPath -Force -ErrorAction SilentlyContinue
         }
-        
-        # エンコーダ側で存在が確認できたなら、デコーダテスト("-hwaccel"のエラーやフォーマット非互換等)で漏れても強制追加する
-        if ($info.HasNvidia -and ($info.AvailableHwAccels -notcontains 'cuda')) { $info.AvailableHwAccels += 'cuda' }
-        if ($info.HasIntel  -and ($info.AvailableHwAccels -notcontains 'qsv'))  { $info.AvailableHwAccels += 'qsv' }
-        if ($info.HasAMD    -and ($info.AvailableHwAccels -notcontains 'amf'))  { $info.AvailableHwAccels += 'amf' }
 
         $info.ScanCompleted = $true
 
