@@ -636,6 +636,11 @@ function Get-AvailableHardware {
             Remove-Item -LiteralPath $testClipPath -Force -ErrorAction SilentlyContinue
         }
         
+        # エンコーダ側で存在が確認できたなら、デコーダテスト("-hwaccel"のエラーやフォーマット非互換等)で漏れても強制追加する
+        if ($info.HasNvidia -and ($info.AvailableHwAccels -notcontains 'cuda')) { $info.AvailableHwAccels += 'cuda' }
+        if ($info.HasIntel  -and ($info.AvailableHwAccels -notcontains 'qsv'))  { $info.AvailableHwAccels += 'qsv' }
+        if ($info.HasAMD    -and ($info.AvailableHwAccels -notcontains 'amf'))  { $info.AvailableHwAccels += 'amf' }
+
         $info.ScanCompleted = $true
 
         Write-Log "テスト結果: NVIDIA=$($info.HasNvidia) Intel=$($info.HasIntel) AMD=$($info.HasAMD)" -Level "DEBUG"
@@ -1551,7 +1556,7 @@ function Start-MainProcess {
         @{ Label = "使用しない (CPUデコード)"; Accel = "" },
         @{ Label = "NVIDIA (cuda)"; Accel = "cuda" },
         @{ Label = "Intel (qsv)"; Accel = "qsv" },
-        @{ Label = "AMD (d3d11va)"; Accel = "d3d11va" },
+        @{ Label = "推奨・Windows標準 (d3d11va)"; Accel = "d3d11va" },
         @{ Label = "Windows汎用 (dxva2)"; Accel = "dxva2" },
         @{ Label = "Vulkan (vulkan)"; Accel = "vulkan" }
     )
