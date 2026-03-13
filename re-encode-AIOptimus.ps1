@@ -361,10 +361,10 @@ function Invoke-FfmpegEncode {
 
 #region UIユーティリティ
 function Show-Menu {
-    param ([string]$Title, [string[]]$Choices, [int]$DefaultIndex = 0)
+    param ([string]$Title, [string[]]$Choices, [int]$DefaultIndex = 0, [switch]$NoClear)
     $currentIndex = $DefaultIndex
     while ($true) {
-        Clear-Host; Write-Host "$Title`n"
+        if (-not $NoClear) { Clear-Host }; Write-Host "$Title`n"
         for ($i = 0; $i -lt $Choices.Length; $i++) {
             if ($i -eq $currentIndex) { Write-Host -ForegroundColor Black -BackgroundColor White " > $($Choices[$i])" }
             else { Write-Host "   $($Choices[$i])" }
@@ -1575,7 +1575,7 @@ function Start-MainProcess {
     $hwAccelChoices = @($filteredAccel | ForEach-Object { $_.Label })
     $hwAccelMap = @($filteredAccel | ForEach-Object { $_.Accel })
 
-    $hwAccelIndex = Show-Menu -Title "使用するハードウェアデコードを選択してください。" -Choices $hwAccelChoices
+    $hwAccelIndex = Show-Menu -Title "ハードウェアのスキャンが完了しました。`n使用するハードウェアデコードを選択してください。" -Choices $hwAccelChoices -NoClear
     $hwAccelOption = ""
     if ($hwAccelIndex -gt 0) {
         $selectedHwAccel = $hwAccelMap[$hwAccelIndex]
