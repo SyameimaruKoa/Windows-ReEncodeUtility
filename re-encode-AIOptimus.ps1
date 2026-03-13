@@ -26,15 +26,28 @@ $Path = @($Path | ForEach-Object {
             if ([System.IO.Path]::IsPathRooted($p)) { $p } else { Join-Path (Get-Location).ProviderPath $p }
         }
     })
-$PSScriptRoot = Split-Path -LiteralPath $MyInvocation.MyCommand.Definition -Parent
-Set-Location -LiteralPath $PSScriptRoot
+
+# PSScriptRootの確実な取得 (PS 5.1 の Split-Path -LiteralPath バグ回避)
+$global:ScriptDir = $PSScriptRoot
+if ([string]::IsNullOrEmpty($global:ScriptDir)) {
+    if ($MyInvocation.MyCommand.Path) {
+        $global:ScriptDir = [System.IO.Path]::GetDirectoryName($MyInvocation.MyCommand.Path)
+    } elseif ($MyInvocation.MyCommand.Definition) {
+        $global:ScriptDir = [System.IO.Path]::GetDirectoryName($MyInvocation.MyCommand.Definition)
+    } else {
+        $global:ScriptDir = Get-Location
+    }
+}
+if (-not [string]::IsNullOrEmpty($global:ScriptDir)) {
+    Set-Location -LiteralPath $global:ScriptDir
+}
 
 #region 初期設定とヘルパー関数
 
 function Resolve-DeinterlaceFilter {
     param([string]$filter)
     if ($filter -match 'nnedi') {
-        $weightsFile = Join-Path $PSScriptRoot 'nnedi3_weights.bin'
+        $weightsFile = Join-Path $global:ScriptDir 'nnedi3_weights.bin'
         if (-not (Test-Path -LiteralPath $weightsFile)) {
             Write-Host 'nnedi用ウェイトファイル(nnedi3_weights.bin)をダウンロードします...' -ForegroundColor Cyan
             try {
@@ -65,16 +78,16 @@ function Resolve-DeinterlaceFilter {
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 # --- 設定ファイルの読み込み ---
-$configFilePath = Join-Path $PSScriptRoot "config.user.psd1"
+$configFilePath = Join-Path $global:ScriptDir "config.user.psd1"
 if (-not (Test-Path $configFilePath)) {
     Write-Error "設定ファイル (config.user.psd1) が見つからぬ！話にならんわ！"
     Read-Host "何かキーを押して終了"; exit 1
 }
 $global:Settings = Import-PowerShellDataFile -Path $configFilePath
-$global:Settings.TemplateDir = $PSScriptRoot
+$global:Settings.TemplateDir = $global:ScriptDir
 
 # --- 依存スクリプトの確認 ---
-$optionsScriptPath = Join-Path $PSScriptRoot "get-ffmpegOptions.ps1"
+$optionsScriptPath = Join-Path $global:ScriptDir "get-ffmpegOptions.ps1"
 if (-not (Test-Path $optionsScriptPath)) {
     Write-Error "エンコードオプション設定スクリプト (get-ffmpegOptions.ps1) が見つからぬ！話にならんわ！"
     Read-Host "何かキーを押して終了"; exit 1
