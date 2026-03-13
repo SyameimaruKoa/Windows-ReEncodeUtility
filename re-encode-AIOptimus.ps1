@@ -131,12 +131,20 @@ function Test-IsInterlaced {
     foreach ($p in $Paths) {
         $file = $p.Trim('"')
         if (Test-Path -Path $file -PathType Container) {
-            $file = (Get-ChildItem -Path $file -File -Include *.mp4,*.mkv,*.avi,*.mov,*.ts,*.m2ts -Recurse | Select-Object -First 1).FullName
+            $file = (Get-ChildItem -Path $file -File -Include *.mp4,*.mkv,*.avi,*.mov,*.ts,*.m2ts,*.iso -Recurse | Select-Object -First 1).FullName
         }
         if ($file -and (Test-Path -Path $file -PathType Leaf)) {
             $fieldOrder = & $global:Settings.FfprobePath -v error -select_streams v:0 -show_entries stream=field_order -of default=noprint_wrappers=1:nokey=1 "$file" 2>$null | Out-String
             if ($fieldOrder.Trim() -match '^(tb|bt|tt|bb)$') {
                 return $true
+            }
+            # Some DVD/ISO and MPEG2 streams are flagged progressive but actually interlaced/telecined
+            # Let's perform a fast idet scan across a few hundred frames
+            $idetTest = & $global:Settings.FfmpegPath -hide_banner -i "$file" -filter:v idet -frames:v 300 -an -f null - 2>&1 | Select-String "Multi frame detection" | Select-Object -Last 1 | Out-String
+            if ($idetTest -match 'TFF:\s+(?<tff>\d+)\s+BFF:\s+(?<bff>\d+)') {
+                if ([int]$Matches.tff -gt 0 -or [int]$Matches.bff -gt 0) {
+                    return $true
+                }
             }
         }
     }
