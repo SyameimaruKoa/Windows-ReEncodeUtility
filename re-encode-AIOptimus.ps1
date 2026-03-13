@@ -41,7 +41,7 @@ if (-not (Test-Path $optionsScriptPath)) {
     Read-Host "何かキーを押して終了"; exit 1
 }
 
-    #region ロギング基盤
+#region ロギング基盤
 $global:LogFilePath = $null
 
 function Initialize-LogFile {
@@ -84,9 +84,9 @@ function Write-Log {
         try { $logMessage | Out-File -FilePath $global:LogFilePath -Append -Encoding utf8 } catch {}
     }
 }
-    #endregion
+#endregion
 
-    #region メディア情報取得
+#region メディア情報取得
 function Get-MediaInfoString {
     param([string]$FilePath)
     $lines = @()
@@ -125,9 +125,26 @@ function Get-InputDuration {
     }
     catch { return 0 }
 }
-    #endregion
 
-    #region プロセス実行・エンコード実行
+function Test-IsInterlaced {
+    param([string[]]$Paths)
+    foreach ($p in $Paths) {
+        $file = $p.Trim('"')
+        if (Test-Path -Path $file -PathType Container) {
+            $file = (Get-ChildItem -Path $file -File -Include *.mp4,*.mkv,*.avi,*.mov,*.ts,*.m2ts -Recurse | Select-Object -First 1).FullName
+        }
+        if ($file -and (Test-Path -Path $file -PathType Leaf)) {
+            $fieldOrder = & $global:Settings.FfprobePath -v error -select_streams v:0 -show_entries stream=field_order -of default=noprint_wrappers=1:nokey=1 "$file" 2>$null | Out-String
+            if ($fieldOrder.Trim() -match '^(tb|bt|tt|bb)$') {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+#endregion
+
+#region プロセス実行・エンコード実行
 function Invoke-ExternalProcess {
     param(
         [string]$FilePath,
@@ -275,9 +292,9 @@ function Invoke-FfmpegEncode {
         Remove-Item $stderrFile, $stdoutFile, $progressFile -Force -ErrorAction SilentlyContinue
     }
 }
-    #endregion
+#endregion
 
-    #region UIユーティリティ
+#region UIユーティリティ
 function Show-Menu {
     param ([string]$Title, [string[]]$Choices, [int]$DefaultIndex = 0)
     $currentIndex = $DefaultIndex
@@ -314,9 +331,9 @@ function Sanitize-FileName {
         -replace '\|', '｜' `
         -replace '[\r\n]', '' # 改行も削除
 }
-    #endregion
+#endregion
 
-    #region 外部エンコーダー関連
+#region 外部エンコーダー関連
 function Test-CommandExists {
     param ([string]$Command)
     if ([string]::IsNullOrWhiteSpace($Command)) { return $false }
@@ -482,9 +499,9 @@ function Remove-HwAccelFromArgs {
     $result = $result -replace '(-vf\s+")hwdownload,format=nv12,', '$1'
     return ($result -replace '\s{2,}', ' ').Trim()
 }
-    #endregion
+#endregion
 
-    #region ハードウェア検出・コーデックフィルタ
+#region ハードウェア検出・コーデックフィルタ
 function Get-AvailableHardware {
     <#
     .SYNOPSIS
@@ -664,12 +681,12 @@ function Get-PlatformAvailableCodecs {
     }
     return $available
 }
-    #endregion
+#endregion
 #endregion
 
 #region プラットフォームアップロード機能
 
-    #region 音声・ビットレート計算
+#region 音声・ビットレート計算
 function Get-AudioBitrateFromOptions {
     <#
     .SYNOPSIS
@@ -760,9 +777,9 @@ function Test-AudioCodecCompatibility {
     if (-not $supported) { return $true }  # 不明なコンテナ → 互換ありと仮定
     return ($CodecName -in $supported)
 }
-    #endregion
+#endregion
 
-    #region ビットレート・映像オプション構築
+#region ビットレート・映像オプション構築
 function Get-TargetBitrateKbps {
     param(
         [double]$MaxFileSizeMB,
@@ -888,9 +905,9 @@ function Build-PlatformVideoOptions {
 
     return ($parts -join ' ')
 }
-    #endregion
+#endregion
 
-    #region プラットフォーム自動設定
+#region プラットフォーム自動設定
 function Get-PlatformAutoSettings {
     param(
         [hashtable]$PlatformConfig,
@@ -979,9 +996,9 @@ function Get-PlatformAutoSettings {
         AudioSetting = $audioSetting; ScaleFilter = $scaleFilter; Extension = $extension
     }
 }
-    #endregion
+#endregion
 
-    #region プラットフォームセットアップUI
+#region プラットフォームセットアップUI
 function Invoke-PlatformUploadSetup {
     Write-Log "プラットフォーム向けアップロード設定を開始します..."
 
@@ -1095,6 +1112,23 @@ function Invoke-PlatformAutoSetup {
     $confirm = Show-Menu -Title "この設定でよろしいですか？" -Choices @("はい", "いいえ、やり直します")
     if ($confirm -eq 1) { return Invoke-PlatformUploadSetup }
 
+    $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
+    if ($isInterlaced) {
+        $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (テレシネ解除・逆テレシネ)", "nnedi (高品質インターレース解除)", "w3fdif (複合インターレース解除)"))]
+    } else {
+        $deinterlace = @("None", "fieldmatch,decimate")[(Show-Menu -Title "特定フレームの除去 (プログレッシブ用・逆テレシネ)" -Choices @("行わない", "fieldmatch,decimate (逆テレシネ / フレーム間引き)"))]
+    }
+    
+    $finalVF = $auto.ScaleFilter
+    if ($deinterlace -ne "None") {
+        if ($finalVF) {
+            $finalVF = "$deinterlace,$finalVF"
+        }
+        else {
+            $finalVF = $deinterlace
+        }
+    }
+
     return @{
         IsSplitMode        = $false
         PlatformMode       = $true
@@ -1118,7 +1152,7 @@ function Invoke-PlatformAutoSetup {
         Extension          = $auto.Extension
         Cut                = "No"
         Metadata           = "None"
-        AdditionalVF       = $auto.ScaleFilter
+        AdditionalVF       = $finalVF
         AdditionalArgs     = ""
     }
 }
@@ -1285,11 +1319,11 @@ function Invoke-PlatformDetailedSetup {
         $aIndex = Show-Menu -Title "音声エンコーダーを選択してください。(Twitter = AAC必須)" -Choices $twitterAudioChoices
         if ($aIndex -lt 0) { return $null }
         switch ($twitterAudioMenu[$aIndex].Key) {
-            "qaac"  { $result = Select-QaacOptions;  if (-not $result) { return $null }; $audioSetting = $result }
-            "nero"  { $result = Select-NeroOptions;  if (-not $result) { return $null }; $audioSetting = $result }
+            "qaac" { $result = Select-QaacOptions; if (-not $result) { return $null }; $audioSetting = $result }
+            "nero" { $result = Select-NeroOptions; if (-not $result) { return $null }; $audioSetting = $result }
             "fdkaac" { $result = Select-FdkaacOptions; if (-not $result) { return $null }; $audioSetting = $result }
             "ffaac" { $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "ffmpeg AAC-LC 128kbps (HE非対応)" } }
-            "copy"  { } # default copy
+            "copy" { } # default copy
         }
     }
     else {
@@ -1307,16 +1341,16 @@ function Invoke-PlatformDetailedSetup {
         $aIndex = Show-Menu -Title "音声エンコーダーを選択してください。" -Choices $generalAudioChoices
         if ($aIndex -lt 0) { return $null }
         switch ($generalAudioMenu[$aIndex].Key) {
-            "copy"   { } # default copy
-            "qaac"   { $result = Select-QaacOptions;  if (-not $result) { return $null }; $audioSetting = $result }
-            "nero"   { $result = Select-NeroOptions;  if (-not $result) { return $null }; $audioSetting = $result }
+            "copy" { } # default copy
+            "qaac" { $result = Select-QaacOptions; if (-not $result) { return $null }; $audioSetting = $result }
+            "nero" { $result = Select-NeroOptions; if (-not $result) { return $null }; $audioSetting = $result }
             "fdkaac" { $result = Select-FdkaacOptions; if (-not $result) { return $null }; $audioSetting = $result }
             "opus" {
                 $result = Select-OpusOptions -BitrateChoices @("128 kbps", "96 kbps", "64 kbps", "48 kbps", "32 kbps", "カスタム")
                 if (-not $result) { return $null }; $audioSetting = $result
             }
             "ffaac" { $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "ffmpeg AAC-LC 128kbps (HE非対応)" } }
-            "none"  { $audioSetting = @{ Type = "none"; Options = "-an"; Description = "音声なし" } }
+            "none" { $audioSetting = @{ Type = "none"; Options = "-an"; Description = "音声なし" } }
         }
     }
 
@@ -1386,6 +1420,23 @@ function Invoke-PlatformDetailedSetup {
     $confirm = Show-Menu -Title "この設定でよろしいですか？" -Choices @("はい", "いいえ、やり直します")
     if ($confirm -eq 1) { return Invoke-PlatformUploadSetup }
 
+    $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
+    if ($isInterlaced) {
+        $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (テレシネ解除・逆テレシネ)", "nnedi (高品質インターレース解除)", "w3fdif (複合インターレース解除)"))]
+    } else {
+        $deinterlace = @("None", "fieldmatch,decimate")[(Show-Menu -Title "特定フレームの除去 (プログレッシブ用・逆テレシネ)" -Choices @("行わない", "fieldmatch,decimate (逆テレシネ / フレーム間引き)"))]
+    }
+    
+    $finalVF = $scaleFilter
+    if ($deinterlace -ne "None") {
+        if ($finalVF) {
+            $finalVF = "$deinterlace,$finalVF"
+        }
+        else {
+            $finalVF = $deinterlace
+        }
+    }
+
     return @{
         IsSplitMode        = $false
         PlatformMode       = $true
@@ -1409,17 +1460,17 @@ function Invoke-PlatformDetailedSetup {
         Extension          = $extension
         Cut                = "No"
         Metadata           = "None"
-        AdditionalVF       = $scaleFilter
+        AdditionalVF       = $finalVF
         AdditionalArgs     = ""
     }
 }
-    #endregion
+#endregion
 
 #endregion
 
 #region メイン処理
 
-    #region モード選択・セットアップ
+#region モード選択・セットアップ
 function Start-MainProcess {
     # ログ出力先が変わるため、ここでのTranscriptは廃止し、各処理関数内で開始する
     Write-Log -Message "=============== エンコード処理開始 ===============" -NoTimestamp
@@ -1535,11 +1586,27 @@ function Invoke-InteractiveSetup {
     $extension = @("mp4", "mov", "mkv", "webm")[(Show-Menu -Title "出力ファイルの拡張子を選択してください。" -Choices @("mp4", "mov", "mkv", "webm"))]
     $cut = @("No", "Yes")[(Show-Menu -Title "動画をカットしますか？ (LosslessCutを使用)" -Choices @("いいえ", "はい"))]
     $metadata = @("ExifTool", "Ffmpeg", "None")[(Show-Menu -Title "動画のメタデータ(撮影日時など)を保持しますか？" -Choices @("ExifToolで全コピー", "ffmpeg形式で一部保持", "保持しない"))]
+    
+    $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
+    if ($isInterlaced) {
+        $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (テレシネ解除・逆テレシネ)", "nnedi (高品質インターレース解除)", "w3fdif (複合インターレース解除)"))]
+    } else {
+        $deinterlace = @("None", "fieldmatch,decimate")[(Show-Menu -Title "特定フレームの除去 (プログレッシブ用・逆テレシネ)" -Choices @("行わない", "fieldmatch,decimate (逆テレシネ / フレーム間引き)"))]
+    }
 
     $additionalVF = ""; $additionalArgs = ""
     if ((Show-Menu -Title "追加のビデオフィルター(-vf)やオプションを使いますか？" -Choices @("いいえ", "はい")) -eq 1) {
         $additionalVF = Read-Host "ffmpegの「-vf」として使用するフィルターを入力 (例: scale=1280:-1)"
         $additionalArgs = Read-Host "その他のffmpeg引数を追加 (例: -max_muxing_queue_size 1024)"
+    }
+    
+    if ($deinterlace -ne "None") {
+        if ($additionalVF) {
+            $additionalVF = "$deinterlace,$additionalVF"
+        }
+        else {
+            $additionalVF = $deinterlace
+        }
     }
 
     $currentConfig = @{
@@ -1604,9 +1671,9 @@ function Invoke-SplitModeSetup {
         AfterProcessAction = $afterProcessAction
     }
 }
-    #endregion
+#endregion
 
-    #region 分割エンコード
+#region 分割エンコード
 function Invoke-SplitEncodeFile {
     param ([string]$InputFile, [hashtable]$Config, [string]$HwAccelOption)
 
@@ -1830,9 +1897,9 @@ function Invoke-SplitEncodeFile {
         Write-Log "スタックトレース: $($_.ScriptStackTrace)" -Level "ERROR"
     }
 }
-    #endregion
+#endregion
 
-    #region 通常エンコード
+#region 通常エンコード
 function Invoke-EncodeFile {
     param ([string]$InputFile, [hashtable]$Config, [string]$HwAccelOption)
     
@@ -2176,9 +2243,9 @@ function Invoke-EncodeFile {
         Write-Log "スタックトレース: $($_.ScriptStackTrace)" -Level "ERROR"
     }
 }
-    #endregion
+#endregion
 
-    #region 後処理アクション
+#region 後処理アクション
 function Invoke-AfterProcessAction {
     param ([string]$Action)
     switch ($Action) {
@@ -2187,7 +2254,7 @@ function Invoke-AfterProcessAction {
         "Hibernate" { Write-Host "休止モードへ移行..."; rundll32.exe powrprof.dll, SetSuspendState }
     }
 }
-    #endregion
+#endregion
 
 #endregion
 
