@@ -32,9 +32,11 @@ $global:ScriptDir = $PSScriptRoot
 if ([string]::IsNullOrEmpty($global:ScriptDir)) {
     if ($MyInvocation.MyCommand.Path) {
         $global:ScriptDir = [System.IO.Path]::GetDirectoryName($MyInvocation.MyCommand.Path)
-    } elseif ($MyInvocation.MyCommand.Definition) {
+    }
+    elseif ($MyInvocation.MyCommand.Definition) {
         $global:ScriptDir = [System.IO.Path]::GetDirectoryName($MyInvocation.MyCommand.Definition)
-    } else {
+    }
+    else {
         $global:ScriptDir = Get-Location
     }
 }
@@ -54,7 +56,8 @@ function Resolve-DeinterlaceFilter {
                 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
                 Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/dubhater/vapoursynth-nnedi3/master/src/nnedi3_weights.bin' -OutFile $weightsFile -UseBasicParsing
                 Write-Host 'ダウンロード完了しました。' -ForegroundColor Green
-            } catch {
+            }
+            catch {
                 Write-Host "ダウンロード失敗。bwdifベースへフォールバックします: $_" -ForegroundColor Yellow
                 if ($filter -match 'fieldmatch') { return 'fieldmatch,decimate' }
                 return 'bwdif'
@@ -380,7 +383,8 @@ function Show-Menu {
             $pos.Y = [math]::Max(0, $pos.Y - $totalLines)
             $Host.UI.RawUI.CursorPosition = $pos
         }
-    } catch {}
+    }
+    catch {}
 
     $startPos = $Host.UI.RawUI.CursorPosition
     $firstDraw = $true
@@ -400,7 +404,8 @@ function Show-Menu {
         if (-not $firstDraw) {
             try {
                 $Host.UI.RawUI.CursorPosition = $startPos
-            } catch {
+            }
+            catch {
                 Clear-Host
             }
         }
@@ -421,7 +426,8 @@ function Show-Menu {
             
             if ($i -eq $currentIndex) {
                 Write-Host $paddedLine -ForegroundColor Black -BackgroundColor White
-            } else {
+            }
+            else {
                 Write-Host $paddedLine
             }
         }
@@ -658,7 +664,8 @@ function Get-AvailableHardware {
                 if ($LASTEXITCODE -eq 0) {
                     $info.AvailableEncoders += $enc
                 }
-            } catch {}
+            }
+            catch {}
         }
 
         $info.HasNvidia = @($info.AvailableEncoders | Where-Object { $_ -match '_nvenc$' }).Count -gt 0
@@ -680,16 +687,20 @@ function Get-AvailableHardware {
                             $hasInitError = ($testOut | Out-String) -match 'Failed setup|initialisation returned error|Device does not support|No device available|Hardware device setup failed|Error creating a MFX session'
                             if (-not $hasInitError) {
                                 $info.AvailableHwAccels += $accel
-                            } else {
+                            }
+                            else {
                                 Write-Log "  HWアクセル '$accel': 初期化エラー検出 → 除外" -Level "DEBUG"
                             }
                         }
-                    } catch {}
+                    }
+                    catch {}
                 }
-            } else {
+            }
+            else {
                 Write-Log "HWアクセルテスト用クリップの生成に失敗しました。" -Level "WARN"
             }
-        } finally {
+        }
+        finally {
             Remove-Item -LiteralPath $testClipPath -Force -ErrorAction SilentlyContinue
         }
 
