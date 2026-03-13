@@ -583,20 +583,11 @@ function Get-AvailableHardware {
         HasIntel          = $false
         HasAMD            = $false
     }
-
+    
     try {
         $ffmpegPath = $global:Settings.FfmpegPath
 
-        # --- WMIを用いたGPUハードウェアの検出 ---
-        # 実機のGPU名稱を取得し、NVIDIA/Intel/AMDを正しく判定する
-        $gpus = @(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name)
-        $hasNvidiaHW = [bool]($gpus -match 'NVIDIA')
-        $hasIntelHW  = [bool]($gpus -match 'Intel')
-        $hasAMDHW    = [bool]($gpus -match 'AMD|Radeon')
-
-        # --- FFmpeg対応エンコーダーの取得 ---
-        $ffmpegEncoders = (& $ffmpegPath -hide_banner -encoders 2>&1) -join "`n"
-
+        # --- HWエンコーダー実機検出 (テストエンコード) ---
         $testEncoders = @(
             'h264_nvenc', 'hevc_nvenc', 'av1_nvenc',
             'h264_qsv', 'hevc_qsv', 'av1_qsv', 'vp9_qsv',
@@ -604,52 +595,50 @@ function Get-AvailableHardware {
         )
 
         foreach ($enc in $testEncoders) {
-            if ($ffmpegEncoders -match "\b$enc\b") {
-                if (($enc -match '_nvenc$' -and $hasNvidiaHW) -or
-                    ($enc -match '_qsv$' -and $hasIntelHW) -or
-                    ($enc -match '_amf$' -and $hasAMDHW)) {
+            try {
+                # QSVやAMFの初期化エラー("-9", "not supported")を防ぐため、ピクセルフォーマット nv12 を明示的に指定してテストする
+                $null = & $ffmpegPath -hide_banner -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 1 -pix_fmt nv12 -c:v $enc -f null NUL 2>&1
+                if ($LASTEXITCODE -eq 0) {
                     $info.AvailableEncoders += $enc
                 }
-            }
+            } catch {}
         }
 
-        $info.HasNvidia = $hasNvidiaHW
-        $info.HasIntel  = $hasIntelHW
-        $info.HasAMD    = $hasAMDHW
+        $info.HasNvidia = @($info.AvailableEncoders | Where-Object { $_ -match '_nvenc$' }).Count -gt 0
+        $info.HasIntel = @($info.AvailableEncoders | Where-Object { $_ -match '_qsv$' }).Count -gt 0
+        $info.HasAMD = @($info.AvailableEncoders | Where-Object { $_ -match '_amf$' }).Count -gt 0
 
         # --- HWアクセル (デコード) 実機検出 ---
-        # 実際のH.264テストクリップを生成し、各アクセラレーターで実デコードを試行する
-        # Note: lavfiソースの `-hwaccel` テストでは実際のコーデック復号をしないため不正確
+        # 実機のハードウェアを用いて確実にデコードできるかテストする
         $testClipPath = Join-Path ([System.IO.Path]::GetTempPath()) "hwaccel_test_$([System.IO.Path]::GetRandomFileName()).mp4"
         try {
-            $null = & $ffmpegPath -hide_banner -y -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 10 -c:v libx264 -preset ultrafast "$testClipPath" 2>&1
-            if ($LASTEXITCODE -eq 0 -and (Test-Path $testClipPath)) {
-                foreach ($accel in @('cuda', 'qsv', 'd3d11va', 'dxva2', 'vulkan')) {
+            $null = & $ffmpegPath -hide_banner -y -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 5 -pix_fmt yuv420p -c:v libx264 -preset ultrafast "$testClipPath" 2>&1
+            if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $testClipPath)) {
+                
+                $hwaccelList = @('cuda', 'qsv', 'amf', 'd3d11va', 'dxva2', 'vulkan')
+                foreach ($accel in $hwaccelList) {
                     try {
-                        $testOutput = & $ffmpegPath -hide_banner -hwaccel $accel -i "$testClipPath" -frames:v 5 -f null NUL 2>&1
+                        # init_hw_deviceでハードウェアの物理的な利用可否をストレートにテストする
+                        # これにより余計なh264_qsvデコーダ制約等での誤判定(False Negative)を回避
+                        $testOut = & $ffmpegPath -hide_banner -init_hw_device "$accel" -f null - 2>&1
                         if ($LASTEXITCODE -eq 0) {
-                            # stderrにエラーが含まれていないことも確認 (初期化エラーが出ることがある)
-                            $hasInitError = ($testOutput | Out-String) -match 'Failed setup|initialisation returned error|Device does not support'
+                            $hasInitError = ($testOut | Out-String) -match 'Failed setup|initialisation returned error|Device does not support|No device available|Hardware device setup failed'
                             if (-not $hasInitError) {
                                 $info.AvailableHwAccels += $accel
-                            }
-                            else {
-                                Write-Log "  HWアクセル '$accel': テスト成功だが初期化エラー検出 → 除外" -Level "DEBUG"
+                            } else {
+                                Write-Log "  HWアクセル '$accel': 初期化エラー検出 → 除外" -Level "DEBUG"
                             }
                         }
-                    }
-                    catch {}
+                    } catch {}
                 }
-            }
-            else {
+            } else {
                 Write-Log "HWアクセルテスト用クリップの生成に失敗しました。" -Level "WARN"
             }
-        }
-        finally {
+        } finally {
             Remove-Item -LiteralPath $testClipPath -Force -ErrorAction SilentlyContinue
         }
 
-        Write-Log "ハードウェアスキャン完了: NVIDIA=$($info.HasNvidia) Intel=$($info.HasIntel) AMD=$($info.HasAMD)" -Level "DEBUG"
+        Write-Log "テスト結果: NVIDIA=$($info.HasNvidia) Intel=$($info.HasIntel) AMD=$($info.HasAMD)" -Level "DEBUG"
         Write-Log "  エンコーダー: [$($info.AvailableEncoders -join ', ')]" -Level "DEBUG"
         Write-Log "  HWアクセル  : [$($info.AvailableHwAccels -join ', ')]" -Level "DEBUG"
     }
