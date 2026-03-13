@@ -367,50 +367,57 @@ function Show-Menu {
     
     $currentIndex = $DefaultIndex
     
-    # タイトル行とメニュー行の合計行数を計算
     $titleLines = ($Title -split "`r?`n").Count + 1
     $menuLines = $Choices.Length
     $totalLines = $titleLines + $menuLines
 
-    # テキストが画面下端でスクロールしてしまうと CursorPosition がズレるので、事前に空行を入れてスクロールさせておく
     try {
         $startY = $Host.UI.RawUI.CursorPosition.Y
         $windowHeight = $Host.UI.RawUI.WindowSize.Height
-        # 画面の下端までの空きが足りない場合、空行を打って押し上げる
         if ($startY + $totalLines -ge $windowHeight - 2) {
             for ($i = 0; $i -lt $totalLines; $i++) { Write-Host "" }
-            # 押し上げた後、カーソル位置を上に戻す
             $pos = $Host.UI.RawUI.CursorPosition
             $pos.Y = [math]::Max(0, $pos.Y - $totalLines)
             $Host.UI.RawUI.CursorPosition = $pos
         }
     } catch {}
 
-    # ループ中、毎回この位置に戻って描画する
     $startPos = $Host.UI.RawUI.CursorPosition
     $firstDraw = $true
+
+    # メニュー描画の最大幅を求めておき、背景色が綺麗に揃うようにする
+    $maxLen = 0
+    foreach ($c in $Choices) {
+        $len = 0
+        foreach ($char in $c.ToCharArray()) {
+            if ([int]$char -ge 0x1000) { $len += 2 } else { $len += 1 }
+        }
+        if ($len -gt $maxLen) { $maxLen = $len }
+    }
+    $padTarget = $maxLen + 6 # " > " などの余白分
 
     while ($true) {
         if (-not $firstDraw) {
             try {
                 $Host.UI.RawUI.CursorPosition = $startPos
             } catch {
-                # CursorPositionが操作できない環境の場合は諦めてClear-Host
                 Clear-Host
             }
         }
         $firstDraw = $false
 
         Write-Host "$Title`n"
-        
-        # 画面幅いっぱいに空白で埋めることで、前の文字を完全に消去する
-        $width = 80
-        try { $width = $Host.UI.RawUI.WindowSize.Width } catch {}
 
         for ($i = 0; $i -lt $Choices.Length; $i++) {
             $line = if ($i -eq $currentIndex) { " > $($Choices[$i])" } else { "   $($Choices[$i])" }
-            $padLen = [math]::Max(0, $width - $line.Length - 1)
-            $paddedLine = $line + (" " * $padLen)
+            
+            # 全角半角を考慮したパディング計算
+            $currentLen = 0
+            foreach ($char in $line.ToCharArray()) {
+                if ([int]$char -ge 0x1000) { $currentLen += 2 } else { $currentLen += 1 }
+            }
+            $spacesToPad = [math]::Max(0, $padTarget - $currentLen)
+            $paddedLine = $line + (" " * $spacesToPad)
             
             if ($i -eq $currentIndex) {
                 Write-Host $paddedLine -ForegroundColor Black -BackgroundColor White
