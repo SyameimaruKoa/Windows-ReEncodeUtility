@@ -366,22 +366,36 @@ function Show-Menu {
     if (-not $NoClear) { Clear-Host }
     
     $currentIndex = $DefaultIndex
-    $firstDraw = $true
     
-    # タイトルの行数を計算 (末尾に空行が1つ入る仕様)
+    # タイトル行とメニュー行の合計行数を計算
     $titleLines = ($Title -split "`r?`n").Count + 1
     $menuLines = $Choices.Length
+    $totalLines = $titleLines + $menuLines
+
+    # テキストが画面下端でスクロールしてしまうと CursorPosition がズレるので、事前に空行を入れてスクロールさせておく
+    try {
+        $startY = $Host.UI.RawUI.CursorPosition.Y
+        $windowHeight = $Host.UI.RawUI.WindowSize.Height
+        # 画面の下端までの空きが足りない場合、空行を打って押し上げる
+        if ($startY + $totalLines -ge $windowHeight - 2) {
+            for ($i = 0; $i -lt $totalLines; $i++) { Write-Host "" }
+            # 押し上げた後、カーソル位置を上に戻す
+            $pos = $Host.UI.RawUI.CursorPosition
+            $pos.Y = [math]::Max(0, $pos.Y - $totalLines)
+            $Host.UI.RawUI.CursorPosition = $pos
+        }
+    } catch {}
+
+    # ループ中、毎回この位置に戻って描画する
+    $startPos = $Host.UI.RawUI.CursorPosition
+    $firstDraw = $true
 
     while ($true) {
         if (-not $firstDraw) {
-            # 2回目以降は、出力した行数分だけ上に戻る
             try {
-                $pos = $Host.UI.RawUI.CursorPosition
-                $pos.Y = [math]::Max(0, $pos.Y - $titleLines - $menuLines)
-                $pos.X = 0
-                $Host.UI.RawUI.CursorPosition = $pos
+                $Host.UI.RawUI.CursorPosition = $startPos
             } catch {
-                # もしCursorPositionが使えない環境(ISE等)の場合はClear-Hostに戻す
+                # CursorPositionが操作できない環境の場合は諦めてClear-Host
                 Clear-Host
             }
         }
@@ -389,20 +403,18 @@ function Show-Menu {
 
         Write-Host "$Title`n"
         
+        # 画面幅いっぱいに空白で埋めることで、前の文字を完全に消去する
         $width = 80
         try { $width = $Host.UI.RawUI.WindowSize.Width } catch {}
 
         for ($i = 0; $i -lt $Choices.Length; $i++) {
             $line = if ($i -eq $currentIndex) { " > $($Choices[$i])" } else { "   $($Choices[$i])" }
-            # ウィンドウ幅に合わせて空白埋めし、前の描画内容を上書き消去する
             $padLen = [math]::Max(0, $width - $line.Length - 1)
             $paddedLine = $line + (" " * $padLen)
             
             if ($i -eq $currentIndex) {
-                Write-Host -NoNewline "`r"
                 Write-Host $paddedLine -ForegroundColor Black -BackgroundColor White
             } else {
-                Write-Host -NoNewline "`r"
                 Write-Host $paddedLine
             }
         }
@@ -411,7 +423,7 @@ function Show-Menu {
         switch ($key.VirtualKeyCode) {
             38 { if ($currentIndex -gt 0) { $currentIndex-- } }       # UpArrow
             40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } } # DownArrow
-            13 { Write-Host ""; return $currentIndex } # Enter (終了時に改行しておく)
+            13 { Write-Host ""; return $currentIndex } # Enter
             27 { Write-Host ""; return -1 }            # Escape
         }
     }
