@@ -18,8 +18,18 @@ param (
     [string[]]$Path
 )
 
+# [PS 5.1 バグ回避] 万一カレントディレクトリに [ ] が含まれているとStart-Processがクラッシュするため、
+# 先に入力パスを絶対パス化してから、安全なスクリプト自身のフォルダにカレントディレクトリを移動する
+$Path = @($Path | ForEach-Object {
+    $p = $_.Trim('"', "'")
+    if (-not [string]::IsNullOrWhiteSpace($p)) {
+        if ([System.IO.Path]::IsPathRooted($p)) { $p } else { Join-Path (Get-Location).ProviderPath $p }
+    }
+})
+$PSScriptRoot = Split-Path -LiteralPath $MyInvocation.MyCommand.Definition -Parent
+Set-Location -LiteralPath $PSScriptRoot
+
 #region 初期設定とヘルパー関数
-$PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
 # 文字コードの問題を回避するため、コンソールのエンコーディングをUTF-8に設定じゃ
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -61,7 +71,7 @@ function Initialize-LogFile {
   ffmpeg        : $ffmpegVer
 ================================================================
 "@
-    $header | Out-File -FilePath $global:LogFilePath -Encoding utf8 -Force
+    $header | Out-File -LiteralPath $global:LogFilePath -Encoding utf8 -Force
     Write-Log "ログファイル: $($global:LogFilePath)"
     return $global:LogFilePath
 }
@@ -81,7 +91,7 @@ function Write-Log {
         default { Write-Host $logMessage }
     }
     if ($global:LogFilePath) {
-        try { $logMessage | Out-File -FilePath $global:LogFilePath -Append -Encoding utf8 } catch {}
+        try { $logMessage | Out-File -LiteralPath $global:LogFilePath -Append -Encoding utf8 } catch {}
     }
 }
 #endregion
@@ -130,10 +140,10 @@ function Test-IsInterlaced {
     param([string[]]$Paths)
     foreach ($p in $Paths) {
         $file = $p.Trim('"')
-        if (Test-Path -Path $file -PathType Container) {
-            $file = (Get-ChildItem -Path $file -File -Include *.mp4,*.mkv,*.avi,*.mov,*.ts,*.m2ts,*.iso -Recurse | Select-Object -First 1).FullName
+        if (Test-Path -LiteralPath $file -PathType Container) {
+            $file = (Get-ChildItem -LiteralPath $file -File -Include *.mp4,*.mkv,*.avi,*.mov,*.ts,*.m2ts,*.iso -Recurse | Select-Object -First 1).FullName
         }
-        if ($file -and (Test-Path -Path $file -PathType Leaf)) {
+        if ($file -and (Test-Path -LiteralPath $file -PathType Leaf)) {
             $fieldOrder = & $global:Settings.FfprobePath -v error -select_streams v:0 -show_entries stream=field_order -of default=noprint_wrappers=1:nokey=1 "$file" 2>$null | Out-String
             if ($fieldOrder.Trim() -match '^(tb|bt|tt|bb)$') {
                 return $true
@@ -174,8 +184,8 @@ function Invoke-ExternalProcess {
             -RedirectStandardOutput $stdoutFile `
             -RedirectStandardError $stderrFile
         $stdout = ""; $stderr = ""
-        if (Test-Path $stdoutFile) { $stdout = (Get-Content $stdoutFile -Raw -ErrorAction SilentlyContinue) }
-        if (Test-Path $stderrFile) { $stderr = (Get-Content $stderrFile -Raw -ErrorAction SilentlyContinue) }
+        if (Test-Path $stdoutFile) { $stdout = (Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction SilentlyContinue) }
+        if (Test-Path $stderrFile) { $stderr = (Get-Content -LiteralPath $stderrFile -Raw -ErrorAction SilentlyContinue) }
         if ($stdout -and $stdout.Trim()) { Write-Log "[stdout]`n$($stdout.TrimEnd())" -Level "DEBUG" }
         if ($stderr -and $stderr.Trim()) {
             $lvl = if ($proc.ExitCode -ne 0) { "ERROR" } else { "DEBUG" }
@@ -186,7 +196,7 @@ function Invoke-ExternalProcess {
         return @{ ExitCode = $proc.ExitCode; StdOut = $stdout; StdErr = $stderr }
     }
     finally {
-        Remove-Item $stderrFile, $stdoutFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stderrFile, $stdoutFile -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -213,7 +223,7 @@ function Invoke-FfmpegEncode {
             Start-Sleep -Milliseconds 500
             if (Test-Path $progressFile) {
                 try {
-                    $progContent = Get-Content $progressFile -ErrorAction SilentlyContinue
+                    $progContent = Get-Content -LiteralPath $progressFile -ErrorAction SilentlyContinue
                     $outTimeLine = $progContent | Where-Object { $_ -match '^out_time=' } | Select-Object -Last 1
                     $speedLine = $progContent | Where-Object { $_ -match '^speed=' } | Select-Object -Last 1
                     $fpsLine = $progContent | Where-Object { $_ -match '^fps=' } | Select-Object -Last 1
@@ -242,8 +252,8 @@ function Invoke-FfmpegEncode {
         Write-Host "`r  完了 (所要時間: $($elapsed.ToString('hh\:mm\:ss')))                         "
         Write-Log "エンコード所要時間: $($elapsed.ToString('hh\:mm\:ss'))"
         $stdout = ""; $stderr = ""
-        if (Test-Path $stdoutFile) { $stdout = Get-Content $stdoutFile -Raw -ErrorAction SilentlyContinue }
-        if (Test-Path $stderrFile) { $stderr = Get-Content $stderrFile -Raw -ErrorAction SilentlyContinue }
+        if (Test-Path $stdoutFile) { $stdout = Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction SilentlyContinue }
+        if (Test-Path $stderrFile) { $stderr = Get-Content -LiteralPath $stderrFile -Raw -ErrorAction SilentlyContinue }
         if ($stderr -and $stderr.Trim()) {
             $sLines = ($stderr -split "`r?`n") | Where-Object {
                 $_ -match '(Input #|Output #|Stream #|Stream mapping|frame=.*Lsize=|video:.*audio:)'
@@ -302,7 +312,7 @@ function Invoke-FfmpegEncode {
         return @{ ExitCode = $proc.ExitCode; StdOut = $stdout; StdErr = $stderr }
     }
     finally {
-        Remove-Item $stderrFile, $stdoutFile, $progressFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stderrFile, $stdoutFile, $progressFile -Force -ErrorAction SilentlyContinue
     }
 }
 #endregion
@@ -328,7 +338,7 @@ function Show-Menu {
 }
 
 # Show-Menuをグローバルに公開 (get-ffmpegOptions.ps1 からも利用するため)
-Set-Item -Path function:global:Show-Menu -Value (Get-Item -Path function:Show-Menu).ScriptBlock
+Set-Item -Path function:global:Show-Menu -Value (Get-Item -LiteralPath function:Show-Menu).ScriptBlock
 
 function Sanitize-FileName {
     param ([string]$Name)
@@ -585,7 +595,7 @@ function Get-AvailableHardware {
             }
         }
         finally {
-            Remove-Item $testClipPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $testClipPath -Force -ErrorAction SilentlyContinue
         }
 
         Write-Log "ハードウェアスキャン完了: NVIDIA=$($info.HasNvidia) Intel=$($info.HasIntel) AMD=$($info.HasAMD)" -Level "DEBUG"
@@ -1641,7 +1651,7 @@ function Invoke-InteractiveSetup {
 }
 
 function Invoke-TemplateSelect {
-    $templates = Get-ChildItem -Path $global:Settings.TemplateDir -Filter "*.psd1" | Where-Object { $_.Name -notmatch "^config.*\.psd1$" }
+    $templates = Get-ChildItem -LiteralPath $global:Settings.TemplateDir -Filter "*.psd1" | Where-Object { $_.Name -notmatch "^config.*\.psd1$" }
     if (-not $templates) { Write-Log "テンプレートファイルが見つかりませぬ..."; Read-Host "何かキーを押して戻る"; return $null }
     $templateNames = $templates | ForEach-Object { $_.BaseName }
     $selectedIndex = Show-Menu -Title "使用するテンプレートを選択してください。" -Choices $templateNames
@@ -1726,7 +1736,7 @@ function Invoke-SplitEncodeFile {
                 return
             }
             Write-Log "SRTファイルを解析中... ($srtFile)"
-            $srtContent = Get-Content $srtFile -Encoding UTF8 -Raw
+            $srtContent = Get-Content -LiteralPath $srtFile -Encoding UTF8 -Raw
             $regex = [regex] '(?ms)(\d+)\s+(\d{2}:\d{2}:\d{2}[,.]\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2}[,.]\d{3})\s+(.*?)(?=\r?\n\r?\n|\z)'
             $matches = $regex.Matches($srtContent)
             
@@ -1902,7 +1912,7 @@ function Invoke-SplitEncodeFile {
         }
         
         # 終了後クリーンアップ
-        if (Test-Path $tempDir) { Remove-Item -Path $tempDir -Recurse -Force; Write-Log "一時ファイルをクリーンアップしました。" -Level "DEBUG" }
+        if (Test-Path $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force; Write-Log "一時ファイルをクリーンアップしました。" -Level "DEBUG" }
         Write-Log "全セグメントの処理が完了しました。"
     }
     catch {
@@ -2240,7 +2250,7 @@ function Invoke-EncodeFile {
                 if ($result.ExitCode -ne 0) {
                     Write-Log "ExifToolの実行に失敗しました。メタデータはコピーされていない可能性があります。" -Level "WARN"
                 }
-                Remove-Item -Path "$outputFile`_original" -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath "$outputFile`_original" -ErrorAction SilentlyContinue
             }
         }
 
@@ -2248,7 +2258,7 @@ function Invoke-EncodeFile {
             Remove-Item -Path "$passLogBase*" -Force -ErrorAction SilentlyContinue
             Write-Log "2passログをクリーンアップしました。" -Level "DEBUG"
         }
-        if (Test-Path $tempDir) { Remove-Item -Path $tempDir -Recurse -Force; Write-Log "一時ファイルをクリーンアップしました。" -Level "DEBUG" }
+        if (Test-Path $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force; Write-Log "一時ファイルをクリーンアップしました。" -Level "DEBUG" }
         Write-Log "ファイル「$(Split-Path -Leaf $InputFile)」の処理が完了しました。"
     }
     catch {
