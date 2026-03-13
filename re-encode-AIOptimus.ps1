@@ -574,7 +574,16 @@ function Get-AvailableHardware {
     try {
         $ffmpegPath = $global:Settings.FfmpegPath
 
-        # --- HWエンコーダー実機検出 (テストエンコード) ---
+        # --- WMIを用いたGPUハードウェアの検出 ---
+        # 実機のGPU名稱を取得し、NVIDIA/Intel/AMDを正しく判定する
+        $gpus = @(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name)
+        $hasNvidiaHW = [bool]($gpus -match 'NVIDIA')
+        $hasIntelHW  = [bool]($gpus -match 'Intel')
+        $hasAMDHW    = [bool]($gpus -match 'AMD|Radeon')
+
+        # --- FFmpeg対応エンコーダーの取得 ---
+        $ffmpegEncoders = (& $ffmpegPath -hide_banner -encoders 2>&1) -join "`n"
+
         $testEncoders = @(
             'h264_nvenc', 'hevc_nvenc', 'av1_nvenc',
             'h264_qsv', 'hevc_qsv', 'av1_qsv', 'vp9_qsv',
@@ -582,18 +591,18 @@ function Get-AvailableHardware {
         )
 
         foreach ($enc in $testEncoders) {
-            try {
-                $null = & $ffmpegPath -hide_banner -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 5 -c:v $enc -f null NUL 2>&1
-                if ($LASTEXITCODE -eq 0) {
+            if ($ffmpegEncoders -match "\b$enc\b") {
+                if (($enc -match '_nvenc$' -and $hasNvidiaHW) -or
+                    ($enc -match '_qsv$' -and $hasIntelHW) -or
+                    ($enc -match '_amf$' -and $hasAMDHW)) {
                     $info.AvailableEncoders += $enc
                 }
             }
-            catch {}
         }
 
-        $info.HasNvidia = @($info.AvailableEncoders | Where-Object { $_ -match '_nvenc$' }).Count -gt 0
-        $info.HasIntel = @($info.AvailableEncoders | Where-Object { $_ -match '_qsv$' }).Count -gt 0
-        $info.HasAMD = @($info.AvailableEncoders | Where-Object { $_ -match '_amf$' }).Count -gt 0
+        $info.HasNvidia = $hasNvidiaHW
+        $info.HasIntel  = $hasIntelHW
+        $info.HasAMD    = $hasAMDHW
 
         # --- HWアクセル (デコード) 実機検出 ---
         # 実際のH.264テストクリップを生成し、各アクセラレーターで実デコードを試行する
