@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     動画ファイルを一括で再エンコードするPowerShellスクリプトじゃ。
 .DESCRIPTION
