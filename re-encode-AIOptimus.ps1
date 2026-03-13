@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     動画ファイルを一括で再エンコードするPowerShellスクリプトじゃ。
 .DESCRIPTION
@@ -138,9 +138,14 @@ function Test-IsInterlaced {
             if ($fieldOrder.Trim() -match '^(tb|bt|tt|bb)$') {
                 return $true
             }
+            # Check frame attributes directly for interlaced metadata
+            $frameCheck = & $global:Settings.FfprobePath -v error -select_streams v:0 -show_frames -show_entries frame=interlaced_frame -read_intervals "%+#50" "$file" 2>$null | Out-String
+            if ($frameCheck -match 'interlaced_frame=1') {
+                return $true
+            }
             # Some DVD/ISO and MPEG2 streams are flagged progressive but actually interlaced/telecined
             # Let's perform a fast idet scan across a few hundred frames
-            $idetTest = & $global:Settings.FfmpegPath -hide_banner -i "$file" -filter:v idet -frames:v 300 -an -f null - 2>&1 | Select-String "Multi frame detection" | Select-Object -Last 1 | Out-String
+            $idetTest = & $global:Settings.FfmpegPath -hide_banner -i "$file" -filter:v idet -frames:v 500 -an -f null - 2>&1 | Select-String "Multi frame detection" | Select-Object -Last 1 | Out-String
             if ($idetTest -match 'TFF:\s+(?<tff>\d+)\s+BFF:\s+(?<bff>\d+)') {
                 if ([int]$Matches.tff -gt 0 -or [int]$Matches.bff -gt 0) {
                     return $true
@@ -1124,7 +1129,7 @@ function Invoke-PlatformAutoSetup {
     if ($isInterlaced) {
         $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 29.97fpsテレシネを本来の24fps等に戻す逆テレシネ)", "nnedi (実写/アニメ: ニューラルネットを用いた高品質な解除 ※大変重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
     } else {
-        $deinterlace = @("None", "fieldmatch,decimate")[(Show-Menu -Title "特定フレームの除去 (プログレッシブ用・逆テレシネ)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)"))]
+        $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)", "nnedi (強制インターレース解除: 高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
     }
 
     $finalVF = $auto.ScaleFilter
@@ -1432,7 +1437,7 @@ function Invoke-PlatformDetailedSetup {
     if ($isInterlaced) {
         $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 29.97fpsテレシネを本来の24fps等に戻す逆テレシネ)", "nnedi (実写/アニメ: ニューラルネットを用いた高品質な解除 ※大変重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
     } else {
-        $deinterlace = @("None", "fieldmatch,decimate")[(Show-Menu -Title "特定フレームの除去 (プログレッシブ用・逆テレシネ)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)"))]
+        $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)", "nnedi (強制インターレース解除: 高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
     }
 
     $finalVF = $scaleFilter
@@ -1599,7 +1604,7 @@ function Invoke-InteractiveSetup {
     if ($isInterlaced) {
         $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 29.97fpsテレシネを本来の24fps等に戻す逆テレシネ)", "nnedi (実写/アニメ: ニューラルネットを用いた高品質な解除 ※大変重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
     } else {
-        $deinterlace = @("None", "fieldmatch,decimate")[(Show-Menu -Title "特定フレームの除去 (プログレッシブ用・逆テレシネ)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)"))]
+        $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)", "nnedi (強制インターレース解除: 高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
     }
 
     $additionalVF = ""; $additionalArgs = ""
