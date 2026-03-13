@@ -582,6 +582,7 @@ function Get-AvailableHardware {
         HasNvidia         = $false
         HasIntel          = $false
         HasAMD            = $false
+        ScanCompleted     = $false
     }
     
     try {
@@ -596,7 +597,6 @@ function Get-AvailableHardware {
 
         foreach ($enc in $testEncoders) {
             try {
-                # QSVやAMFの初期化エラー("-9", "not supported")を防ぐため、ピクセルフォーマット nv12 を明示的に指定してテストする
                 $null = & $ffmpegPath -hide_banner -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 1 -pix_fmt nv12 -c:v $enc -f null NUL 2>&1
                 if ($LASTEXITCODE -eq 0) {
                     $info.AvailableEncoders += $enc
@@ -609,7 +609,6 @@ function Get-AvailableHardware {
         $info.HasAMD = @($info.AvailableEncoders | Where-Object { $_ -match '_amf$' }).Count -gt 0
 
         # --- HWアクセル (デコード) 実機検出 ---
-        # 実機のハードウェアを用いて確実にデコードできるかテストする
         $testClipPath = Join-Path ([System.IO.Path]::GetTempPath()) "hwaccel_test_$([System.IO.Path]::GetRandomFileName()).mp4"
         try {
             $null = & $ffmpegPath -hide_banner -y -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 5 -pix_fmt yuv420p -c:v libx264 -preset ultrafast "$testClipPath" 2>&1
@@ -618,11 +617,10 @@ function Get-AvailableHardware {
                 $hwaccelList = @('cuda', 'qsv', 'amf', 'd3d11va', 'dxva2', 'vulkan')
                 foreach ($accel in $hwaccelList) {
                     try {
-                        # init_hw_deviceでハードウェアの物理的な利用可否をストレートにテストする
-                        # これにより余計なh264_qsvデコーダ制約等での誤判定(False Negative)を回避
-                        $testOut = & $ffmpegPath -hide_banner -init_hw_device "$accel" -f null - 2>&1
+                        # -hwaccel を指定して実際にデコードテストを行う。
+                        $testOut = & $ffmpegPath -hide_banner -hwaccel $accel -i "$testClipPath" -frames:v 1 -f null - 2>&1
                         if ($LASTEXITCODE -eq 0) {
-                            $hasInitError = ($testOut | Out-String) -match 'Failed setup|initialisation returned error|Device does not support|No device available|Hardware device setup failed'
+                            $hasInitError = ($testOut | Out-String) -match 'Failed setup|initialisation returned error|Device does not support|No device available|Hardware device setup failed|Error creating a MFX session'
                             if (-not $hasInitError) {
                                 $info.AvailableHwAccels += $accel
                             } else {
@@ -637,6 +635,8 @@ function Get-AvailableHardware {
         } finally {
             Remove-Item -LiteralPath $testClipPath -Force -ErrorAction SilentlyContinue
         }
+        
+        $info.ScanCompleted = $true
 
         Write-Log "テスト結果: NVIDIA=$($info.HasNvidia) Intel=$($info.HasIntel) AMD=$($info.HasAMD)" -Level "DEBUG"
         Write-Log "  エンコーダー: [$($info.AvailableEncoders -join ', ')]" -Level "DEBUG"
@@ -1562,7 +1562,7 @@ function Start-MainProcess {
             # CPUデコードは常に表示
             $filteredAccel += $entry
         }
-        elseif ($hwInfo -and $hwInfo.AvailableHwAccels.Count -gt 0) {
+        elseif ($hwInfo -and $hwInfo.ScanCompleted) {
             if ($hwInfo.AvailableHwAccels -contains $entry.Accel) {
                 $filteredAccel += $entry
             }
