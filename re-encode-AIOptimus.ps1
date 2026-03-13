@@ -362,19 +362,57 @@ function Invoke-FfmpegEncode {
 #region UIユーティリティ
 function Show-Menu {
     param ([string]$Title, [string[]]$Choices, [int]$DefaultIndex = 0, [switch]$NoClear)
+    
+    if (-not $NoClear) { Clear-Host }
+    
     $currentIndex = $DefaultIndex
+    $firstDraw = $true
+    
+    # タイトルの行数を計算 (末尾に空行が1つ入る仕様)
+    $titleLines = ($Title -split "`r?`n").Count + 1
+    $menuLines = $Choices.Length
+
     while ($true) {
-        if (-not $NoClear) { Clear-Host }; Write-Host "$Title`n"
-        for ($i = 0; $i -lt $Choices.Length; $i++) {
-            if ($i -eq $currentIndex) { Write-Host -ForegroundColor Black -BackgroundColor White " > $($Choices[$i])" }
-            else { Write-Host "   $($Choices[$i])" }
+        if (-not $firstDraw) {
+            # 2回目以降は、出力した行数分だけ上に戻る
+            try {
+                $pos = $Host.UI.RawUI.CursorPosition
+                $pos.Y = [math]::Max(0, $pos.Y - $titleLines - $menuLines)
+                $pos.X = 0
+                $Host.UI.RawUI.CursorPosition = $pos
+            } catch {
+                # もしCursorPositionが使えない環境(ISE等)の場合はClear-Hostに戻す
+                Clear-Host
+            }
         }
+        $firstDraw = $false
+
+        Write-Host "$Title`n"
+        
+        $width = 80
+        try { $width = $Host.UI.RawUI.WindowSize.Width } catch {}
+
+        for ($i = 0; $i -lt $Choices.Length; $i++) {
+            $line = if ($i -eq $currentIndex) { " > $($Choices[$i])" } else { "   $($Choices[$i])" }
+            # ウィンドウ幅に合わせて空白埋めし、前の描画内容を上書き消去する
+            $padLen = [math]::Max(0, $width - $line.Length - 1)
+            $paddedLine = $line + (" " * $padLen)
+            
+            if ($i -eq $currentIndex) {
+                Write-Host -NoNewline "`r"
+                Write-Host $paddedLine -ForegroundColor Black -BackgroundColor White
+            } else {
+                Write-Host -NoNewline "`r"
+                Write-Host $paddedLine
+            }
+        }
+
         $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         switch ($key.VirtualKeyCode) {
             38 { if ($currentIndex -gt 0) { $currentIndex-- } }       # UpArrow
             40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } } # DownArrow
-            13 { return $currentIndex } # Enter
-            27 { return -1 }            # Escape
+            13 { Write-Host ""; return $currentIndex } # Enter (終了時に改行しておく)
+            27 { Write-Host ""; return -1 }            # Escape
         }
     }
 }
