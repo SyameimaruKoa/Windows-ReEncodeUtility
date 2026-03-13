@@ -1137,9 +1137,9 @@ function Invoke-PlatformAutoSetup {
 
     $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
     if ($isInterlaced) {
-        $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 29.97fpsテレシネを本来の24fps等に戻す逆テレシネ)", "nnedi (実写/アニメ: ニューラルネットを用いた高品質な解除 ※大変重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
+        $deinterlace = @("None", "fieldmatch,decimate", "bwdif", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 29.97fpsテレシネを本来の24fps等に戻す逆テレシネ)", "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
     } else {
-        $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)", "nnedi (強制インターレース解除: 高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
+        $deinterlace = @("None", "fieldmatch,decimate", "bwdif", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)", "bwdif (強制インターレース解除: 高品質)", "w3fdif (強制インターレース解除: 標準・高速)"))]
     }
 
     $finalVF = $auto.ScaleFilter
@@ -1445,9 +1445,9 @@ function Invoke-PlatformDetailedSetup {
 
     $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
     if ($isInterlaced) {
-        $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 29.97fpsテレシネを本来の24fps等に戻す逆テレシネ)", "nnedi (実写/アニメ: ニューラルネットを用いた高品質な解除 ※大変重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
+        $deinterlace = @("None", "fieldmatch,decimate", "bwdif", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 29.97fpsテレシネを本来の24fps等に戻す逆テレシネ)", "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
     } else {
-        $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)", "nnedi (強制インターレース解除: 高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
+        $deinterlace = @("None", "fieldmatch,decimate", "bwdif", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)", "bwdif (強制インターレース解除: 高品質)", "w3fdif (強制インターレース解除: 標準・高速)"))]
     }
 
     $finalVF = $scaleFilter
@@ -1612,9 +1612,9 @@ function Invoke-InteractiveSetup {
     
     $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
     if ($isInterlaced) {
-        $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 29.97fpsテレシネを本来の24fps等に戻す逆テレシネ)", "nnedi (実写/アニメ: ニューラルネットを用いた高品質な解除 ※大変重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
+        $deinterlace = @("None", "fieldmatch,decimate", "bwdif", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 29.97fpsテレシネを本来の24fps等に戻す逆テレシネ)", "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
     } else {
-        $deinterlace = @("None", "fieldmatch,decimate", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)", "nnedi (強制インターレース解除: 高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
+        $deinterlace = @("None", "fieldmatch,decimate", "bwdif", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)", "bwdif (強制インターレース解除: 高品質)", "w3fdif (強制インターレース解除: 標準・高速)"))]
     }
 
     $additionalVF = ""; $additionalArgs = ""
