@@ -21,11 +21,11 @@ param (
 # [PS 5.1 バグ回避] 万一カレントディレクトリに [ ] が含まれているとStart-Processがクラッシュするため、
 # 先に入力パスを絶対パス化してから、安全なスクリプト自身のフォルダにカレントディレクトリを移動する
 $Path = @($Path | ForEach-Object {
-    $p = $_.Trim('"', "'")
-    if (-not [string]::IsNullOrWhiteSpace($p)) {
-        if ([System.IO.Path]::IsPathRooted($p)) { $p } else { Join-Path (Get-Location).ProviderPath $p }
-    }
-})
+        $p = $_.Trim('"', "'")
+        if (-not [string]::IsNullOrWhiteSpace($p)) {
+            if ([System.IO.Path]::IsPathRooted($p)) { $p } else { Join-Path (Get-Location).ProviderPath $p }
+        }
+    })
 $PSScriptRoot = Split-Path -LiteralPath $MyInvocation.MyCommand.Definition -Parent
 Set-Location -LiteralPath $PSScriptRoot
 
@@ -33,7 +33,7 @@ Set-Location -LiteralPath $PSScriptRoot
 
 function Resolve-DeinterlaceFilter {
     param([string]$filter)
-    if ($filter -eq 'nnedi') {
+    if ($filter -match 'nnedi') {
         $weightsFile = Join-Path $PSScriptRoot 'nnedi3_weights.bin'
         if (-not (Test-Path -LiteralPath $weightsFile)) {
             Write-Host 'nnedi用ウェイトファイル(nnedi3_weights.bin)をダウンロードします...' -ForegroundColor Cyan
@@ -42,16 +42,23 @@ function Resolve-DeinterlaceFilter {
                 Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/dubhater/vapoursynth-nnedi3/master/src/nnedi3_weights.bin' -OutFile $weightsFile -UseBasicParsing
                 Write-Host 'ダウンロード完了しました。' -ForegroundColor Green
             } catch {
-                Write-Host "ダウンロード失敗。bwdifへフォールバックします: $_" -ForegroundColor Yellow
+                Write-Host "ダウンロード失敗。bwdifベースへフォールバックします: $_" -ForegroundColor Yellow
+                if ($filter -match 'fieldmatch') { return 'fieldmatch,decimate' }
                 return 'bwdif'
             }
         }
-        $escapedWeights = $weightsFile -replace '\\', '/' -replace ':', '\:'
-        return "nnedi=weights='$escapedWeights'"
+        $escapedWeights = $weightsFile -replace '\', '/' -replace ':', '\:'
+        
+        if ($filter -eq 'nnedi') {
+            return "nnedi=weights='$escapedWeights'"
+        }
+        elseif ($filter -eq 'fieldmatch,nnedi,decimate') {
+            # fieldmatchで救済できなかったコーミングフレームのみをnnediで補完し、その後間引く
+            return "fieldmatch,nnedi=weights='$escapedWeights':deint=interlaced,decimate"
+        }
     }
     return $filter
 }
-
 
 # 文字コードの問題を回避するため、コンソールのエンコーディングをUTF-8に設定じゃ
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -163,7 +170,7 @@ function Test-IsInterlaced {
     foreach ($p in $Paths) {
         $file = $p.Trim('"')
         if (Test-Path -LiteralPath $file -PathType Container) {
-            $file = (Get-ChildItem -LiteralPath $file -File -Include *.mp4,*.mkv,*.avi,*.mov,*.ts,*.m2ts,*.iso -Recurse | Select-Object -First 1).FullName
+            $file = (Get-ChildItem -LiteralPath $file -File -Include *.mp4, *.mkv, *.avi, *.mov, *.ts, *.m2ts, *.iso -Recurse | Select-Object -First 1).FullName
         }
         if ($file -and (Test-Path -LiteralPath $file -PathType Leaf)) {
             $fieldOrder = & $global:Settings.FfprobePath -v error -select_streams v:0 -show_entries stream=field_order -of default=noprint_wrappers=1:nokey=1 "$file" 2>$null | Out-String
@@ -1159,9 +1166,10 @@ function Invoke-PlatformAutoSetup {
 
     $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
     if ($isInterlaced) {
-        $deinterlace = @("None", "fieldmatch,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 29.97fpsテレシネを本来の24fps等に戻す逆テレシネ)", "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)", "nnedi (極高品質: 学習ウェイトDL必要 ※重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
-    } else {
-        $deinterlace = @("None", "fieldmatch,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)", "bwdif (強制インターレース解除: 高品質)", "nnedi (強制インターレース解除: 極高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
+        $deinterlace = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (逆テレシネ: 通常のアニメ等に)", "fieldmatch,nnedi,decimate (逆テレシネ: 極高品質 ※重い)", "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)", "nnedi (極高品質: 学習ウェイトDL必要 ※重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
+    }
+    else {
+        $deinterlace = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (強制逆テレシネ: 通常)", "fieldmatch,nnedi,decimate (強制逆テレシネ: 極高品質 ※重い)", "bwdif (強制インターレース解除: 高品質)", "nnedi (強制インターレース解除: 極高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
     }
 
     $deinterlace = Resolve-DeinterlaceFilter -filter $deinterlace
@@ -1468,13 +1476,14 @@ function Invoke-PlatformDetailedSetup {
 
     $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
     if ($isInterlaced) {
-        $deinterlace = @("None", "fieldmatch,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 29.97fpsテレシネを本来の24fps等に戻す逆テレシネ)", "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)", "nnedi (極高品質: 学習ウェイトDL必要 ※重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
-    } else {
-        $deinterlace = @("None", "fieldmatch,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)", "bwdif (強制インターレース解除: 高品質)", "nnedi (強制インターレース解除: 極高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
+        $deinterlace = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (逆テレシネ: 通常のアニメ等に)", "fieldmatch,nnedi,decimate (逆テレシネ: 極高品質 ※重い)", "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)", "nnedi (極高品質: 学習ウェイトDL必要 ※重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
+    }
+    else {
+        $deinterlace = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (強制逆テレシネ: 通常)", "fieldmatch,nnedi,decimate (強制逆テレシネ: 極高品質 ※重い)", "bwdif (強制インターレース解除: 高品質)", "nnedi (強制インターレース解除: 極高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
     }
 
     $deinterlace = Resolve-DeinterlaceFilter -filter $deinterlace
-        $finalVF = $scaleFilter
+    $finalVF = $scaleFilter
     if ($deinterlace -ne "None") {
         if ($finalVF) {
             $finalVF = "$deinterlace,$finalVF"
@@ -1636,9 +1645,10 @@ function Invoke-InteractiveSetup {
     
     $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
     if ($isInterlaced) {
-        $deinterlace = @("None", "fieldmatch,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 29.97fpsテレシネを本来の24fps等に戻す逆テレシネ)", "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)", "nnedi (極高品質: 学習ウェイトDL必要 ※重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
-    } else {
-        $deinterlace = @("None", "fieldmatch,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (アニメ等: 重複フレームを間引いて本来のfpsに戻す逆テレシネ)", "bwdif (強制インターレース解除: 高品質)", "nnedi (強制インターレース解除: 極高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
+        $deinterlace = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (逆テレシネ: 通常のアニメ等に)", "fieldmatch,nnedi,decimate (逆テレシネ: 極高品質 ※重い)", "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)", "nnedi (極高品質: 学習ウェイトDL必要 ※重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
+    }
+    else {
+        $deinterlace = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (強制逆テレシネ: 通常)", "fieldmatch,nnedi,decimate (強制逆テレシネ: 極高品質 ※重い)", "bwdif (強制インターレース解除: 高品質)", "nnedi (強制インターレース解除: 極高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
     }
 
     $additionalVF = ""; $additionalArgs = ""
@@ -1648,7 +1658,7 @@ function Invoke-InteractiveSetup {
     }
     
     $deinterlace = Resolve-DeinterlaceFilter -filter $deinterlace
-        if ($deinterlace -ne "None") {
+    if ($deinterlace -ne "None") {
         if ($additionalVF) {
             $additionalVF = "$deinterlace,$additionalVF"
         }
