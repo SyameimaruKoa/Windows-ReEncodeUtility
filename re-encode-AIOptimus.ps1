@@ -1667,7 +1667,7 @@ function Start-MainProcess {
     }
 
     # --- 実行モード選択 ---
-    $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "プラットフォーム向けアップロード (Twitter/Discord/catbox.moe)", "中間ファイル作成モード (高画質・MKV・音声コピー)", "チャプター/字幕分割モード (分割して再エンコード)")
+    $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "プラットフォーム向けアップロード (Twitter/Discord/catbox.moe)", "中間ファイル作成モード (高画質・MKV・音声設定可)", "チャプター/字幕分割モード (分割して再エンコード)")
     $selectedMode = Show-Menu -Title "実行モードを選択してください。" -Choices $modeChoices
     
     $config = $null

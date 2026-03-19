@@ -2,7 +2,7 @@
 .SYNOPSIS
     FFmpegのエンコードオプションを対話形式で設定するスクリプトじゃ。
 .DESCRIPTION
-    映像コーデック（H.264/5, AV1, VP9/8）と音声コーデック（AAC, Opus, Vorbis等）を
+    映像コーデック（H.264/5, AV1, VP9/8）と音声コーデック（AAC, Opus, Vorbis, FLAC等）を
     ハードウェアや品質に応じて選択し、設定結果を呼び出し元のスクリプトに返すぞ。
 .PARAMETER Intermediate
     このスイッチを指定すると、編集用の中間ファイルを作成するための専用メニューが表示される。
@@ -99,6 +99,16 @@ function Get-DetailedVideoOption {
     return $finalOptions -join ' '
 }
 
+function Select-FlacOptions {
+    $flacChoices = @("高圧縮 (圧縮レベル12)", "標準 (圧縮レベル8)", "高速 (圧縮レベル5)", "カスタム")
+    $flacLevels = @(12, 8, 5)
+    $flacIndex = Show-Menu -Title "FLACの圧縮レベルを選択" -Choices $flacChoices
+    if ($flacIndex -lt 0) { return $null }
+
+    $level = if ($flacIndex -eq 3) { [int](Read-Host "圧縮レベルを入力 (0 ~ 12)") } else { $flacLevels[$flacIndex] }
+    return @{ Type = "internal"; Options = "-c:a flac -compression_level $level"; Description = "FLAC: 圧縮レベル $level" }
+}
+
 
 # --- メイン処理 ---
 function Get-EncoderSettings {
@@ -127,6 +137,7 @@ function Get-EncoderSettings {
     if ($hasFdkaac) { $audioMenu += @{ Key = "fdkaac"; Label = "fdkaac (外部 自動HE/LC)" } }
     $audioMenu += @{ Key = "opus"; Label = "Opus (libopus)" }
     $audioMenu += @{ Key = "vorbis"; Label = "Vorbis (libvorbis)" }
+    $audioMenu += @{ Key = "flac"; Label = "FLAC (flac)" }
 
     $audioChoices = @($audioMenu | ForEach-Object { $_.Label })
     $audioIndex = Show-Menu -Title $audioMenuTitle -Choices $audioChoices
@@ -157,6 +168,10 @@ function Get-EncoderSettings {
         }
         "opus" {
             $result = Select-OpusOptions; if (-not $result) { return $null }
+            $audioSetting = $result
+        }
+        "flac" {
+            $result = Select-FlacOptions; if (-not $result) { return $null }
             $audioSetting = $result
         }
         "vorbis" {
@@ -338,14 +353,83 @@ function Get-IntermediateSettings {
 
     $videoSetting = "$baseEncoder $pixFmtOption $crfOption $presetOption"
 
+    # --- 5. 音声設定 ---
+    $hasQaac = $false; $hasNero = $false; $hasFdkaac = $false
+    if (Get-Command -Name 'Get-ExternalEncoderAvailability' -CommandType Function -ErrorAction SilentlyContinue) {
+        $extEnc = Get-ExternalEncoderAvailability
+        $hasQaac = $extEnc.HasQaac; $hasNero = $extEnc.HasNero; $hasFdkaac = $extEnc.HasFdkaac
+    }
+    elseif ($global:Settings) {
+        if ($global:Settings.QaacPath) { try { $null = Get-Command $global:Settings.QaacPath -ErrorAction Stop; $hasQaac = $true } catch {} }
+        if ($global:Settings.NeroAacEncPath) { try { $null = Get-Command $global:Settings.NeroAacEncPath -ErrorAction Stop; $hasNero = $true } catch {} }
+        if ($global:Settings.FdkaacPath) { try { $null = Get-Command $global:Settings.FdkaacPath -ErrorAction Stop; $hasFdkaac = $true } catch {} }
+    }
+
+    $audioMenu = @()
+    $audioMenu += @{ Key = "copy"; Label = "音声をコピー (-c:a copy)" }
+    $audioMenu += @{ Key = "none"; Label = "音声なし (-an)" }
+    if ($hasQaac) { $audioMenu += @{ Key = "qaac"; Label = "qaac (AAC 自動HE/LC)" } }
+    if ($hasNero) { $audioMenu += @{ Key = "nero"; Label = "Nero AAC (外部 自動HE/LC)" } }
+    if ($hasFdkaac) { $audioMenu += @{ Key = "fdkaac"; Label = "fdkaac (外部 自動HE/LC)" } }
+    $audioMenu += @{ Key = "opus"; Label = "Opus (libopus)" }
+    $audioMenu += @{ Key = "vorbis"; Label = "Vorbis (libvorbis)" }
+    $audioMenu += @{ Key = "flac"; Label = "FLAC (flac)" }
+
+    $audioChoices = @($audioMenu | ForEach-Object { $_.Label })
+    $audioIndex = Show-Menu -Title "中間ファイル用の音声エンコーダーを選択" -Choices $audioChoices
+    if ($audioIndex -lt 0) { return $null }
+
+    $audioSetting = @{ Type = "copy"; Options = "-c:a copy"; Description = "音声をコピー (-c:a copy)" }
+    switch ($audioMenu[$audioIndex].Key) {
+        "copy" {
+            # デフォルト値を使用するため何もしない
+        }
+        "none" {
+            $audioSetting = @{ Type = "none"; Options = "-an"; Description = "音声なし (-an)" }
+        }
+        "qaac" {
+            $result = Select-QaacOptions; if (-not $result) { return $null }
+            $audioSetting = $result
+        }
+        "nero" {
+            $result = Select-NeroOptions; if (-not $result) { return $null }
+            $audioSetting = $result
+        }
+        "fdkaac" {
+            $result = Select-FdkaacOptions; if (-not $result) { return $null }
+            $audioSetting = $result
+        }
+        "opus" {
+            $result = Select-OpusOptions; if (-not $result) { return $null }
+            $audioSetting = $result
+        }
+        "vorbis" {
+            $vorbisChoices = @("高品質 (q:a 6)", "標準品質 (q:a 4)", "カスタム")
+            $vorbisIndex = Show-Menu -Title "Vorbisの品質を選択" -Choices $vorbisChoices
+            if ($vorbisIndex -lt 0) { return $null }
+            if ($vorbisIndex -eq 2) {
+                $qVal = Read-Host "品質値を入力 (-1 ~ 10)"
+                $audioSetting = @{ Type = "internal"; Options = "-c:a libvorbis -q:a $qVal"; Description = "Vorbis: カスタム品質 (q:a $qVal)" }
+            }
+            else {
+                $qOpt = @("-q:a 6", "-q:a 4")[$vorbisIndex]
+                $audioSetting = @{ Type = "internal"; Options = "-c:a libvorbis $qOpt"; Description = "Vorbis: $($vorbisChoices[$vorbisIndex])" }
+            }
+        }
+        "flac" {
+            $result = Select-FlacOptions; if (-not $result) { return $null }
+            $audioSetting = $result
+        }
+    }
+
     Clear-Host
     Write-Host "--- 最終確認 ---"
     Write-Host "映像: $videoSetting"
-    Write-Host "音声: 音声コピー"
+    Write-Host "音声: $($audioSetting.Description)"
     $confirm = Show-Menu -Title "この設定でよろしいですか？" -Choices @("はい", "いいえ、やり直します")
     if ($confirm -eq 1) { return Get-IntermediateSettings }
 
-    return @{ Video = $videoSetting; Audio = "-c:a copy"; AudioType = "copy" }
+    return @{ Video = $videoSetting; Audio = $audioSetting.Options; AudioType = $audioSetting.Type }
 }
 
 # --- スクリプトのエントリーポイント ---
