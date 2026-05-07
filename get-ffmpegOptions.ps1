@@ -245,7 +245,14 @@ function Get-EncoderSettings {
             if ($codecChoices.Count -eq 0) { Write-Host "利用可能なIntelコーデックがありません。" -ForegroundColor Red; return $null }
             $codecIndex = Show-Menu -Title "Intelコーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
             $baseEncoder = "-c:v $($codecMap[$codecIndex])"
-            $qPresets = [ordered]@{ "高品質 (GQ:20)" = "-global_quality 20"; "中品質 (GQ:25)" = "-global_quality 25"; "低品質 (GQ:30)" = "-global_quality 30"; "カスタム品質 (GQ)" = "-global_quality {val}"; "カスタムビットレート" = "-b:v {val}" }
+
+            # vp9_qsv は -global_quality が反映されない環境があるため、-q:v で品質を制御する
+            if ($codecMap[$codecIndex] -eq "vp9_qsv") {
+                $qPresets = [ordered]@{ "高品質 (Q:20)" = "-q:v 20"; "中品質 (Q:25)" = "-q:v 25"; "低品質 (Q:30)" = "-q:v 30"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
+            }
+            else {
+                $qPresets = [ordered]@{ "高品質 (GQ:20)" = "-global_quality 20"; "中品質 (GQ:25)" = "-global_quality 25"; "低品質 (GQ:30)" = "-global_quality 30"; "カスタム品質 (GQ)" = "-global_quality {val}"; "カスタムビットレート" = "-b:v {val}" }
+            }
             $pPresets = [ordered]@{ "veryslow (最高品質)" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "veryfast (最速)" = "-preset veryfast" }
             $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
         }

@@ -959,9 +959,20 @@ function Build-PlatformVideoOptions {
             $parts += "-tune hq"
         }
         "Intel" {
+            $isIntelVp9Qsv = ($encoder -eq "vp9_qsv")
             switch ($QualityMode) {
-                "CRF" { $parts += "-global_quality $QualityValue" }
-                "CRF+Maxrate" { $parts += "-global_quality $QualityValue -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k" }
+                "CRF" {
+                    if ($isIntelVp9Qsv) { $parts += "-q:v $QualityValue" }
+                    else { $parts += "-global_quality $QualityValue" }
+                }
+                "CRF+Maxrate" {
+                    if ($isIntelVp9Qsv) {
+                        $parts += "-q:v $QualityValue -b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
+                    }
+                    else {
+                        $parts += "-global_quality $QualityValue -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
+                    }
+                }
                 "Bitrate" { $parts += "-b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k" }
             }
             $parts += "-preset $Preset"
