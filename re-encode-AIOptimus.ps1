@@ -1230,6 +1230,20 @@ function Invoke-PlatformAutoSetup {
         return $null
     }
 
+    # --- 音声オーバーライド（簡易: 自動 / 無音 / コピー） ---
+    $audioOverrideChoices = @(
+        "自動 (推奨) - $($auto.AudioSetting.Description)",
+        "音声なし (-an)",
+        "音声をコピー (-c:a copy)"
+    )
+    $aIndex = Show-Menu -Title "おまかせモード: 音声設定を選択してください。" -Choices $audioOverrideChoices
+    if ($aIndex -lt 0) { return $null }
+    switch ($aIndex) {
+        0 { } # 自動のまま
+        1 { $auto.AudioSetting = @{ Type = "none"; Options = "-an"; Description = "音声なし (-an)" } }
+        2 { $auto.AudioSetting = @{ Type = "copy"; Options = "-c:a copy"; Description = "音声をコピー (-c:a copy)" } }
+    }
+
     # NoMaxrateが有効なプラットフォーム (GitHub Release等) はCRFのみでビットレート上限を設定しない
     $qualityMode = if ($PlatformConfig.NoMaxrate) { "CRF" } else { "CRF+Maxrate" }
     $videoOptions = Build-PlatformVideoOptions -HW $selectedHW -Codec $auto.Codec -QualityMode $qualityMode -QualityValue $auto.QualityValue -Preset $auto.Preset -MaxrateKbps 0
