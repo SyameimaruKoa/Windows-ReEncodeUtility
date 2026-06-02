@@ -87,7 +87,89 @@ if (-not (Test-Path $configFilePath)) {
     Read-Host "何かキーを押して終了"; exit 1
 }
 $global:Settings = Import-PowerShellDataFile -Path $configFilePath
-$global:Settings.TemplateDir = $global:ScriptDir
+$global:Settings.TemplateDir = Join-Path $global:ScriptDir 'Profiles'
+$global:AppCacheDir = Join-Path $global:ScriptDir '.cache'
+
+function Ensure-Directory {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        $null = New-Item -ItemType Directory -Path $Path -Force
+    }
+}
+
+Ensure-Directory -Path $global:Settings.TemplateDir
+Ensure-Directory -Path $global:AppCacheDir
+
+function Get-FfmpegSignature {
+    param([string]$FfmpegPath)
+    $resolvedPath = $FfmpegPath
+    try {
+        $command = Get-Command -Name $FfmpegPath -ErrorAction Stop
+        if ($command.Source) {
+            $resolvedPath = $command.Source
+        }
+        elseif ($command.Path) {
+            $resolvedPath = $command.Path
+        }
+    }
+    catch {}
+
+    $versionLine = ''
+    try {
+        $versionLine = (& $FfmpegPath -version 2>&1 | Select-Object -First 1).ToString()
+    }
+    catch {}
+
+    return "$resolvedPath|$versionLine"
+}
+
+function Get-HardwareCachePath {
+    return (Join-Path $global:AppCacheDir 'hardware-scan-cache.clixml')
+}
+
+function Load-HardwareCache {
+    $cachePath = Get-HardwareCachePath
+    if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) { return $null }
+    try {
+        $cached = Import-Clixml -LiteralPath $cachePath
+    }
+    catch {
+        return $null
+    }
+
+    if (-not $cached -or $cached.SchemaVersion -ne 1) { return $null }
+    if ($cached.MachineName -ne $env:COMPUTERNAME) { return $null }
+    if ($cached.FfmpegSignature -ne (Get-FfmpegSignature -FfmpegPath $global:Settings.FfmpegPath)) { return $null }
+    if (-not $cached.ScanCompleted) { return $null }
+    return $cached
+}
+
+function Save-HardwareCache {
+    param([object]$HardwareInfo)
+    $cachePath = Get-HardwareCachePath
+    Ensure-Directory -Path $global:AppCacheDir
+    $cacheObject = [pscustomobject]@{
+        SchemaVersion     = 1
+        MachineName       = $env:COMPUTERNAME
+        SavedAt           = Get-Date
+        FfmpegSignature   = Get-FfmpegSignature -FfmpegPath $global:Settings.FfmpegPath
+        AvailableEncoders = @($HardwareInfo.AvailableEncoders)
+        AvailableHwAccels = @($HardwareInfo.AvailableHwAccels)
+        HasNvidia         = [bool]$HardwareInfo.HasNvidia
+        HasIntel          = [bool]$HardwareInfo.HasIntel
+        HasAMD            = [bool]$HardwareInfo.HasAMD
+        ScanCompleted     = [bool]$HardwareInfo.ScanCompleted
+    }
+
+    try {
+        $cacheObject | Export-Clixml -LiteralPath $cachePath -Force
+        return $true
+    }
+    catch {
+        Write-Log "ハードウェアスキャン結果のキャッシュ保存に失敗しました: $_" -Level "WARN"
+        return $false
+    }
+}
 
 # --- 依存スクリプトの確認 ---
 $optionsScriptPath = Join-Path $global:ScriptDir "get-ffmpegOptions.ps1"
@@ -636,13 +718,25 @@ function Get-AvailableHardware {
         テストエンコード/デコードを実行してハードウェア・コーデックの実対応状況を検出する。
         各エンコーダーで実際にテストエンコードし、成功したもののみ有効とする。
         結果はグローバル変数にキャッシュされ、2回目以降は即座に返される。
-    #>
+                $audioSummaries += "音声        : $($s.codec_long_name) ($($s.codec_name)), $($s.sample_rate) Hz, $($s.channel_layout), $abr"
     if ($global:HardwareInfo) { return $global:HardwareInfo }
 
+        foreach ($audioGroup in ($audioSummaries | Group-Object)) {
+            $suffix = if ($audioGroup.Count -gt 1) { " x$($audioGroup.Count)" } else { "" }
+            $lines += "$($audioGroup.Name)$suffix"
+        }
     $info = @{
         AvailableEncoders = @()
         AvailableHwAccels = @()
         HasNvidia         = $false
+            if ($global:HardwareInfo) { return $global:HardwareInfo }
+
+            $cachedInfo = Load-HardwareCache
+            if ($cachedInfo) {
+                $global:HardwareInfo = $cachedInfo
+                Write-Log "ハードウェアスキャン結果をキャッシュから読み込みました。" -Level "DEBUG"
+                return $global:HardwareInfo
+            }
         HasIntel          = $false
         HasAMD            = $false
         ScanCompleted     = $false
@@ -712,6 +806,11 @@ function Get-AvailableHardware {
     }
     catch {
         Write-Log "ハードウェアスキャンに失敗しました: $_" -Level "WARN"
+    }
+
+    $global:HardwareInfo = $info
+    if ($info.ScanCompleted) {
+        $null = Save-HardwareCache -HardwareInfo $info
     }
 
     $global:HardwareInfo = $info

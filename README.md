@@ -426,10 +426,10 @@ HW アクセルでエラー発生
 }
 ```
 
-### テンプレートファイル（template/*.psd1）
+### テンプレートファイル（Profiles/*.psd1）
 
 ```powershell
-# テンプレート例：templates/Twitter.psd1
+# テンプレート例：Profiles/Twitter.psd1
 
 @{
     HWEncoder       = "NVIDIA"         # NVIDIA / Intel / AMD / CPU
@@ -453,7 +453,7 @@ HW アクセルでエラー発生
 ├── config.user.psd1             # 環境設定ファイル（要編集）
 ├── README.md                     # このファイル
 ├── IMPLEMENTATION_HISTORY.md     # 実装变遷記録
-└── templates/                    # テンプレート保存先（自動生成）
+└── Profiles/                     # テンプレート保存先
     ├── Twitter.psd1
     ├── Discord.psd1
     └── ...
@@ -510,7 +510,7 @@ QaacPath = "C:\path\to\qaac64.exe"
 
 ### Q6. テンプレートを作成したい
 
-**A:** メニューで設定後、テンプレート保存オプションで保存。templates/ フォルダに自動生成されます。
+**A:** メニューで設定後、テンプレート保存オプションで保存。Profiles/ フォルダに自動生成されます。
 
 ### Q7. 2-Pass エンコードを使いたい
 
