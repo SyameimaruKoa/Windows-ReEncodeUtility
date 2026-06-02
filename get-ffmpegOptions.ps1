@@ -248,7 +248,7 @@ function Get-EncoderSettings {
 
             # vp9_qsv は -global_quality が反映されない環境があるため、-q:v で品質を制御する
             if ($codecMap[$codecIndex] -eq "vp9_qsv") {
-                $qPresets = [ordered]@{ "高品質 (Q:20)" = "-q:v 20"; "中品質 (Q:25)" = "-q:v 25"; "低品質 (Q:30)" = "-q:v 30"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
+                $qPresets = [ordered]@{ "高品質 (Q:25)" = "-q:v 25"; "中品質 (Q:30)" = "-q:v 30"; "低品質 (Q:40)" = "-q:v 40"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
             }
             else {
                 $qPresets = [ordered]@{ "高品質 (GQ:20)" = "-global_quality 20"; "中品質 (GQ:25)" = "-global_quality 25"; "低品質 (GQ:30)" = "-global_quality 30"; "カスタム品質 (GQ)" = "-global_quality {val}"; "カスタムビットレート" = "-b:v {val}" }
