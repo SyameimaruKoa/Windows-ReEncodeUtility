@@ -131,7 +131,7 @@ function Load-HardwareCache {
     $cachePath = Get-HardwareCachePath
     if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) { return $null }
     try {
-        $cached = Import-Clixml -LiteralPath $cachePath
+        $cached = Import-Clixml -Path $cachePath
     }
     catch {
         return $null
@@ -162,7 +162,7 @@ function Save-HardwareCache {
     }
 
     try {
-        $cacheObject | Export-Clixml -LiteralPath $cachePath -Force
+        $cacheObject | Export-Clixml -Path $cachePath -Force
         return $true
     }
     catch {
@@ -718,30 +718,26 @@ function Get-AvailableHardware {
         テストエンコード/デコードを実行してハードウェア・コーデックの実対応状況を検出する。
         各エンコーダーで実際にテストエンコードし、成功したもののみ有効とする。
         結果はグローバル変数にキャッシュされ、2回目以降は即座に返される。
-                $audioSummaries += "音声        : $($s.codec_long_name) ($($s.codec_name)), $($s.sample_rate) Hz, $($s.channel_layout), $abr"
+        結果はグローバル変数にキャッシュされ、2回目以降は即座に返される。
+    #>
     if ($global:HardwareInfo) { return $global:HardwareInfo }
 
-        foreach ($audioGroup in ($audioSummaries | Group-Object)) {
-            $suffix = if ($audioGroup.Count -gt 1) { " x$($audioGroup.Count)" } else { "" }
-            $lines += "$($audioGroup.Name)$suffix"
-        }
+    $cachedInfo = Load-HardwareCache
+    if ($cachedInfo) {
+        $global:HardwareInfo = $cachedInfo
+        Write-Log "ハードウェアスキャン結果をキャッシュから読み込みました。" -Level "DEBUG"
+        return $global:HardwareInfo
+    }
+
     $info = @{
         AvailableEncoders = @()
         AvailableHwAccels = @()
         HasNvidia         = $false
-            if ($global:HardwareInfo) { return $global:HardwareInfo }
-
-            $cachedInfo = Load-HardwareCache
-            if ($cachedInfo) {
-                $global:HardwareInfo = $cachedInfo
-                Write-Log "ハードウェアスキャン結果をキャッシュから読み込みました。" -Level "DEBUG"
-                return $global:HardwareInfo
-            }
         HasIntel          = $false
         HasAMD            = $false
         ScanCompleted     = $false
     }
-    
+
     try {
         $ffmpegPath = $global:Settings.FfmpegPath
 
@@ -771,11 +767,9 @@ function Get-AvailableHardware {
         try {
             $null = & $ffmpegPath -hide_banner -y -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 5 -pix_fmt yuv420p -c:v libx264 -preset ultrafast "$testClipPath" 2>&1
             if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $testClipPath)) {
-                
                 $hwaccelList = @('cuda', 'qsv', 'amf', 'd3d11va', 'dxva2', 'vulkan')
                 foreach ($accel in $hwaccelList) {
                     try {
-                        # -hwaccel を指定して実際にデコードテストを行う。
                         $testOut = & $ffmpegPath -hide_banner -hwaccel $accel -i "$testClipPath" -frames:v 1 -f null - 2>&1
                         if ($LASTEXITCODE -eq 0) {
                             $hasInitError = ($testOut | Out-String) -match 'Failed setup|initialisation returned error|Device does not support|No device available|Hardware device setup failed|Error creating a MFX session'
@@ -813,7 +807,6 @@ function Get-AvailableHardware {
         $null = Save-HardwareCache -HardwareInfo $info
     }
 
-    $global:HardwareInfo = $info
     return $info
 }
 
