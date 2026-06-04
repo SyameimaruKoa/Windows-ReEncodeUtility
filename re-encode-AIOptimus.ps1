@@ -738,6 +738,17 @@ function Get-EffectiveHwAccelOption {
 
     return $result
 }
+# helper: set or replace -hwaccel_output_format in an arg string
+function Set-HwAccelOutputFormat {
+    param(
+        [string]$ArgString,
+        [string]$Format
+    )
+    if (-not $ArgString) { return "" }
+    $res = $ArgString -replace '\s*-hwaccel_output_format\s+\S+', ''
+    if ($Format) { $res = "$res -hwaccel_output_format $Format" }
+    return ($res -replace '\s{2,}', ' ').Trim()
+}
 #endregion
 
 #region ハードウェア検出・コーデックフィルタ
@@ -1797,15 +1808,27 @@ function Start-MainProcess {
         # d3d11va (AMD等) 使用時は出力フォーマットd3d11でGPUメモリ上に保持する
         # ※ソフトウェアフィルターやCPUエンコーダー使用時は hwdownload が自動挿入される
         if ($selectedHwAccel -eq "d3d11va") {
-            $hwAccelOption += " -hwaccel_output_format d3d11"
+            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'd3d11'
         }
         # NVIDIA cuda 使用時も出力フォーマットcudaでGPUメモリ上に保持する
         if ($selectedHwAccel -eq "cuda") {
-            $hwAccelOption += " -hwaccel_output_format cuda"
+            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'cuda'
+        }
+        # Intel QSV は qsv フォーマットを指定
+        if ($selectedHwAccel -eq "qsv") {
+            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'qsv'
+        }
+        # DXVA2 の場合は dxva2 を指定
+        if ($selectedHwAccel -eq "dxva2") {
+            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'dxva2'
+        }
+        # AMD/AMF は d3d11 出力を使うのが一般的
+        if ($selectedHwAccel -eq "amf") {
+            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'd3d11'
         }
         # Vulkan 使用時は出力フォーマットvulkanでGPUメモリ上に保持する
         if ($selectedHwAccel -eq "vulkan") {
-            $hwAccelOption += " -hwaccel_output_format vulkan"
+            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'vulkan'
         }
     }
 
@@ -2128,7 +2151,7 @@ function Invoke-SplitEncodeFile {
             $ffmpegArgsList += $Config.EncoderSettings.Video.Split(' ', $splitOptions)
 
             # --- HWデコード (d3d11/cuda/vulkan) 使用時のフィルター互換性処理 ---
-            $needsHwDownload = $effectiveHwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan)'
+            $needsHwDownload = $effectiveHwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan|qsv|dxva2)'
             $isVulkanDecode = $effectiveHwAccelOption -match '-hwaccel\s+vulkan'
             $isHwEncoder = $Config.EncoderSettings.Video -match '-c:v\s+\S+_(amf|nvenc|qsv)'
             if ($needsHwDownload -and ($isVulkanDecode -or -not $isHwEncoder)) {
@@ -2372,7 +2395,7 @@ function Invoke-EncodeFile {
             if ($cutInfo) { $pass1ArgsList += @("-ss", "0") }
             $pass1ArgsList += $pass1VideoOptions.Split(' ', $splitOptions)
 
-            $pass1NeedsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan)'
+            $pass1NeedsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan|qsv|dxva2)'
             $pass1IsVulkanDecode = $HwAccelOption -match '-hwaccel\s+vulkan'
             $pass1IsHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv)'
             $pass1ResolvedVF = $Config.AdditionalVF
@@ -2427,7 +2450,7 @@ function Invoke-EncodeFile {
         # --- HWデコード (d3d11/cuda/vulkan) 使用時のフィルター互換性処理 ---
         # d3d11/cuda/vulkan出力フォーマット使用時、ソフトウェアフィルターやCPUエンコーダーのために
         # hwdownload,format=nv12 を自動挿入してGPU→CPU転送を行う
-        $needsHwDownload = $effectiveHwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan)'
+        $needsHwDownload = $effectiveHwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan|qsv|dxva2)'
         $isVulkanDecode = $effectiveHwAccelOption -match '-hwaccel\s+vulkan'
         $isHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv)'
         $resolvedVF = $Config.AdditionalVF
