@@ -709,6 +709,35 @@ function Remove-HwAccelFromArgs {
     $result = $result -replace '(-vf\s+")hwdownload,format=nv12,', '$1'
     return ($result -replace '\s{2,}', ' ').Trim()
 }
+
+function Get-EffectiveHwAccelOption {
+    <#
+    .SYNOPSIS
+        HWデコード設定に対して、同系統のHWエンコーダー時のみ extra_hw_frames を抑制する。
+    #>
+    param(
+        [string]$HwAccelOption,
+        [string]$VideoOptions
+    )
+
+    if (-not $HwAccelOption) { return "" }
+
+    $result = $HwAccelOption
+    if ($result -notmatch '-extra_hw_frames\b') {
+        $isCudaDecode = $result -match '-hwaccel\s+cuda\b'
+        $isQsvDecode = $result -match '-hwaccel\s+qsv\b'
+        $isNvencEncode = $VideoOptions -match '-c:v\s+\S+_nvenc\b'
+        $isQsvEncode = $VideoOptions -match '-c:v\s+\S+_qsv\b'
+
+        # 同じGPU系の入出力なら、初回から extra_hw_frames を付けず、必要時のみ再試行に回す
+        $shouldSkipExtraFrames = ($isCudaDecode -and $isNvencEncode) -or ($isQsvDecode -and $isQsvEncode)
+        if (-not $shouldSkipExtraFrames) {
+            $result += " -extra_hw_frames 64"
+        }
+    }
+
+    return $result
+}
 #endregion
 
 #region ハードウェア検出・コーデックフィルタ
@@ -1778,9 +1807,6 @@ function Start-MainProcess {
         if ($selectedHwAccel -eq "vulkan") {
             $hwAccelOption += " -hwaccel_output_format vulkan"
         }
-        # HWデコード使用時はサーフェスプール不足を防ぐため extra_hw_frames を追加
-        # デフォルトのプールサイズ(33)では60fps等の高フレームレート映像で不足するため64に拡張
-        $hwAccelOption += " -extra_hw_frames 64"
     }
 
     # --- 実行モード選択 ---
@@ -2085,8 +2111,9 @@ function Invoke-SplitEncodeFile {
             }
 
             # --- 映像エンコードと結合 ---
+            $effectiveHwAccelOption = Get-EffectiveHwAccelOption -HwAccelOption $HwAccelOption -VideoOptions $Config.EncoderSettings.Video
             $ffmpegArgsList = @("-hide_banner", "-y")
-            if ($HwAccelOption) { $ffmpegArgsList += $HwAccelOption.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) }
+            if ($effectiveHwAccelOption) { $ffmpegArgsList += $effectiveHwAccelOption.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) }
             
             $ffmpegArgsList += @("-ss", "$($seg.Start)", "-to", "$($seg.End)")
             $ffmpegArgsList += @("-i", "`"$InputFile`"")
@@ -2101,8 +2128,8 @@ function Invoke-SplitEncodeFile {
             $ffmpegArgsList += $Config.EncoderSettings.Video.Split(' ', $splitOptions)
 
             # --- HWデコード (d3d11/cuda/vulkan) 使用時のフィルター互換性処理 ---
-            $needsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan)'
-            $isVulkanDecode = $HwAccelOption -match '-hwaccel\s+vulkan'
+            $needsHwDownload = $effectiveHwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan)'
+            $isVulkanDecode = $effectiveHwAccelOption -match '-hwaccel\s+vulkan'
             $isHwEncoder = $Config.EncoderSettings.Video -match '-c:v\s+\S+_(amf|nvenc|qsv)'
             if ($needsHwDownload -and ($isVulkanDecode -or -not $isHwEncoder)) {
                 $ffmpegArgsList += @("-vf", "`"hwdownload,format=nv12`"")
@@ -2122,7 +2149,7 @@ function Invoke-SplitEncodeFile {
             $result = Invoke-FfmpegEncode -Arguments $finalArgString -DurationSeconds $segDuration
 
             # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
-            if ($result.ExitCode -ne 0 -and $HwAccelOption -and (Test-HwAccelRelatedFailure $result.StdErr)) {
+            if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -and (Test-HwAccelRelatedFailure $result.StdErr)) {
                 Write-Log "HWアクセル関連エラーを検出。HWアクセルなしでリトライします。(セグメント: $outputFileName)" -Level "WARN"
                 $HwAccelOption = ""
                 $retryArgs = Remove-HwAccelFromArgs $finalArgString
@@ -2193,6 +2220,8 @@ function Invoke-EncodeFile {
             $result = Invoke-ExternalProcess -FilePath $global:Settings.FfmpegPath -Arguments $metaArgs -Label "ffmetadataを作成中..."
             if ($result.ExitCode -eq 0) { $useFfmpegMetadata = $true } else { Write-Log "ffmetadataの作成に失敗しました。" -Level "WARN" }
         }
+
+        $effectiveHwAccelOption = Get-EffectiveHwAccelOption -HwAccelOption $HwAccelOption -VideoOptions $Config.EncoderSettings.Video
 
         if ($Config.Cut -eq "Yes") {
             Write-Log "LosslessCutを起動します..."; Start-Process $global:Settings.LosslessCutPath -ArgumentList "`"$InputFile`""
@@ -2386,7 +2415,7 @@ function Invoke-EncodeFile {
             # DASH入力はタイムスタンプ欠落/逆行が発生しやすいためPTS生成を有効化
             $ffmpegArgsList += @("-fflags", "+genpts")
         }
-        if ($HwAccelOption) { $ffmpegArgsList += $HwAccelOption.Split(' ', $splitOptions) }
+        if ($effectiveHwAccelOption) { $ffmpegArgsList += $effectiveHwAccelOption.Split(' ', $splitOptions) }
         $ffmpegArgsList += $cutInfo.Split(' ', $splitOptions)
         $ffmpegArgsList += @("-i", "`"$InputFile`"")
 
@@ -2398,8 +2427,8 @@ function Invoke-EncodeFile {
         # --- HWデコード (d3d11/cuda/vulkan) 使用時のフィルター互換性処理 ---
         # d3d11/cuda/vulkan出力フォーマット使用時、ソフトウェアフィルターやCPUエンコーダーのために
         # hwdownload,format=nv12 を自動挿入してGPU→CPU転送を行う
-        $needsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan)'
-        $isVulkanDecode = $HwAccelOption -match '-hwaccel\s+vulkan'
+        $needsHwDownload = $effectiveHwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan)'
+        $isVulkanDecode = $effectiveHwAccelOption -match '-hwaccel\s+vulkan'
         $isHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv)'
         $resolvedVF = $Config.AdditionalVF
 
@@ -2433,7 +2462,7 @@ function Invoke-EncodeFile {
         $result = Invoke-FfmpegEncode -Arguments $finalArgString -DurationSeconds $inputDuration
 
         # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
-        if ($result.ExitCode -ne 0 -and $HwAccelOption -and (Test-HwAccelRelatedFailure $result.StdErr)) {
+        if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -and (Test-HwAccelRelatedFailure $result.StdErr)) {
             Write-Log "HWアクセル関連エラーを検出。HWアクセルなしでリトライします。" -Level "WARN"
             $HwAccelOption = ""
             $retryArgs = Remove-HwAccelFromArgs $finalArgString
