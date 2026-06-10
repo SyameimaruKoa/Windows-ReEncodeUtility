@@ -6,7 +6,7 @@
     メイン録画のハードウェア（Intel/NVIDIA/AMD）を自動検知し、
     プレビューも同じハードウェアエンコーダー（mjpeg_qsv等）にオフロードしてCPU負荷を極限まで下げる最終形態じゃ！
 .EXAMPLE
-    .\Record-MiraBox-Stable.ps1
+    .\Record-MiraBox-RawPreview.ps1
 #>
 param([switch]$h, [switch]$help)
 if ($h -or $help) { Get-Help $MyInvocation.MyCommand.Path -Detailed; exit }
@@ -106,7 +106,9 @@ switch ($saveIndex) {
 #region エンコードオプションの取得
 $optionsScriptPath = Join-Path $global:ScriptDir "get-ffmpegOptions.ps1"
 if (-not (Test-Path $optionsScriptPath)) { exit 1 }
-$encoderSettings = . $optionsScriptPath
+
+# 録画スクリプトからはハードウェアスキャンを「任意」で呼び出すのじゃ！
+$encoderSettings = . $optionsScriptPath -HwScanMode Optional
 if (-not $encoderSettings) { exit 0 }
 #endregion
 

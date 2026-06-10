@@ -4,16 +4,50 @@
 .DESCRIPTION
     映像コーデック（H.264/5, AV1, VP9/8）と音声コーデック（AAC, Opus, Vorbis, FLAC等）を
     ハードウェアや品質に応じて選択し、設定結果を呼び出し元のスクリプトに返すぞ。
+    スキャン情報がない場合は、すべての選択肢を出すようにフォールバックするのじゃ。
 .PARAMETER Intermediate
     このスイッチを指定すると、編集用の中間ファイルを作成するための専用メニューが表示される。
+.PARAMETER HwScanMode
+    ハードウェアスキャンの挙動を選択するぞ。
+    On: 必ずスキャンする
+    Optional: スキャンするかどうかユーザーに選ばせる (デフォルト)
+    Off: スキャンしない (全エンコーダーを強制表示)
 .OUTPUTS
     System.Collections.Hashtable
     選択された映像・音声のエンコード設定を含むハッシュテーブルを返す。
 #>
 [CmdletBinding()]
 param (
-    [switch]$Intermediate
+    [switch]$Intermediate,
+    [ValidateSet("On", "Optional", "Off")]
+    [string]$HwScanMode = "Optional"
 )
+
+#region ヘルプ表示
+if ($args -contains "-h" -or $args -contains "--help") {
+    Get-Help $MyInvocation.MyCommand.Path -Detailed
+    exit
+}
+#endregion
+
+# --- ハードウェアスキャンの実行 ---
+if ($HwScanMode -ne "Off") {
+    $hwScriptPath = Join-Path $PSScriptRoot "Get-HardwareInfo.ps1"
+    if (Test-Path $hwScriptPath) {
+        if ($HwScanMode -eq "Optional") {
+            # Show-Menu がまだない可能性があるため簡易表示
+            Write-Host "ハードウェアスキャンを行いますか？`n(正確な利用可能コーデックが分かりますが、少し時間がかかります)"
+            Write-Host " [Y] はい (スキャンする)  [N] いいえ (スキャンせずに全ての選択肢を表示する)"
+            $choice = Read-Host "選択"
+            if ($choice -match "^[Yy]") {
+                $null = . $hwScriptPath
+            }
+        }
+        else {
+            $null = . $hwScriptPath
+        }
+    }
+}
 
 # --- 対話メニュー関数 ---
 # グローバルスコープに Show-Menu が定義されていない場合のみローカルで定義する
@@ -112,6 +146,8 @@ function Select-FlacOptions {
 
 # --- メイン処理 ---
 function Get-EncoderSettings {
+    $hwInfo = $global:HardwareInfo
+
     # --- 1. 音声コーデック選択 (利用可能なもののみ表示) ---
     $audioMenuTitle = "--- 音声エンコード設定 ---"
 
@@ -138,14 +174,20 @@ function Get-EncoderSettings {
     $audioMenu += @{ Key = "vorbis"; Label = "Vorbis (libvorbis)" }
     $audioMenu += @{ Key = "flac"; Label = "FLAC (flac)" }
 
-    # ハードウェア/API 音声エンコーダーの追加
-    $hwInfo = $global:HardwareInfo
+    # ハードウェア/API 音声エンコーダーの追加（フォールバック付き）
     if ($hwInfo -and $hwInfo.AvailableEncoders) {
         foreach ($enc in $hwInfo.AvailableEncoders) {
             if ($enc -match "^(aac|ac3|mp3|flac|opus|vorbis)_(mf|amf|nvenc|qsv|d3d12va|vulkan)$") {
                 $audioMenu += @{ Key = $enc; Label = "$enc (ハードウェア/OS API)" }
             }
         }
+    }
+    else {
+        # スキャン情報がない場合は代表的なものをすべて表示するのじゃ！
+        $audioMenu += @{ Key = "aac_mf"; Label = "aac_mf (MediaFoundation)" }
+        $audioMenu += @{ Key = "ac3_mf"; Label = "ac3_mf (MediaFoundation)" }
+        $audioMenu += @{ Key = "mp3_mf"; Label = "mp3_mf (MediaFoundation)" }
+        $audioMenu += @{ Key = "aac_amf"; Label = "aac_amf (AMD AMF)" }
     }
 
     $audioChoices = @($audioMenu | ForEach-Object { $_.Label })
@@ -214,7 +256,7 @@ function Get-EncoderSettings {
         }
     }
 
-    # --- 2. 映像ハードウェア選択 (対応HWのみ表示) ---
+    # --- 2. 映像ハードウェア選択 (対応HWのみ表示/情報がなければすべて) ---
     $hwMenuTitle = "--- 映像エンコードに使用するハードウェア ---"
     $allHwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "Vulkan", "D3D12VA", "MediaFoundation (MF)", "CPU (Software)")
     $allHwKeys = @("NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF", "CPU")
@@ -262,6 +304,35 @@ function Get-EncoderSettings {
                     
                     $codecChoices += $codecName
                     $codecMap += $enc
+                }
+            }
+        }
+        else {
+            # スキャン情報がない場合のフォールバックじゃ！
+            switch ($selectedHW) {
+                "NVIDIA" {
+                    $codecChoices = @("H.264/AVC", "H.265/HEVC", "AV1")
+                    $codecMap = @("h264_nvenc", "hevc_nvenc", "av1_nvenc")
+                }
+                "Intel" {
+                    $codecChoices = @("H.264/AVC", "H.265/HEVC", "VP9", "AV1", "MJPEG")
+                    $codecMap = @("h264_qsv", "hevc_qsv", "vp9_qsv", "av1_qsv", "mjpeg_qsv")
+                }
+                "AMD" {
+                    $codecChoices = @("H.264/AVC", "H.265/HEVC", "AV1")
+                    $codecMap = @("h264_amf", "hevc_amf", "av1_amf")
+                }
+                "Vulkan" {
+                    $codecChoices = @("H.264/AVC", "H.265/HEVC", "AV1")
+                    $codecMap = @("h264_vulkan", "hevc_vulkan", "av1_vulkan")
+                }
+                "D3D12VA" {
+                    $codecChoices = @("H.264/AVC", "H.265/HEVC", "AV1")
+                    $codecMap = @("h264_d3d12va", "hevc_d3d12va", "av1_d3d12va")
+                }
+                "MF" {
+                    $codecChoices = @("H.264/AVC", "H.265/HEVC", "AV1")
+                    $codecMap = @("h264_mf", "hevc_mf", "av1_mf")
                 }
             }
         }
@@ -362,6 +433,8 @@ function Get-EncoderSettings {
 }
 
 function Get-IntermediateSettings {
+    $hwInfo = $global:HardwareInfo
+
     # --- 1. コーデック選択 ---
     $codecChoices = @("H.265/HEVC (libx265)", "H.264/AVC (libx264)"); $codecMap = @("-c:v libx265", "-c:v libx264")
     $codecIndex = Show-Menu -Title "中間ファイル用コーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
@@ -409,13 +482,16 @@ function Get-IntermediateSettings {
     $audioMenu += @{ Key = "vorbis"; Label = "Vorbis (libvorbis)" }
     $audioMenu += @{ Key = "flac"; Label = "FLAC (flac)" }
 
-    $hwInfo = $global:HardwareInfo
     if ($hwInfo -and $hwInfo.AvailableEncoders) {
         foreach ($enc in $hwInfo.AvailableEncoders) {
             if ($enc -match "^(aac|ac3|mp3|flac|opus|vorbis)_(mf|amf|nvenc|qsv|d3d12va|vulkan)$") {
                 $audioMenu += @{ Key = $enc; Label = "$enc (ハードウェア/OS API)" }
             }
         }
+    }
+    else {
+        $audioMenu += @{ Key = "aac_mf"; Label = "aac_mf (MediaFoundation)" }
+        $audioMenu += @{ Key = "ac3_mf"; Label = "ac3_mf (MediaFoundation)" }
     }
 
     $audioChoices = @($audioMenu | ForEach-Object { $_.Label })
