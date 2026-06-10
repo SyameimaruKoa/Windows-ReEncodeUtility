@@ -1136,10 +1136,25 @@ function Build-PlatformVideoOptions {
             }
             $parts += "-quality $Preset"
         }
-        "Vulkan", "D3D12VA", "MF" {
+        "Vulkan" {
             switch ($QualityMode) {
                 "CRF" { $parts += "-b:v 8000k" } # 固有の品質指定が不確定なため固定ビットレート等で代替
-                "CRF+Maxrate", "Bitrate" { $parts += "-b:v ${MaxrateKbps}k" }
+                "CRF+Maxrate" { $parts += "-b:v ${MaxrateKbps}k" }
+                "Bitrate" { $parts += "-b:v ${MaxrateKbps}k" }
+            }
+        }
+        "D3D12VA" {
+            switch ($QualityMode) {
+                "CRF" { $parts += "-b:v 8000k" } # 固有の品質指定が不確定なため固定ビットレート等で代替
+                "CRF+Maxrate" { $parts += "-b:v ${MaxrateKbps}k" }
+                "Bitrate" { $parts += "-b:v ${MaxrateKbps}k" }
+            }
+        }
+        "MF" {
+            switch ($QualityMode) {
+                "CRF" { $parts += "-b:v 8000k" } # 固有の品質指定が不確定なため固定ビットレート等で代替
+                "CRF+Maxrate" { $parts += "-b:v ${MaxrateKbps}k" }
+                "Bitrate" { $parts += "-b:v ${MaxrateKbps}k" }
             }
         }
         "CPU" {
@@ -1219,19 +1234,32 @@ function Get-PlatformAutoSettings {
     if (-not $codec) { return $null }
 
     # --- 品質値 (CRF/CQ/QP) --- maxrateが容量制限するため高品質ベースラインを使用
-    $qualityValue = switch ($codec) { "H.264" { 18 }; "H.265" { 22 }; "VP9" { 25 }; "AV1" { 23 } }
+    $qualityValue = switch ($codec) { 
+        "H.264" { 18 } 
+        "H.265" { 22 } 
+        "VP9" { 25 } 
+        "AV1" { 23 } 
+    }
 
     # --- プリセット --- バランス型
     $preset = switch ($HW) {
-        "NVIDIA" { "p4" }; "Intel" { "medium" }; "AMD" { "balanced" }
-        "Vulkan", "D3D12VA", "MF" { "" }
+        "NVIDIA" { "p4" }
+        "Intel" { "medium" }
+        "AMD" { "balanced" }
+        "Vulkan" { "" }
+        "D3D12VA" { "" }
+        "MF" { "" }
         "CPU" { if ($codec -match "VP|AV1") { "4" } else { "medium" } }
     }
 
     # --- コンテナ --- (音声判定で必要なため先に決定)
     $extension = $PlatformConfig.Extension
     if (-not $extension) {
-        $extension = switch ($codec) { "VP9" { "webm" }; "AV1" { "webm" }; default { "mp4" } }
+        $extension = switch ($codec) { 
+            "VP9" { "webm" } 
+            "AV1" { "webm" } 
+            default { "mp4" } 
+        }
     }
 
     # --- 音声 --- MP4コンテナ時の優先度: qaac > fdkaac > NeroAAC > ffmpeg内蔵AAC / WebM時: Opus
@@ -1562,7 +1590,9 @@ function Invoke-PlatformDetailedSetup {
     # --- 4. 品質値 (CRF) は容量に収まる範囲で最大品質を自動設定 ---
     # maxrateが容量制限を保証するため、CRFは高品質ベースラインを使用
     $qualityValue = switch ($selectedCodec) {
-        "H.264" { 18 }; "H.265" { 22 }; "VP9" { 25 }
+        "H.264" { 18 }
+        "H.265" { 22 }
+        "VP9" { 25 }
         "AV1" { if ($specificEncoder -eq "rav1e") { 100 } else { 23 } }
     }
 
@@ -1590,9 +1620,9 @@ function Invoke-PlatformDetailedSetup {
             if ($pIndex -lt 0) { return $null }
             $presetValue = $presetMap[$pIndex]
         }
-        "Vulkan", "D3D12VA", "MF" {
-            $presetValue = ""
-        }
+        "Vulkan" { $presetValue = "" }
+        "D3D12VA" { $presetValue = "" }
+        "MF" { $presetValue = "" }
         "CPU" {
             if ($selectedCodec -eq "AV1" -and $specificEncoder -eq "libaom-av1") {
                 $presetChoices = @("0 (最高品質 / 極めて遅い)", "1 (高品質 / 非常に遅い)", "2 (高品質寄り / 遅い)", "3 (バランス型)", "4 (標準)", "6 (速い)", "8 (最速 / 品質低下)")
@@ -1666,7 +1696,7 @@ function Invoke-PlatformDetailedSetup {
                     else {
                         $brVal = $brChoices[$brIndex]
                     }
-                    $audioSetting = @{ Type = "internal"; Options = "-c:a $selectedAudioKey -b:a $brVal"; Description = "$selectedAudioKey: $brVal" }
+                    $audioSetting = @{ Type = "internal"; Options = "-c:a $selectedAudioKey -b:a $brVal"; Description = "$($selectedAudioKey): $brVal" }
                 }
             }
         }
@@ -1717,7 +1747,7 @@ function Invoke-PlatformDetailedSetup {
                     else {
                         $brVal = $brChoices[$brIndex]
                     }
-                    $audioSetting = @{ Type = "internal"; Options = "-c:a $selectedAudioKey -b:a $brVal"; Description = "$selectedAudioKey: $brVal" }
+                    $audioSetting = @{ Type = "internal"; Options = "-c:a $selectedAudioKey -b:a $brVal"; Description = "$($selectedAudioKey): $brVal" }
                 }
             }
         }
@@ -2239,7 +2269,7 @@ function Invoke-SplitEncodeFile {
             }
 
             if ($tempAudioOutFile) {
-                $ffmpegArgsList += @("-map", "0:v:0", "-map", "1:a:0", "-c:a", "copy")
+                $ffmpegArgsList += @("-map", "0:v:0", "-map", "$($audioInputIndex):a:0", "-c:a", "copy")
             }
             else {
                 $ffmpegArgsList += $audioOptions.Split(' ', $splitOptions)
@@ -2554,8 +2584,11 @@ function Invoke-EncodeFile {
         $inputCount = 1; $audioInputIndex = 0; $metadataInputIndex = 0
         if ($tempAudioOutFile) { $audioInputIndex = $inputCount; $inputCount++ }
         if ($useFfmpegMetadata) { $metadataInputIndex = $inputCount }
-        if ($tempAudioOutFile) { $ffmpegArgsList += @("-map", "0:v:0", "-map", "${audioInputIndex}:a:0", "-c:a", "copy") }
+        
+        # !!ここでエラーが出ないように明示的に展開!!
+        if ($tempAudioOutFile) { $ffmpegArgsList += @("-map", "0:v:0", "-map", "$($audioInputIndex):a:0", "-c:a", "copy") }
         else { $ffmpegArgsList += $audioOptions.Split(' ', $splitOptions) }
+        
         if ($useFfmpegMetadata) { $ffmpegArgsList += @("-map_metadata", "$metadataInputIndex") }
         $ffmpegArgsList += "`"$outputFile`""
         $finalArgString = $ffmpegArgsList -join ' '

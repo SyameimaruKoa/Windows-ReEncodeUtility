@@ -209,7 +209,7 @@ function Get-EncoderSettings {
                 else {
                     $brVal = $brChoices[$brIndex]
                 }
-                $audioSetting = @{ Type = "internal"; Options = "-c:a $selectedAudioKey -b:a $brVal"; Description = "$selectedAudioKey: $brVal" }
+                $audioSetting = @{ Type = "internal"; Options = "-c:a $selectedAudioKey -b:a $brVal"; Description = "$($selectedAudioKey): $brVal" }
             }
         }
     }
@@ -239,114 +239,112 @@ function Get-EncoderSettings {
     $selectedHW = $hwKeys[$hwIndex]
 
     $videoSetting = ""
-    switch ($selectedHW) {
-        "NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF" {
-            $suffix = switch ($selectedHW) {
-                "NVIDIA" { "_nvenc" }
-                "Intel" { "_qsv" }
-                "AMD" { "_amf" }
-                "Vulkan" { "_vulkan" }
-                "D3D12VA" { "_d3d12va" }
-                "MF" { "_mf" }
-            }
-            
-            $codecChoices = @()
-            $codecMap = @()
-            
-            if ($hwInfo -and $hwInfo.AvailableEncoders) {
-                foreach ($enc in $hwInfo.AvailableEncoders) {
-                    # 音声エンコーダーを除外
-                    if ($enc -like "*$suffix" -and $enc -notmatch "^(aac|ac3|mp3|flac|opus|vorbis|alac)_") {
-                        $codecName = ($enc -replace $suffix, "").ToUpper()
-                        if ($codecName -eq "HEVC") { $codecName = "H.265/HEVC" }
-                        if ($codecName -eq "H264") { $codecName = "H.264/AVC" }
-                        
-                        $codecChoices += $codecName
-                        $codecMap += $enc
-                    }
+    if ($selectedHW -in @("NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF")) {
+        $suffix = switch ($selectedHW) {
+            "NVIDIA" { "_nvenc" }
+            "Intel" { "_qsv" }
+            "AMD" { "_amf" }
+            "Vulkan" { "_vulkan" }
+            "D3D12VA" { "_d3d12va" }
+            "MF" { "_mf" }
+        }
+        
+        $codecChoices = @()
+        $codecMap = @()
+        
+        if ($hwInfo -and $hwInfo.AvailableEncoders) {
+            foreach ($enc in $hwInfo.AvailableEncoders) {
+                # 音声エンコーダーを除外
+                if ($enc -like "*$suffix" -and $enc -notmatch "^(aac|ac3|mp3|flac|opus|vorbis|alac)_") {
+                    $codecName = ($enc -replace $suffix, "").ToUpper()
+                    if ($codecName -eq "HEVC") { $codecName = "H.265/HEVC" }
+                    if ($codecName -eq "H264") { $codecName = "H.264/AVC" }
+                    
+                    $codecChoices += $codecName
+                    $codecMap += $enc
                 }
-            }
-
-            if ($codecChoices.Count -eq 0) { Write-Host "利用可能な $selectedHW コーデックがありません。" -ForegroundColor Red; return $null }
-            $codecIndex = Show-Menu -Title "$selectedHW コーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
-            $baseEncoder = "-c:v $($codecMap[$codecIndex])"
-            
-            if ($selectedHW -eq "NVIDIA") {
-                $qPresets = [ordered]@{ "高品質 (CQ:23)" = "-rc vbr -cq 23"; "中品質 (CQ:28)" = "-rc vbr -cq 28"; "高速 (CQ:32)" = "-rc vbr -cq 32"; "カスタム品質 (CQ)" = "-rc vbr -cq {val}"; "カスタムビットレート" = "-rc vbr -b:v {val}" }
-                $pPresets = [ordered]@{ "P1 (最速)" = "-preset p1"; "P2" = "-preset p2"; "P3" = "-preset p3"; "P4 (標準)" = "-preset p4"; "P5" = "-preset p5"; "P6" = "-preset p6"; "P7 (最高品質)" = "-preset p7" }
-                $tPresets = [ordered]@{ "HQ (高品質)" = "-tune hq"; "LL (低遅延)" = "-tune ll"; "ULL (超低遅延)" = "-tune ull" }
-                $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets -TuneOptions $tPresets
-            }
-            elseif ($selectedHW -eq "Intel") {
-                if ($codecMap[$codecIndex] -eq "vp9_qsv") {
-                    $qPresets = [ordered]@{ "高品質 (Q:25)" = "-q:v 25"; "中品質 (Q:30)" = "-q:v 30"; "低品質 (Q:40)" = "-q:v 40"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
-                }
-                elseif ($codecMap[$codecIndex] -eq "mjpeg_qsv") {
-                    $qPresets = [ordered]@{ "高品質 (Q:5)" = "-q:v 5"; "標準品質 (Q:10)" = "-q:v 10"; "カスタム品質 (Q)" = "-q:v {val}" }
-                }
-                else {
-                    $qPresets = [ordered]@{ "高品質 (GQ:20)" = "-global_quality 20"; "中品質 (GQ:25)" = "-global_quality 25"; "低品質 (GQ:30)" = "-global_quality 30"; "カスタム品質 (GQ)" = "-global_quality {val}"; "カスタムビットレート" = "-b:v {val}" }
-                }
-                $pPresets = [ordered]@{ "veryslow (最高品質)" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "veryfast (最速)" = "-preset veryfast" }
-                $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
-            }
-            elseif ($selectedHW -eq "AMD") {
-                $qPresets = [ordered]@{ "高品質 (QP:22)" = "-rc cqp -qp_i 22 -qp_p 22 -qp_b 22"; "中品質 (QP:28)" = "-rc cqp -qp_i 28 -qp_p 28 -qp_b 28"; "低品質 (QP:35)" = "-rc cqp -qp_i 35 -qp_p 35 -qp_b 35"; "カスタム品質 (QP)" = "-rc cqp -qp_i {val} -qp_p {val} -qp_b {val}"; "カスタムビットレート" = "-rc vbr_peak -b:v {val}" }
-                $pPresets = [ordered]@{ "Quality (高品質)" = "-quality quality"; "Balanced (標準)" = "-quality balanced"; "Speed (速度優先)" = "-quality speed" }
-                $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
-            }
-            else {
-                # Vulkan, D3D12VA, MF など
-                $qPresets = [ordered]@{ "高品質" = "-b:v 8000k"; "標準品質" = "-b:v 4000k"; "カスタムビットレート" = "-b:v {val}" }
-                $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets
             }
         }
-        "CPU" {
-            # CPU
-            $codecChoices = @("H.265/HEVC (libx265)", "H.264/AVC (libx264)", "AV1 (libsvtav1) ※高速", "AV1 (libaom-av1) ※高品質・非常に低速", "AV1 (rav1e) ※中速", "VP9 (libvpx-vp9)", "VP8 (libvpx)")
-            $codecIndex = Show-Menu -Title "CPUコーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
-            $codecName = $codecChoices[$codecIndex]
-            $baseEncoder = "-c:v $($codecName.Split(' ')[1].Trim('()'))"
 
-            if ($codecName -match "H.26") {
-                $qPresets = [ordered]@{ "高品質 (CRF:18)" = "-crf 18"; "中品質 (CRF:23)" = "-crf 23"; "低品質 (CRF:28)" = "-crf 28"; "カスタム品質 (CRF)" = "-crf {val}" }
-                $pPresets = [ordered]@{ "placebo (非推奨)" = "-preset placebo"; "veryslow" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "superfast" = "-preset superfast"; "ultrafast (最速)" = "-preset ultrafast" }
+        if ($codecChoices.Count -eq 0) { Write-Host "利用可能な $selectedHW コーデックがありません。" -ForegroundColor Red; return $null }
+        $codecIndex = Show-Menu -Title "$selectedHW コーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
+        $baseEncoder = "-c:v $($codecMap[$codecIndex])"
+        
+        if ($selectedHW -eq "NVIDIA") {
+            $qPresets = [ordered]@{ "高品質 (CQ:23)" = "-rc vbr -cq 23"; "中品質 (CQ:28)" = "-rc vbr -cq 28"; "高速 (CQ:32)" = "-rc vbr -cq 32"; "カスタム品質 (CQ)" = "-rc vbr -cq {val}"; "カスタムビットレート" = "-rc vbr -b:v {val}" }
+            $pPresets = [ordered]@{ "P1 (最速)" = "-preset p1"; "P2" = "-preset p2"; "P3" = "-preset p3"; "P4 (標準)" = "-preset p4"; "P5" = "-preset p5"; "P6" = "-preset p6"; "P7 (最高品質)" = "-preset p7" }
+            $tPresets = [ordered]@{ "HQ (高品質)" = "-tune hq"; "LL (低遅延)" = "-tune ll"; "ULL (超低遅延)" = "-tune ull" }
+            $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets -TuneOptions $tPresets
+        }
+        elseif ($selectedHW -eq "Intel") {
+            if ($codecMap[$codecIndex] -eq "vp9_qsv") {
+                $qPresets = [ordered]@{ "高品質 (Q:25)" = "-q:v 25"; "中品質 (Q:30)" = "-q:v 30"; "低品質 (Q:40)" = "-q:v 40"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
+            }
+            elseif ($codecMap[$codecIndex] -eq "mjpeg_qsv") {
+                $qPresets = [ordered]@{ "高品質 (Q:5)" = "-q:v 5"; "標準品質 (Q:10)" = "-q:v 10"; "カスタム品質 (Q)" = "-q:v {val}" }
+            }
+            else {
+                $qPresets = [ordered]@{ "高品質 (GQ:20)" = "-global_quality 20"; "中品質 (GQ:25)" = "-global_quality 25"; "低品質 (GQ:30)" = "-global_quality 30"; "カスタム品質 (GQ)" = "-global_quality {val}"; "カスタムビットレート" = "-b:v {val}" }
+            }
+            $pPresets = [ordered]@{ "veryslow (最高品質)" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "veryfast (最速)" = "-preset veryfast" }
+            $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
+        }
+        elseif ($selectedHW -eq "AMD") {
+            $qPresets = [ordered]@{ "高品質 (QP:22)" = "-rc cqp -qp_i 22 -qp_p 22 -qp_b 22"; "中品質 (QP:28)" = "-rc cqp -qp_i 28 -qp_p 28 -qp_b 28"; "低品質 (QP:35)" = "-rc cqp -qp_i 35 -qp_p 35 -qp_b 35"; "カスタム品質 (QP)" = "-rc cqp -qp_i {val} -qp_p {val} -qp_b {val}"; "カスタムビットレート" = "-rc vbr_peak -b:v {val}" }
+            $pPresets = [ordered]@{ "Quality (高品質)" = "-quality quality"; "Balanced (標準)" = "-quality balanced"; "Speed (速度優先)" = "-quality speed" }
+            $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
+        }
+        else {
+            # Vulkan, D3D12VA, MF など
+            $qPresets = [ordered]@{ "高品質" = "-b:v 8000k"; "標準品質" = "-b:v 4000k"; "カスタムビットレート" = "-b:v {val}" }
+            $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets
+        }
+    }
+    elseif ($selectedHW -eq "CPU") {
+        # CPU
+        $codecChoices = @("H.265/HEVC (libx265)", "H.264/AVC (libx264)", "AV1 (libsvtav1) ※高速", "AV1 (libaom-av1) ※高品質・非常に低速", "AV1 (rav1e) ※中速", "VP9 (libvpx-vp9)", "VP8 (libvpx)")
+        $codecIndex = Show-Menu -Title "CPUコーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
+        $codecName = $codecChoices[$codecIndex]
+        $baseEncoder = "-c:v $($codecName.Split(' ')[1].Trim('()'))"
+
+        if ($codecName -match "H.26") {
+            $qPresets = [ordered]@{ "高品質 (CRF:18)" = "-crf 18"; "中品質 (CRF:23)" = "-crf 23"; "低品質 (CRF:28)" = "-crf 28"; "カスタム品質 (CRF)" = "-crf {val}" }
+            $pPresets = [ordered]@{ "placebo (非推奨)" = "-preset placebo"; "veryslow" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "superfast" = "-preset superfast"; "ultrafast (最速)" = "-preset ultrafast" }
+            $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
+        }
+        elseif ($codecName -match "VP") {
+            $qPresets = [ordered]@{ "高品質 (CRF:30)" = "-crf 30 -b:v 0"; "中品質 (CRF:35)" = "-crf 35 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
+            $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-cpu-used 0"; "1 (高品質)" = "-cpu-used 1"; "2" = "-cpu-used 2"; "3 (バランス型)" = "-cpu-used 3"; "4 (標準)" = "-cpu-used 4"; "5 (やや速い)" = "-cpu-used 5"; "6 (速い)" = "-cpu-used 6"; "7 (かなり速い)" = "-cpu-used 7"; "8 (最速 / 品質低下)" = "-cpu-used 8" }
+            $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
+        }
+        elseif ($codecName -match "AV1") {
+            if ($codecName -match "svt") {
+                # libsvtav1: 高速AV1エンコーダー (自動マルチスレッド)
+                $qPresets = [ordered]@{ "高品質 (CRF:20)" = "-crf 20"; "中品質 (CRF:30)" = "-crf 30"; "カスタム品質 (CRF)" = "-crf {val}" }
+                $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-preset 0"; "2 (高品質寄り)" = "-preset 2"; "4 (標準)" = "-preset 4"; "6 (速い)" = "-preset 6"; "8 (かなり速い)" = "-preset 8"; "10 (最速寄り)" = "-preset 10"; "13 (最速 / 品質低下)" = "-preset 13" }
                 $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
             }
-            elseif ($codecName -match "VP") {
-                $qPresets = [ordered]@{ "高品質 (CRF:30)" = "-crf 30 -b:v 0"; "中品質 (CRF:35)" = "-crf 35 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
-                $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-cpu-used 0"; "1 (高品質)" = "-cpu-used 1"; "2" = "-cpu-used 2"; "3 (バランス型)" = "-cpu-used 3"; "4 (標準)" = "-cpu-used 4"; "5 (やや速い)" = "-cpu-used 5"; "6 (速い)" = "-cpu-used 6"; "7 (かなり速い)" = "-cpu-used 7"; "8 (最速 / 品質低下)" = "-cpu-used 8" }
+            elseif ($codecName -match "aom") {
+                # libaom-av1: リファレンス実装 (高品質だが非常に低速)
+                Write-Host "`n  ⚠ 警告: libaom-av1は非常に低速です。" -ForegroundColor Yellow
+                Write-Host "  エンコード時間がlibsvtav1の10倍以上かかる場合があります。" -ForegroundColor Yellow
+                Write-Host "  品質を最優先する場合にのみ推奨します。`n" -ForegroundColor Yellow
+                Read-Host "  Enterキーで続行"
+                # マルチスレッド設定: 行ベース並列化 + タイル分割
+                $baseEncoder += " -row-mt 1 -tiles 2x2"
+                $qPresets = [ordered]@{ "高品質 (CRF:20)" = "-crf 20 -b:v 0"; "中品質 (CRF:30)" = "-crf 30 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
+                $pPresets = [ordered]@{ "0 (最高品質 / 極めて遅い)" = "-cpu-used 0"; "1 (高品質 / 非常に遅い)" = "-cpu-used 1"; "2 (高品質寄り / 遅い)" = "-cpu-used 2"; "3 (バランス型)" = "-cpu-used 3"; "4 (標準)" = "-cpu-used 4"; "5 (やや速い)" = "-cpu-used 5"; "6 (速い)" = "-cpu-used 6"; "8 (最速 / 品質低下)" = "-cpu-used 8" }
                 $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
             }
-            elseif ($codecName -match "AV1") {
-                if ($codecName -match "svt") {
-                    # libsvtav1: 高速AV1エンコーダー (自動マルチスレッド)
-                    $qPresets = [ordered]@{ "高品質 (CRF:20)" = "-crf 20"; "中品質 (CRF:30)" = "-crf 30"; "カスタム品質 (CRF)" = "-crf {val}" }
-                    $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-preset 0"; "2 (高品質寄り)" = "-preset 2"; "4 (標準)" = "-preset 4"; "6 (速い)" = "-preset 6"; "8 (かなり速い)" = "-preset 8"; "10 (最速寄り)" = "-preset 10"; "13 (最速 / 品質低下)" = "-preset 13" }
-                    $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
-                }
-                elseif ($codecName -match "aom") {
-                    # libaom-av1: リファレンス実装 (高品質だが非常に低速)
-                    Write-Host "`n  ⚠ 警告: libaom-av1は非常に低速です。" -ForegroundColor Yellow
-                    Write-Host "  エンコード時間がlibsvtav1の10倍以上かかる場合があります。" -ForegroundColor Yellow
-                    Write-Host "  品質を最優先する場合にのみ推奨します。`n" -ForegroundColor Yellow
-                    Read-Host "  Enterキーで続行"
-                    # マルチスレッド設定: 行ベース並列化 + タイル分割
-                    $baseEncoder += " -row-mt 1 -tiles 2x2"
-                    $qPresets = [ordered]@{ "高品質 (CRF:20)" = "-crf 20 -b:v 0"; "中品質 (CRF:30)" = "-crf 30 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
-                    $pPresets = [ordered]@{ "0 (最高品質 / 極めて遅い)" = "-cpu-used 0"; "1 (高品質 / 非常に遅い)" = "-cpu-used 1"; "2 (高品質寄り / 遅い)" = "-cpu-used 2"; "3 (バランス型)" = "-cpu-used 3"; "4 (標準)" = "-cpu-used 4"; "5 (やや速い)" = "-cpu-used 5"; "6 (速い)" = "-cpu-used 6"; "8 (最速 / 品質低下)" = "-cpu-used 8" }
-                    $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
-                }
-                elseif ($codecName -match "rav1e") {
-                    # rav1e: Rust製AV1エンコーダー (中速)
-                    Write-Host "`n  ℹ rav1eはlibsvtav1より低速ですが、libaom-av1よりは高速です。" -ForegroundColor Cyan
-                    Write-Host "  品質指定はQP (Quantizer Parameter: 0-255) を使用します。`n" -ForegroundColor Cyan
-                    # マルチスレッド設定: タイル分割
-                    $baseEncoder += " -tiles 4"
-                    $qPresets = [ordered]@{ "高品質 (QP:80)" = "-qp 80"; "中品質 (QP:120)" = "-qp 120"; "低品質 (QP:160)" = "-qp 160"; "カスタム品質 (QP 0-255)" = "-qp {val}" }
-                    $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-speed 0"; "2 (高品質寄り)" = "-speed 2"; "4 (バランス型)" = "-speed 4"; "6 (標準)" = "-speed 6"; "8 (速い)" = "-speed 8"; "10 (最速 / 品質低下)" = "-speed 10" }
-                    $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
-                }
+            elseif ($codecName -match "rav1e") {
+                # rav1e: Rust製AV1エンコーダー (中速)
+                Write-Host "`n  ℹ rav1eはlibsvtav1より低速ですが、libaom-av1よりは高速です。" -ForegroundColor Cyan
+                Write-Host "  品質指定はQP (Quantizer Parameter: 0-255) を使用します。`n" -ForegroundColor Cyan
+                # マルチスレッド設定: タイル分割
+                $baseEncoder += " -tiles 4"
+                $qPresets = [ordered]@{ "高品質 (QP:80)" = "-qp 80"; "中品質 (QP:120)" = "-qp 120"; "低品質 (QP:160)" = "-qp 160"; "カスタム品質 (QP 0-255)" = "-qp {val}" }
+                $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-speed 0"; "2 (高品質寄り)" = "-speed 2"; "4 (バランス型)" = "-speed 4"; "6 (標準)" = "-speed 6"; "8 (速い)" = "-speed 8"; "10 (最速 / 品質低下)" = "-speed 10" }
+                $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
             }
         }
     }
@@ -477,7 +475,7 @@ function Get-IntermediateSettings {
                 else {
                     $brVal = $brChoices[$brIndex]
                 }
-                $audioSetting = @{ Type = "internal"; Options = "-c:a $selectedAudioKey -b:a $brVal"; Description = "$selectedAudioKey: $brVal" }
+                $audioSetting = @{ Type = "internal"; Options = "-c:a $selectedAudioKey -b:a $brVal"; Description = "$($selectedAudioKey): $brVal" }
             }
         }
     }
