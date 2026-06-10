@@ -147,6 +147,20 @@ function Select-FlacOptions {
 # --- メイン処理 ---
 function Get-EncoderSettings {
     $hwInfo = $global:HardwareInfo
+    $availableEncoders = @()
+    if ($hwInfo -and $hwInfo.AvailableEncoders) {
+        $availableEncoders = $hwInfo.AvailableEncoders
+    }
+    else {
+        try {
+            $ffmpegOutput = ffmpeg -hide_banner -encoders 2>$null
+            foreach ($line in $ffmpegOutput) {
+                if ($line -match "^\s*[VA][\w\.]+\s+([a-zA-Z0-9_]+_(nvenc|qsv|amf|vulkan|d3d12va|mf))(\s+|$)") {
+                    $availableEncoders += $Matches[1]
+                }
+            }
+        } catch {}
+    }
 
     # --- 1. 音声コーデック選択 (利用可能なもののみ表示) ---
     $audioMenuTitle = "--- 音声エンコード設定 ---"
@@ -174,20 +188,11 @@ function Get-EncoderSettings {
     $audioMenu += @{ Key = "vorbis"; Label = "Vorbis (libvorbis)" }
     $audioMenu += @{ Key = "flac"; Label = "FLAC (flac)" }
 
-    # ハードウェア/API 音声エンコーダーの追加（フォールバック付き）
-    if ($hwInfo -and $hwInfo.AvailableEncoders) {
-        foreach ($enc in $hwInfo.AvailableEncoders) {
-            if ($enc -match "^(aac|ac3|mp3|flac|opus|vorbis)_(mf|amf|nvenc|qsv|d3d12va|vulkan)$") {
-                $audioMenu += @{ Key = $enc; Label = "$enc (ハードウェア/OS API)" }
-            }
+    # ハードウェア/API 音声エンコーダーの追加
+    foreach ($enc in $availableEncoders) {
+        if ($enc -match "^(aac|ac3|mp3|flac|opus|vorbis)_(mf|amf|nvenc|qsv|d3d12va|vulkan)$") {
+            $audioMenu += @{ Key = $enc; Label = "$enc (ハードウェア/OS API)" }
         }
-    }
-    else {
-        # スキャン情報がない場合は代表的なものをすべて表示するのじゃ！
-        $audioMenu += @{ Key = "aac_mf"; Label = "aac_mf (MediaFoundation)" }
-        $audioMenu += @{ Key = "ac3_mf"; Label = "ac3_mf (MediaFoundation)" }
-        $audioMenu += @{ Key = "mp3_mf"; Label = "mp3_mf (MediaFoundation)" }
-        $audioMenu += @{ Key = "aac_amf"; Label = "aac_amf (AMD AMF)" }
     }
 
     $audioChoices = @($audioMenu | ForEach-Object { $_.Label })
@@ -434,6 +439,20 @@ function Get-EncoderSettings {
 
 function Get-IntermediateSettings {
     $hwInfo = $global:HardwareInfo
+    $availableEncoders = @()
+    if ($hwInfo -and $hwInfo.AvailableEncoders) {
+        $availableEncoders = $hwInfo.AvailableEncoders
+    }
+    else {
+        try {
+            $ffmpegOutput = ffmpeg -hide_banner -encoders 2>$null
+            foreach ($line in $ffmpegOutput) {
+                if ($line -match "^\s*[VA][\w\.]+\s+([a-zA-Z0-9_]+_(nvenc|qsv|amf|vulkan|d3d12va|mf))(\s+|$)") {
+                    $availableEncoders += $Matches[1]
+                }
+            }
+        } catch {}
+    }
 
     # --- 1. コーデック選択 ---
     $codecChoices = @("H.265/HEVC (libx265)", "H.264/AVC (libx264)"); $codecMap = @("-c:v libx265", "-c:v libx264")
@@ -482,16 +501,11 @@ function Get-IntermediateSettings {
     $audioMenu += @{ Key = "vorbis"; Label = "Vorbis (libvorbis)" }
     $audioMenu += @{ Key = "flac"; Label = "FLAC (flac)" }
 
-    if ($hwInfo -and $hwInfo.AvailableEncoders) {
-        foreach ($enc in $hwInfo.AvailableEncoders) {
-            if ($enc -match "^(aac|ac3|mp3|flac|opus|vorbis)_(mf|amf|nvenc|qsv|d3d12va|vulkan)$") {
-                $audioMenu += @{ Key = $enc; Label = "$enc (ハードウェア/OS API)" }
-            }
+    # ハードウェア/API 音声エンコーダーの追加
+    foreach ($enc in $availableEncoders) {
+        if ($enc -match "^(aac|ac3|mp3|flac|opus|vorbis)_(mf|amf|nvenc|qsv|d3d12va|vulkan)$") {
+            $audioMenu += @{ Key = $enc; Label = "$enc (ハードウェア/OS API)" }
         }
-    }
-    else {
-        $audioMenu += @{ Key = "aac_mf"; Label = "aac_mf (MediaFoundation)" }
-        $audioMenu += @{ Key = "ac3_mf"; Label = "ac3_mf (MediaFoundation)" }
     }
 
     $audioChoices = @($audioMenu | ForEach-Object { $_.Label })
