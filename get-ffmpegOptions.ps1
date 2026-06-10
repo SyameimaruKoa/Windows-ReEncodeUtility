@@ -116,7 +116,6 @@ function Get-EncoderSettings {
     $audioMenuTitle = "--- 音声エンコード設定 ---"
 
     # 外部エンコーダーの存在チェック
-    # 外部エンコーダーの存在チェック (共通関数が利用可能ならそれを使用)
     $hasQaac = $false; $hasNero = $false; $hasFdkaac = $false
     if (Get-Command -Name 'Get-ExternalEncoderAvailability' -CommandType Function -ErrorAction SilentlyContinue) {
         $extEnc = Get-ExternalEncoderAvailability
@@ -138,6 +137,16 @@ function Get-EncoderSettings {
     $audioMenu += @{ Key = "opus"; Label = "Opus (libopus)" }
     $audioMenu += @{ Key = "vorbis"; Label = "Vorbis (libvorbis)" }
     $audioMenu += @{ Key = "flac"; Label = "FLAC (flac)" }
+
+    # ハードウェア/API 音声エンコーダーの追加
+    $hwInfo = $global:HardwareInfo
+    if ($hwInfo -and $hwInfo.AvailableEncoders) {
+        foreach ($enc in $hwInfo.AvailableEncoders) {
+            if ($enc -match "^(aac|ac3|mp3|flac|opus|vorbis)_(mf|amf|nvenc|qsv|d3d12va|vulkan)$") {
+                $audioMenu += @{ Key = $enc; Label = "$enc (ハードウェア/OS API)" }
+            }
+        }
+    }
 
     $audioChoices = @($audioMenu | ForEach-Object { $_.Label })
     $audioIndex = Show-Menu -Title $audioMenuTitle -Choices $audioChoices
@@ -175,7 +184,6 @@ function Get-EncoderSettings {
             $audioSetting = $result
         }
         "vorbis" {
-            # Vorbis (get-ffmpegOptions.ps1 専用)
             $vorbisChoices = @("高品質 (q:a 6)", "標準品質 (q:a 4)", "カスタム")
             $vorbisIndex = Show-Menu -Title "Vorbisの品質を選択" -Choices $vorbisChoices
             if ($vorbisIndex -lt 0) { return $null }
@@ -190,13 +198,26 @@ function Get-EncoderSettings {
                 $audioSetting.Description = "Vorbis: $($vorbisChoices[$vorbisIndex])"
             }
         }
+        default {
+            if ($selectedAudioKey -match "_") {
+                $brChoices = @("320k", "256k", "192k", "128k", "96k", "カスタム")
+                $brIndex = Show-Menu -Title "$selectedAudioKey のビットレートを選択" -Choices $brChoices
+                if ($brIndex -lt 0) { return $null }
+                if ($brIndex -eq 5) {
+                    $brVal = Read-Host "ビットレートを入力 (例: 128k)"
+                }
+                else {
+                    $brVal = $brChoices[$brIndex]
+                }
+                $audioSetting = @{ Type = "internal"; Options = "-c:a $selectedAudioKey -b:a $brVal"; Description = "$selectedAudioKey: $brVal" }
+            }
+        }
     }
 
     # --- 2. 映像ハードウェア選択 (対応HWのみ表示) ---
     $hwMenuTitle = "--- 映像エンコードに使用するハードウェア ---"
-    $allHwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
-    $allHwKeys = @("NVIDIA", "Intel", "AMD", "CPU")
-    $hwInfo = $global:HardwareInfo
+    $allHwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "Vulkan", "D3D12VA", "MediaFoundation (MF)", "CPU (Software)")
+    $allHwKeys = @("NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF", "CPU")
     $hwChoices = @(); $hwKeys = @()
     for ($i = 0; $i -lt $allHwChoices.Length; $i++) {
         $show = $true
@@ -205,6 +226,9 @@ function Get-EncoderSettings {
                 "NVIDIA" { $show = $hwInfo.HasNvidia }
                 "Intel" { $show = $hwInfo.HasIntel }
                 "AMD" { $show = $hwInfo.HasAMD }
+                "Vulkan" { $show = $hwInfo.HasVulkan }
+                "D3D12VA" { $show = $hwInfo.HasD3D12VA }
+                "MF" { $show = $hwInfo.HasMF }
                 "CPU" { $show = $true }
             }
         }
@@ -216,61 +240,66 @@ function Get-EncoderSettings {
 
     $videoSetting = ""
     switch ($selectedHW) {
-        "NVIDIA" {
-            # NVIDIA
-            $allCodecChoices = @("H.265/HEVC", "H.264/AVC", "AV1", "VP9"); $allCodecMap = @("hevc_nvenc", "h264_nvenc", "av1_nvenc", "vp9_nvenc")
-            $codecChoices = @(); $codecMap = @()
-            for ($ci = 0; $ci -lt $allCodecChoices.Length; $ci++) {
-                if (-not $hwInfo -or $hwInfo.AvailableEncoders.Count -eq 0 -or $hwInfo.AvailableEncoders -contains $allCodecMap[$ci]) {
-                    $codecChoices += $allCodecChoices[$ci]; $codecMap += $allCodecMap[$ci]
+        "NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF" {
+            $suffix = switch ($selectedHW) {
+                "NVIDIA" { "_nvenc" }
+                "Intel" { "_qsv" }
+                "AMD" { "_amf" }
+                "Vulkan" { "_vulkan" }
+                "D3D12VA" { "_d3d12va" }
+                "MF" { "_mf" }
+            }
+            
+            $codecChoices = @()
+            $codecMap = @()
+            
+            if ($hwInfo -and $hwInfo.AvailableEncoders) {
+                foreach ($enc in $hwInfo.AvailableEncoders) {
+                    # 音声エンコーダーを除外
+                    if ($enc -like "*$suffix" -and $enc -notmatch "^(aac|ac3|mp3|flac|opus|vorbis|alac)_") {
+                        $codecName = ($enc -replace $suffix, "").ToUpper()
+                        if ($codecName -eq "HEVC") { $codecName = "H.265/HEVC" }
+                        if ($codecName -eq "H264") { $codecName = "H.264/AVC" }
+                        
+                        $codecChoices += $codecName
+                        $codecMap += $enc
+                    }
                 }
             }
-            if ($codecChoices.Count -eq 0) { Write-Host "利用可能なNVIDIAコーデックがありません。" -ForegroundColor Red; return $null }
-            $codecIndex = Show-Menu -Title "NVIDIAコーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
-            $baseEncoder = "-c:v $($codecMap[$codecIndex])"
-            $qPresets = [ordered]@{ "高品質 (CQ:23)" = "-rc vbr -cq 23"; "中品質 (CQ:28)" = "-rc vbr -cq 28"; "高速 (CQ:32)" = "-rc vbr -cq 32"; "カスタム品質 (CQ)" = "-rc vbr -cq {val}"; "カスタムビットレート" = "-rc vbr -b:v {val}" }
-            $pPresets = [ordered]@{ "P1 (最速)" = "-preset p1"; "P2" = "-preset p2"; "P3" = "-preset p3"; "P4 (標準)" = "-preset p4"; "P5" = "-preset p5"; "P6" = "-preset p6"; "P7 (最高品質)" = "-preset p7" }
-            $tPresets = [ordered]@{ "HQ (高品質)" = "-tune hq"; "LL (低遅延)" = "-tune ll"; "ULL (超低遅延)" = "-tune ull" }
-            $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets -TuneOptions $tPresets
-        }
-        "Intel" {
-            # Intel
-            $allCodecChoices = @("H.265/HEVC", "H.264/AVC", "AV1", "VP9"); $allCodecMap = @("hevc_qsv", "h264_qsv", "av1_qsv", "vp9_qsv")
-            $codecChoices = @(); $codecMap = @()
-            for ($ci = 0; $ci -lt $allCodecChoices.Length; $ci++) {
-                if (-not $hwInfo -or $hwInfo.AvailableEncoders.Count -eq 0 -or $hwInfo.AvailableEncoders -contains $allCodecMap[$ci]) {
-                    $codecChoices += $allCodecChoices[$ci]; $codecMap += $allCodecMap[$ci]
-                }
-            }
-            if ($codecChoices.Count -eq 0) { Write-Host "利用可能なIntelコーデックがありません。" -ForegroundColor Red; return $null }
-            $codecIndex = Show-Menu -Title "Intelコーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
-            $baseEncoder = "-c:v $($codecMap[$codecIndex])"
 
-            # vp9_qsv は -global_quality が反映されない環境があるため、-q:v で品質を制御する
-            if ($codecMap[$codecIndex] -eq "vp9_qsv") {
-                $qPresets = [ordered]@{ "高品質 (Q:25)" = "-q:v 25"; "中品質 (Q:30)" = "-q:v 30"; "低品質 (Q:40)" = "-q:v 40"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
+            if ($codecChoices.Count -eq 0) { Write-Host "利用可能な $selectedHW コーデックがありません。" -ForegroundColor Red; return $null }
+            $codecIndex = Show-Menu -Title "$selectedHW コーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
+            $baseEncoder = "-c:v $($codecMap[$codecIndex])"
+            
+            if ($selectedHW -eq "NVIDIA") {
+                $qPresets = [ordered]@{ "高品質 (CQ:23)" = "-rc vbr -cq 23"; "中品質 (CQ:28)" = "-rc vbr -cq 28"; "高速 (CQ:32)" = "-rc vbr -cq 32"; "カスタム品質 (CQ)" = "-rc vbr -cq {val}"; "カスタムビットレート" = "-rc vbr -b:v {val}" }
+                $pPresets = [ordered]@{ "P1 (最速)" = "-preset p1"; "P2" = "-preset p2"; "P3" = "-preset p3"; "P4 (標準)" = "-preset p4"; "P5" = "-preset p5"; "P6" = "-preset p6"; "P7 (最高品質)" = "-preset p7" }
+                $tPresets = [ordered]@{ "HQ (高品質)" = "-tune hq"; "LL (低遅延)" = "-tune ll"; "ULL (超低遅延)" = "-tune ull" }
+                $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets -TuneOptions $tPresets
+            }
+            elseif ($selectedHW -eq "Intel") {
+                if ($codecMap[$codecIndex] -eq "vp9_qsv") {
+                    $qPresets = [ordered]@{ "高品質 (Q:25)" = "-q:v 25"; "中品質 (Q:30)" = "-q:v 30"; "低品質 (Q:40)" = "-q:v 40"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
+                }
+                elseif ($codecMap[$codecIndex] -eq "mjpeg_qsv") {
+                    $qPresets = [ordered]@{ "高品質 (Q:5)" = "-q:v 5"; "標準品質 (Q:10)" = "-q:v 10"; "カスタム品質 (Q)" = "-q:v {val}" }
+                }
+                else {
+                    $qPresets = [ordered]@{ "高品質 (GQ:20)" = "-global_quality 20"; "中品質 (GQ:25)" = "-global_quality 25"; "低品質 (GQ:30)" = "-global_quality 30"; "カスタム品質 (GQ)" = "-global_quality {val}"; "カスタムビットレート" = "-b:v {val}" }
+                }
+                $pPresets = [ordered]@{ "veryslow (最高品質)" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "veryfast (最速)" = "-preset veryfast" }
+                $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
+            }
+            elseif ($selectedHW -eq "AMD") {
+                $qPresets = [ordered]@{ "高品質 (QP:22)" = "-rc cqp -qp_i 22 -qp_p 22 -qp_b 22"; "中品質 (QP:28)" = "-rc cqp -qp_i 28 -qp_p 28 -qp_b 28"; "低品質 (QP:35)" = "-rc cqp -qp_i 35 -qp_p 35 -qp_b 35"; "カスタム品質 (QP)" = "-rc cqp -qp_i {val} -qp_p {val} -qp_b {val}"; "カスタムビットレート" = "-rc vbr_peak -b:v {val}" }
+                $pPresets = [ordered]@{ "Quality (高品質)" = "-quality quality"; "Balanced (標準)" = "-quality balanced"; "Speed (速度優先)" = "-quality speed" }
+                $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
             }
             else {
-                $qPresets = [ordered]@{ "高品質 (GQ:20)" = "-global_quality 20"; "中品質 (GQ:25)" = "-global_quality 25"; "低品質 (GQ:30)" = "-global_quality 30"; "カスタム品質 (GQ)" = "-global_quality {val}"; "カスタムビットレート" = "-b:v {val}" }
+                # Vulkan, D3D12VA, MF など
+                $qPresets = [ordered]@{ "高品質" = "-b:v 8000k"; "標準品質" = "-b:v 4000k"; "カスタムビットレート" = "-b:v {val}" }
+                $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets
             }
-            $pPresets = [ordered]@{ "veryslow (最高品質)" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "veryfast (最速)" = "-preset veryfast" }
-            $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
-        }
-        "AMD" {
-            # AMD
-            $allCodecChoices = @("H.265/HEVC", "H.264/AVC", "AV1 (※RDNA2以降のみ対応)"); $allCodecMap = @("hevc_amf", "h264_amf", "av1_amf")
-            $codecChoices = @(); $codecMap = @()
-            for ($ci = 0; $ci -lt $allCodecChoices.Length; $ci++) {
-                if (-not $hwInfo -or $hwInfo.AvailableEncoders.Count -eq 0 -or $hwInfo.AvailableEncoders -contains $allCodecMap[$ci]) {
-                    $codecChoices += $allCodecChoices[$ci]; $codecMap += $allCodecMap[$ci]
-                }
-            }
-            if ($codecChoices.Count -eq 0) { Write-Host "利用可能なAMDコーデックがありません。" -ForegroundColor Red; return $null }
-            $codecIndex = Show-Menu -Title "AMDコーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
-            $baseEncoder = "-c:v $($codecMap[$codecIndex])"
-            $qPresets = [ordered]@{ "高品質 (QP:22)" = "-rc cqp -qp_i 22 -qp_p 22 -qp_b 22"; "中品質 (QP:28)" = "-rc cqp -qp_i 28 -qp_p 28 -qp_b 28"; "低品質 (QP:35)" = "-rc cqp -qp_i 35 -qp_p 35 -qp_b 35"; "カスタム品質 (QP)" = "-rc cqp -qp_i {val} -qp_p {val} -qp_b {val}"; "カスタムビットレート" = "-rc vbr_peak -b:v {val}" }
-            $pPresets = [ordered]@{ "Quality (高品質)" = "-quality quality"; "Balanced (標準)" = "-quality balanced"; "Speed (速度優先)" = "-quality speed" }
-            $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
         }
         "CPU" {
             # CPU
@@ -382,6 +411,15 @@ function Get-IntermediateSettings {
     $audioMenu += @{ Key = "vorbis"; Label = "Vorbis (libvorbis)" }
     $audioMenu += @{ Key = "flac"; Label = "FLAC (flac)" }
 
+    $hwInfo = $global:HardwareInfo
+    if ($hwInfo -and $hwInfo.AvailableEncoders) {
+        foreach ($enc in $hwInfo.AvailableEncoders) {
+            if ($enc -match "^(aac|ac3|mp3|flac|opus|vorbis)_(mf|amf|nvenc|qsv|d3d12va|vulkan)$") {
+                $audioMenu += @{ Key = $enc; Label = "$enc (ハードウェア/OS API)" }
+            }
+        }
+    }
+
     $audioChoices = @($audioMenu | ForEach-Object { $_.Label })
     $audioIndex = Show-Menu -Title "中間ファイル用の音声エンコーダーを選択" -Choices $audioChoices
     if ($audioIndex -lt 0) { return $null }
@@ -426,6 +464,21 @@ function Get-IntermediateSettings {
         "flac" {
             $result = Select-FlacOptions; if (-not $result) { return $null }
             $audioSetting = $result
+        }
+        default {
+            $selectedAudioKey = $audioMenu[$audioIndex].Key
+            if ($selectedAudioKey -match "_") {
+                $brChoices = @("320k", "256k", "192k", "128k", "96k", "カスタム")
+                $brIndex = Show-Menu -Title "$selectedAudioKey のビットレートを選択" -Choices $brChoices
+                if ($brIndex -lt 0) { return $null }
+                if ($brIndex -eq 5) {
+                    $brVal = Read-Host "ビットレートを入力 (例: 128k)"
+                }
+                else {
+                    $brVal = $brChoices[$brIndex]
+                }
+                $audioSetting = @{ Type = "internal"; Options = "-c:a $selectedAudioKey -b:a $brVal"; Description = "$selectedAudioKey: $brVal" }
+            }
         }
     }
 

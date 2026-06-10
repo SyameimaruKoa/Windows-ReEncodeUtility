@@ -137,7 +137,7 @@ function Load-HardwareCache {
         return $null
     }
 
-    if (-not $cached -or $cached.SchemaVersion -ne 1) { return $null }
+    if (-not $cached -or $cached.SchemaVersion -ne 2) { return $null }
     if ($cached.MachineName -ne $env:COMPUTERNAME) { return $null }
     if ($cached.FfmpegSignature -ne (Get-FfmpegSignature -FfmpegPath $global:Settings.FfmpegPath)) { return $null }
     if (-not $cached.ScanCompleted) { return $null }
@@ -149,7 +149,7 @@ function Save-HardwareCache {
     $cachePath = Get-HardwareCachePath
     Ensure-Directory -Path $global:AppCacheDir
     $cacheObject = [pscustomobject]@{
-        SchemaVersion     = 1
+        SchemaVersion     = 2
         MachineName       = $env:COMPUTERNAME
         SavedAt           = Get-Date
         FfmpegSignature   = Get-FfmpegSignature -FfmpegPath $global:Settings.FfmpegPath
@@ -158,6 +158,9 @@ function Save-HardwareCache {
         HasNvidia         = [bool]$HardwareInfo.HasNvidia
         HasIntel          = [bool]$HardwareInfo.HasIntel
         HasAMD            = [bool]$HardwareInfo.HasAMD
+        HasVulkan         = [bool]$HardwareInfo.HasVulkan
+        HasD3D12VA        = [bool]$HardwareInfo.HasD3D12VA
+        HasMF             = [bool]$HardwareInfo.HasMF
         ScanCompleted     = [bool]$HardwareInfo.ScanCompleted
     }
 
@@ -404,7 +407,7 @@ function Invoke-FfmpegEncode {
             if ($Arguments -match '(?:^|\s)-c:v\s+(\S+)') { $videoEncoder = $Matches[1] }
 
             $decodePath = if ($hwAccelType) { "GPU ($hwAccelType)" } else { "CPU" }
-            $encodePath = if ($videoEncoder -match '_(amf|nvenc|qsv|vaapi|videotoolbox)') {
+            $encodePath = if ($videoEncoder -match '_(amf|nvenc|qsv|vaapi|videotoolbox|vulkan|mf|d3d12va)') {
                 "GPU ($($Matches[1]))"
             }
             else {
@@ -758,7 +761,6 @@ function Get-AvailableHardware {
         テストエンコード/デコードを実行してハードウェア・コーデックの実対応状況を検出する。
         各エンコーダーで実際にテストエンコードし、成功したもののみ有効とする。
         結果はグローバル変数にキャッシュされ、2回目以降は即座に返される。
-        結果はグローバル変数にキャッシュされ、2回目以降は即座に返される。
     #>
     if ($global:HardwareInfo) { return $global:HardwareInfo }
 
@@ -775,22 +777,55 @@ function Get-AvailableHardware {
         HasNvidia         = $false
         HasIntel          = $false
         HasAMD            = $false
+        HasVulkan         = $false
+        HasD3D12VA        = $false
+        HasMF             = $false
         ScanCompleted     = $false
     }
 
     try {
         $ffmpegPath = $global:Settings.FfmpegPath
 
-        # --- HWエンコーダー実機検出 (テストエンコード) ---
-        $testEncoders = @(
-            'h264_nvenc', 'hevc_nvenc', 'av1_nvenc',
-            'h264_qsv', 'hevc_qsv', 'av1_qsv', 'vp9_qsv',
-            'h264_amf', 'hevc_amf', 'av1_amf'
-        )
+        # --- HWエンコーダー実機検出 (コマンドから抽出して全てテスト) ---
+        $encodersList = & $ffmpegPath -hide_banner -encoders 2>&1 | Out-String
+        $videoEncoders = @()
+        $audioEncoders = @()
+        
+        $regex = [regex] '(?m)^\s*([VA])[.\w]+\s+(\w+_(nvenc|qsv|amf|vulkan|mf|d3d12va))\s+'
+        $matches = $regex.Matches($encodersList)
+        
+        foreach ($match in $matches) {
+            $type = $match.Groups[1].Value
+            $encName = $match.Groups[2].Value
+            if ($type -eq 'V') {
+                if ($videoEncoders -notcontains $encName) { $videoEncoders += $encName }
+            }
+            elseif ($type -eq 'A') {
+                if ($audioEncoders -notcontains $encName) { $audioEncoders += $encName }
+            }
+        }
 
-        foreach ($enc in $testEncoders) {
+        foreach ($enc in $videoEncoders) {
             try {
-                $null = & $ffmpegPath -hide_banner -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 1 -pix_fmt nv12 -c:v $enc -f null NUL 2>&1
+                $null = & $ffmpegPath -hide_banner -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 1 -c:v $enc -f null NUL 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    $info.AvailableEncoders += $enc
+                }
+                else {
+                    # エラーになった場合はピクセルフォーマット指定などを外して再テスト、もしくはyuv420pをつけてテスト
+                    # mjpeg_qsvはyuvj420pを要求する可能性があるので、自動変換に任せるためフォーマット指定でテスト
+                    $null = & $ffmpegPath -hide_banner -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 1 -pix_fmt yuv420p -c:v $enc -f null NUL 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        $info.AvailableEncoders += $enc
+                    }
+                }
+            }
+            catch {}
+        }
+        
+        foreach ($enc in $audioEncoders) {
+            try {
+                $null = & $ffmpegPath -hide_banner -f lavfi -i 'anoisesrc=d=0.5:c=2:r=48000' -c:a $enc -f null NUL 2>&1
                 if ($LASTEXITCODE -eq 0) {
                     $info.AvailableEncoders += $enc
                 }
@@ -801,6 +836,9 @@ function Get-AvailableHardware {
         $info.HasNvidia = @($info.AvailableEncoders | Where-Object { $_ -match '_nvenc$' }).Count -gt 0
         $info.HasIntel = @($info.AvailableEncoders | Where-Object { $_ -match '_qsv$' }).Count -gt 0
         $info.HasAMD = @($info.AvailableEncoders | Where-Object { $_ -match '_amf$' }).Count -gt 0
+        $info.HasVulkan = @($info.AvailableEncoders | Where-Object { $_ -match '_vulkan$' }).Count -gt 0
+        $info.HasD3D12VA = @($info.AvailableEncoders | Where-Object { $_ -match '_d3d12va$' }).Count -gt 0
+        $info.HasMF = @($info.AvailableEncoders | Where-Object { $_ -match '_mf$' }).Count -gt 0
 
         # --- HWアクセル (デコード) 実機検出 ---
         $testClipPath = Join-Path ([System.IO.Path]::GetTempPath()) "hwaccel_test_$([System.IO.Path]::GetRandomFileName()).mp4"
@@ -834,7 +872,7 @@ function Get-AvailableHardware {
 
         $info.ScanCompleted = $true
 
-        Write-Log "テスト結果: NVIDIA=$($info.HasNvidia) Intel=$($info.HasIntel) AMD=$($info.HasAMD)" -Level "DEBUG"
+        Write-Log "テスト結果: NVIDIA=$($info.HasNvidia) Intel=$($info.HasIntel) AMD=$($info.HasAMD) Vulkan=$($info.HasVulkan) D3D12VA=$($info.HasD3D12VA) MF=$($info.HasMF)" -Level "DEBUG"
         Write-Log "  エンコーダー: [$($info.AvailableEncoders -join ', ')]" -Level "DEBUG"
         Write-Log "  HWアクセル  : [$($info.AvailableHwAccels -join ', ')]" -Level "DEBUG"
     }
@@ -858,8 +896,8 @@ function Get-FilteredHwChoices {
     .OUTPUTS
         @{ Choices = [string[]]; Keys = [string[]]; OriginalIndices = [int[]] }
     #>
-    $allChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
-    $allKeys = @("NVIDIA", "Intel", "AMD", "CPU")
+    $allChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "Vulkan", "D3D12VA", "MediaFoundation (MF)", "CPU (Software)")
+    $allKeys = @("NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF", "CPU")
     $hwInfo = $global:HardwareInfo
 
     $filteredChoices = @()
@@ -873,6 +911,9 @@ function Get-FilteredHwChoices {
                 "NVIDIA" { $show = $hwInfo.HasNvidia }
                 "Intel" { $show = $hwInfo.HasIntel }
                 "AMD" { $show = $hwInfo.HasAMD }
+                "Vulkan" { $show = $hwInfo.HasVulkan }
+                "D3D12VA" { $show = $hwInfo.HasD3D12VA }
+                "MF" { $show = $hwInfo.HasMF }
                 "CPU" { $show = $true }
             }
         }
@@ -884,36 +925,6 @@ function Get-FilteredHwChoices {
     }
 
     return @{ Choices = $filteredChoices; Keys = $filteredKeys; OriginalIndices = $filteredIndices }
-}
-
-function Get-FilteredCodecChoices {
-    <#
-    .SYNOPSIS
-        指定ハードウェアで利用可能なコーデックのみをフィルタして返す。
-    .PARAMETER Choices
-        コーデック表示名の配列 (例: @("H.265/HEVC", "H.264/AVC", "AV1"))
-    .PARAMETER EncoderNames
-        FFmpegエンコーダー名の配列 (例: @("hevc_nvenc", "h264_nvenc", "av1_nvenc"))
-    .OUTPUTS
-        @{ Choices = [string[]]; EncoderNames = [string[]]; OriginalIndices = [int[]] }
-    #>
-    param(
-        [string[]]$Choices,
-        [string[]]$EncoderNames
-    )
-    $hwInfo = $global:HardwareInfo
-    if (-not $hwInfo -or $hwInfo.AvailableEncoders.Count -eq 0) {
-        # スキャン結果なし → 全て表示
-        return @{ Choices = $Choices; EncoderNames = $EncoderNames; OriginalIndices = @(0..($Choices.Length - 1)) }
-    }
-
-    $fc = @(); $fe = @(); $fi = @()
-    for ($i = 0; $i -lt $Choices.Length; $i++) {
-        if ($hwInfo.AvailableEncoders -contains $EncoderNames[$i]) {
-            $fc += $Choices[$i]; $fe += $EncoderNames[$i]; $fi += $i
-        }
-    }
-    return @{ Choices = $fc; EncoderNames = $fe; OriginalIndices = $fi }
 }
 
 function Get-PlatformAvailableCodecs {
@@ -928,10 +939,13 @@ function Get-PlatformAvailableCodecs {
         [string[]]$AllowedCodecs
     )
     $hwCodecMap = @{
-        "NVIDIA" = @(@{Codec = "H.264"; Enc = "h264_nvenc" }, @{Codec = "H.265"; Enc = "hevc_nvenc" }, @{Codec = "AV1"; Enc = "av1_nvenc" })
-        "Intel"  = @(@{Codec = "H.264"; Enc = "h264_qsv" }, @{Codec = "H.265"; Enc = "hevc_qsv" }, @{Codec = "VP9"; Enc = "vp9_qsv" }, @{Codec = "AV1"; Enc = "av1_qsv" })
-        "AMD"    = @(@{Codec = "H.264"; Enc = "h264_amf" }, @{Codec = "H.265"; Enc = "hevc_amf" }, @{Codec = "AV1"; Enc = "av1_amf" })
-        "CPU"    = @(@{Codec = "H.264"; Enc = "libx264" }, @{Codec = "H.265"; Enc = "libx265" }, @{Codec = "VP9"; Enc = "libvpx-vp9" }, @{Codec = "AV1"; Enc = "libsvtav1" })
+        "NVIDIA"  = @(@{Codec = "H.264"; Enc = "h264_nvenc" }, @{Codec = "H.265"; Enc = "hevc_nvenc" }, @{Codec = "AV1"; Enc = "av1_nvenc" })
+        "Intel"   = @(@{Codec = "H.264"; Enc = "h264_qsv" }, @{Codec = "H.265"; Enc = "hevc_qsv" }, @{Codec = "VP9"; Enc = "vp9_qsv" }, @{Codec = "AV1"; Enc = "av1_qsv" })
+        "AMD"     = @(@{Codec = "H.264"; Enc = "h264_amf" }, @{Codec = "H.265"; Enc = "hevc_amf" }, @{Codec = "AV1"; Enc = "av1_amf" })
+        "Vulkan"  = @(@{Codec = "H.264"; Enc = "h264_vulkan" }, @{Codec = "H.265"; Enc = "hevc_vulkan" }, @{Codec = "AV1"; Enc = "av1_vulkan" })
+        "D3D12VA" = @(@{Codec = "H.264"; Enc = "h264_d3d12va" }, @{Codec = "H.265"; Enc = "hevc_d3d12va" }, @{Codec = "AV1"; Enc = "av1_d3d12va" })
+        "MF"      = @(@{Codec = "H.264"; Enc = "h264_mf" }, @{Codec = "H.265"; Enc = "hevc_mf" }, @{Codec = "AV1"; Enc = "av1_mf" })
+        "CPU"     = @(@{Codec = "H.264"; Enc = "libx264" }, @{Codec = "H.265"; Enc = "libx265" }, @{Codec = "VP9"; Enc = "libvpx-vp9" }, @{Codec = "AV1"; Enc = "libsvtav1" })
     }
     $hwInfo = $global:HardwareInfo
     $available = @()
@@ -1038,7 +1052,9 @@ function Test-AudioCodecCompatibility {
     }
     $supported = $compatMap[$ContainerExtension]
     if (-not $supported) { return $true }  # 不明なコンテナ → 互換ありと仮定
-    return ($CodecName -in $supported)
+    # aac_mf 等で取得された場合も考慮して前方を判定
+    $baseCodec = $CodecName -replace '_.+$', ''
+    return ($baseCodec -in $supported)
 }
 #endregion
 
@@ -1060,7 +1076,7 @@ function Get-TargetBitrateKbps {
 
 function Build-PlatformVideoOptions {
     param(
-        [string]$HW,              # "NVIDIA", "Intel", "AMD", "CPU"
+        [string]$HW,              # "NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF", "CPU"
         [string]$Codec,           # "H.264", "H.265", "VP9", "AV1"
         [string]$QualityMode,     # "CRF", "CRF+Maxrate", "Bitrate"
         [int]$QualityValue,       # CRF/CQ/QP値
@@ -1072,6 +1088,9 @@ function Build-PlatformVideoOptions {
         "NVIDIA+H.264" = "h264_nvenc"; "NVIDIA+H.265" = "hevc_nvenc"; "NVIDIA+AV1" = "av1_nvenc"
         "Intel+H.264" = "h264_qsv"; "Intel+H.265" = "hevc_qsv"; "Intel+AV1" = "av1_qsv"; "Intel+VP9" = "vp9_qsv"
         "AMD+H.264" = "h264_amf"; "AMD+H.265" = "hevc_amf"; "AMD+AV1" = "av1_amf"
+        "Vulkan+H.264" = "h264_vulkan"; "Vulkan+H.265" = "hevc_vulkan"; "Vulkan+AV1" = "av1_vulkan"
+        "D3D12VA+H.264" = "h264_d3d12va"; "D3D12VA+H.265" = "hevc_d3d12va"; "D3D12VA+AV1" = "av1_d3d12va"
+        "MF+H.264" = "h264_mf"; "MF+H.265" = "hevc_mf"; "MF+AV1" = "av1_mf"
         "CPU+H.264" = "libx264"; "CPU+H.265" = "libx265"; "CPU+VP9" = "libvpx-vp9"; "CPU+AV1" = "libsvtav1"
     }
     $encoder = $encoderMap["$HW+$Codec"]
@@ -1116,6 +1135,12 @@ function Build-PlatformVideoOptions {
                 "Bitrate" { $parts += "-rc vbr_peak -b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k" }
             }
             $parts += "-quality $Preset"
+        }
+        "Vulkan", "D3D12VA", "MF" {
+            switch ($QualityMode) {
+                "CRF" { $parts += "-b:v 8000k" } # 固有の品質指定が不確定なため固定ビットレート等で代替
+                "CRF+Maxrate", "Bitrate" { $parts += "-b:v ${MaxrateKbps}k" }
+            }
         }
         "CPU" {
             $isVPx = $Codec -match "VP"
@@ -1199,6 +1224,7 @@ function Get-PlatformAutoSettings {
     # --- プリセット --- バランス型
     $preset = switch ($HW) {
         "NVIDIA" { "p4" }; "Intel" { "medium" }; "AMD" { "balanced" }
+        "Vulkan", "D3D12VA", "MF" { "" }
         "CPU" { if ($codec -match "VP|AV1") { "4" } else { "medium" } }
     }
 
@@ -1564,6 +1590,9 @@ function Invoke-PlatformDetailedSetup {
             if ($pIndex -lt 0) { return $null }
             $presetValue = $presetMap[$pIndex]
         }
+        "Vulkan", "D3D12VA", "MF" {
+            $presetValue = ""
+        }
         "CPU" {
             if ($selectedCodec -eq "AV1" -and $specificEncoder -eq "libaom-av1") {
                 $presetChoices = @("0 (最高品質 / 極めて遅い)", "1 (高品質 / 非常に遅い)", "2 (高品質寄り / 遅い)", "3 (バランス型)", "4 (標準)", "6 (速い)", "8 (最速 / 品質低下)")
@@ -1596,24 +1625,50 @@ function Invoke-PlatformDetailedSetup {
     # --- 6. 音声設定 (利用可能な外部エンコーダーのみ表示) ---
     $extEnc = Get-ExternalEncoderAvailability
     $audioSetting = @{ Type = "copy"; Options = "-c:a copy"; Description = "音声コピー (-c:a copy)" }
+    $hwInfo = $global:HardwareInfo
+    
     if ($PlatformConfig.Name -eq "Twitter") {
         # Twitter: AAC必須 動的メニュー
         $twitterAudioMenu = @()
         if ($extEnc.HasQaac) { $twitterAudioMenu += @{ Key = "qaac"; Label = "qaac (AAC 自動HE/LC)" } }
         if ($extEnc.HasNero) { $twitterAudioMenu += @{ Key = "nero"; Label = "Nero AAC (外部 自動HE/LC)" } }
         if ($extEnc.HasFdkaac) { $twitterAudioMenu += @{ Key = "fdkaac"; Label = "fdkaac (外部 自動HE/LC)" } }
+        
+        if ($hwInfo -and $hwInfo.AvailableEncoders) {
+            foreach ($enc in $hwInfo.AvailableEncoders) {
+                if ($enc -match "^aac_(mf|amf|nvenc|qsv|d3d12va|vulkan)$") {
+                    $twitterAudioMenu += @{ Key = $enc; Label = "$enc (ハードウェア/API)" }
+                }
+            }
+        }
+        
         $twitterAudioMenu += @{ Key = "ffaac"; Label = "ffmpeg内蔵AAC-LC (HE非対応)" }
         $twitterAudioMenu += @{ Key = "copy"; Label = "音声コピー (-c:a copy)" }
 
         $twitterAudioChoices = @($twitterAudioMenu | ForEach-Object { $_.Label })
         $aIndex = Show-Menu -Title "音声エンコーダーを選択してください。(Twitter = AAC必須)" -Choices $twitterAudioChoices
         if ($aIndex -lt 0) { return $null }
-        switch ($twitterAudioMenu[$aIndex].Key) {
+        $selectedAudioKey = $twitterAudioMenu[$aIndex].Key
+        switch ($selectedAudioKey) {
             "qaac" { $result = Select-QaacOptions; if (-not $result) { return $null }; $audioSetting = $result }
             "nero" { $result = Select-NeroOptions; if (-not $result) { return $null }; $audioSetting = $result }
             "fdkaac" { $result = Select-FdkaacOptions; if (-not $result) { return $null }; $audioSetting = $result }
             "ffaac" { $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "ffmpeg AAC-LC 128kbps (HE非対応)" } }
             "copy" { } # default copy
+            default {
+                if ($selectedAudioKey -match "_") {
+                    $brChoices = @("320k", "256k", "192k", "128k", "96k", "カスタム")
+                    $brIndex = Show-Menu -Title "$selectedAudioKey のビットレートを選択" -Choices $brChoices
+                    if ($brIndex -lt 0) { return $null }
+                    if ($brIndex -eq 5) {
+                        $brVal = Read-Host "ビットレートを入力 (例: 128k)"
+                    }
+                    else {
+                        $brVal = $brChoices[$brIndex]
+                    }
+                    $audioSetting = @{ Type = "internal"; Options = "-c:a $selectedAudioKey -b:a $brVal"; Description = "$selectedAudioKey: $brVal" }
+                }
+            }
         }
     }
     else {
@@ -1623,6 +1678,15 @@ function Invoke-PlatformDetailedSetup {
         if ($extEnc.HasQaac) { $generalAudioMenu += @{ Key = "qaac"; Label = "qaac (AAC 自動HE/LC)" } }
         if ($extEnc.HasNero) { $generalAudioMenu += @{ Key = "nero"; Label = "Nero AAC (外部 自動HE/LC)" } }
         if ($extEnc.HasFdkaac) { $generalAudioMenu += @{ Key = "fdkaac"; Label = "fdkaac (外部 自動HE/LC)" } }
+        
+        if ($hwInfo -and $hwInfo.AvailableEncoders) {
+            foreach ($enc in $hwInfo.AvailableEncoders) {
+                if ($enc -match "^(aac|ac3|mp3|flac|opus|vorbis)_(mf|amf|nvenc|qsv|d3d12va|vulkan)$") {
+                    $generalAudioMenu += @{ Key = $enc; Label = "$enc (ハードウェア/API)" }
+                }
+            }
+        }
+        
         $generalAudioMenu += @{ Key = "opus"; Label = "Opus (libopus)" }
         $generalAudioMenu += @{ Key = "ffaac"; Label = "ffmpeg内蔵AAC-LC (HE非対応)" }
         $generalAudioMenu += @{ Key = "none"; Label = "音声なし (-an)" }
@@ -1630,7 +1694,8 @@ function Invoke-PlatformDetailedSetup {
         $generalAudioChoices = @($generalAudioMenu | ForEach-Object { $_.Label })
         $aIndex = Show-Menu -Title "音声エンコーダーを選択してください。" -Choices $generalAudioChoices
         if ($aIndex -lt 0) { return $null }
-        switch ($generalAudioMenu[$aIndex].Key) {
+        $selectedAudioKey = $generalAudioMenu[$aIndex].Key
+        switch ($selectedAudioKey) {
             "copy" { } # default copy
             "qaac" { $result = Select-QaacOptions; if (-not $result) { return $null }; $audioSetting = $result }
             "nero" { $result = Select-NeroOptions; if (-not $result) { return $null }; $audioSetting = $result }
@@ -1641,6 +1706,20 @@ function Invoke-PlatformDetailedSetup {
             }
             "ffaac" { $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 128k"; Description = "ffmpeg AAC-LC 128kbps (HE非対応)" } }
             "none" { $audioSetting = @{ Type = "none"; Options = "-an"; Description = "音声なし" } }
+            default {
+                if ($selectedAudioKey -match "_") {
+                    $brChoices = @("320k", "256k", "192k", "128k", "96k", "カスタム")
+                    $brIndex = Show-Menu -Title "$selectedAudioKey のビットレートを選択" -Choices $brChoices
+                    if ($brIndex -lt 0) { return $null }
+                    if ($brIndex -eq 5) {
+                        $brVal = Read-Host "ビットレートを入力 (例: 128k)"
+                    }
+                    else {
+                        $brVal = $brChoices[$brIndex]
+                    }
+                    $audioSetting = @{ Type = "internal"; Options = "-c:a $selectedAudioKey -b:a $brVal"; Description = "$selectedAudioKey: $brVal" }
+                }
+            }
         }
     }
 
@@ -2153,7 +2232,7 @@ function Invoke-SplitEncodeFile {
             # --- HWデコード (d3d11/cuda/vulkan) 使用時のフィルター互換性処理 ---
             $needsHwDownload = $effectiveHwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan|qsv|dxva2)'
             $isVulkanDecode = $effectiveHwAccelOption -match '-hwaccel\s+vulkan'
-            $isHwEncoder = $Config.EncoderSettings.Video -match '-c:v\s+\S+_(amf|nvenc|qsv)'
+            $isHwEncoder = $Config.EncoderSettings.Video -match '-c:v\s+\S+_(amf|nvenc|qsv|mf|d3d12va)'
             if ($needsHwDownload -and ($isVulkanDecode -or -not $isHwEncoder)) {
                 $ffmpegArgsList += @("-vf", "`"hwdownload,format=nv12`"")
                 Write-Log "HWデコード互換: hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
@@ -2397,7 +2476,7 @@ function Invoke-EncodeFile {
 
             $pass1NeedsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan|qsv|dxva2)'
             $pass1IsVulkanDecode = $HwAccelOption -match '-hwaccel\s+vulkan'
-            $pass1IsHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv)'
+            $pass1IsHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv|mf|d3d12va)'
             $pass1ResolvedVF = $Config.AdditionalVF
             if ($pass1NeedsHwDownload) {
                 if ($pass1ResolvedVF) {
@@ -2452,7 +2531,7 @@ function Invoke-EncodeFile {
         # hwdownload,format=nv12 を自動挿入してGPU→CPU転送を行う
         $needsHwDownload = $effectiveHwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan|qsv|dxva2)'
         $isVulkanDecode = $effectiveHwAccelOption -match '-hwaccel\s+vulkan'
-        $isHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv)'
+        $isHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv|mf|d3d12va)'
         $resolvedVF = $Config.AdditionalVF
 
         if ($needsHwDownload) {
