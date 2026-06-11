@@ -3,8 +3,9 @@
 .SYNOPSIS
     プレビュー付きMiraBox録画用スクリプト（ハードウェアエンコード完全版）じゃ。
 .DESCRIPTION
-    メイン録画のハードウェア（Intel/NVIDIA/AMD）を自動検知し、
-    プレビューも同じハードウェアエンコーダー（mjpeg_qsv等）にオフロードしてCPU負荷を極限まで下げる最終形態じゃ！
+    teeマルチプレクサによるゼロコピー分岐に加え、
+    プレビュー側(ffplay)にWindows標準のハードウェアアクセラレーション(d3d11va)を導入。
+    ベンダーごとの条件分岐を排除し、保守性と完全なVRAM内処理(ゼロコピー表示)を実現した最終形態じゃ！
 .EXAMPLE
     .\Record-MiraBox-RawPreview.ps1
 #>
@@ -107,28 +108,8 @@ switch ($saveIndex) {
 $optionsScriptPath = Join-Path $global:ScriptDir "get-ffmpegOptions.ps1"
 if (-not (Test-Path $optionsScriptPath)) { exit 1 }
 
-# 録画スクリプトからはハードウェアスキャンを「任意」で呼び出すのじゃ！
 $encoderSettings = . $optionsScriptPath -HwScanMode Optional
 if (-not $encoderSettings) { exit 0 }
-#endregion
-
-#region プレビューエンコーダーの動的判定
-$previewFormat = "mpegts"
-$previewVideo = "-c:v libx264 -preset ultrafast -tune zerolatency" # デフォルトのフォールバック
-
-if ($encoderSettings.Video -match "qsv") {
-    Write-Host "`nIntel QSVを検出したぞ！神コーデック『mjpeg_qsv』をプレビューに降臨させるのじゃ！" -ForegroundColor Green
-    $previewVideo = "-c:v mjpeg_qsv -q:v 5"
-    $previewFormat = "mjpeg"
-}
-elseif ($encoderSettings.Video -match "nvenc") {
-    Write-Host "`nNVIDIA NVENCを検出したぞ！超低遅延の『h264_nvenc』を使うのじゃ！" -ForegroundColor Green
-    $previewVideo = "-c:v h264_nvenc -preset p1 -tune ull -b:v 2M"
-}
-elseif ($encoderSettings.Video -match "amf") {
-    Write-Host "`nAMD AMFを検出したぞ！爆速の『h264_amf』を使うのじゃ！" -ForegroundColor Green
-    $previewVideo = "-c:v h264_amf -usage ultrafast -b:v 2M"
-}
 #endregion
 
 #region 録画とプレビュー処理
@@ -139,7 +120,6 @@ $udpClient.Close()
 Write-Host "ポート番号 $randomPort で安全に通信を開始するのじゃ！`n" -ForegroundColor Cyan
 
 $outputFileName = "MiraBox_Record_$((Get-Date).ToString('yyyyMMdd_HHmmss')).mkv"
-$outputFilePath = Join-Path $outputDir $outputFileName
 
 $ffmpegCmd = Get-Command -Name $global:Settings.FfmpegPath -ErrorAction SilentlyContinue
 $ffmpegDir = ""
@@ -153,15 +133,17 @@ if ($ffmpegDir -and (Test-Path (Join-Path $ffmpegDir "ffplay.exe"))) {
     $ffplayPath = Join-Path $ffmpegDir "ffplay.exe"
 }
 
-$ffplayArgsArray = @("-window_title", "Preview", "-x", "640", "-an", "-fflags", "nobuffer", "-flags", "low_delay", "-i", "udp://127.0.0.1:$randomPort")
+# プレビュー表示側：おぬしの提案通り、Windows標準のD3D11VA(DXVA2の後継)に任せるのじゃ！
+$ffplayArgsArray = @("-window_title", "Preview", "-x", "640", "-an", "-fflags", "nobuffer", "-flags", "low_delay", "-hwaccel", "d3d11va", "-i", "udp://127.0.0.1:$randomPort")
+
 $ffplayProc = Start-Process -FilePath $ffplayPath -ArgumentList $ffplayArgsArray -PassThru
 
 Start-Sleep -Seconds 1
 
 try {
-    # 動的判定した $previewVideo と $previewFormat をコマンドに組み込むのじゃ！
-    $ffmpegArgs = "-f dshow -rtbufsize 1024M -i video=`"MiraBox Video Capture`":audio=`"デジタル オーディオ インターフェイス (MiraBox Audio Capture)`" -filter_complex `"[0:v]split=2[rec][pre];[pre]scale=640:-1,format=yuv420p,fps=60,setpts=PTS-STARTPTS[pre_out];[rec]format=yuv420p[rec_out]`" -map `"[rec_out]`" -map 0:a $($encoderSettings.Video) $($encoderSettings.Audio) `"$outputFilePath`" -map `"[pre_out]`" $previewVideo -f $previewFormat udp://127.0.0.1:$randomPort"
-    Start-Process -FilePath $global:Settings.FfmpegPath -ArgumentList $ffmpegArgs -Wait -NoNewWindow
+    # 生映像(YUYV422)を一度だけエンコードし、teeマルチプレクサでMKVとUDPにそのまま流し込む究極魔法じゃ！
+    $ffmpegArgs = "-f dshow -video_size 1920x1080 -framerate 60 -pixel_format yuyv422 -rtbufsize 1024M -i video=`"MiraBox Video Capture`":audio=`"デジタル オーディオ インターフェイス (MiraBox Audio Capture)`" -map 0:v -map 0:a $($encoderSettings.Video) -pix_fmt nv12 $($encoderSettings.Audio) -f tee `"[f=matroska]$outputFileName|[f=mpegts]udp://127.0.0.1:$randomPort`""
+    Start-Process -FilePath $global:Settings.FfmpegPath -ArgumentList $ffmpegArgs -WorkingDirectory $outputDir -Wait -NoNewWindow
 }
 finally {
     if ($ffplayProc -and -not $ffplayProc.HasExited) {
