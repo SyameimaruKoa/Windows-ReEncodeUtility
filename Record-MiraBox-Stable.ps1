@@ -1,13 +1,12 @@
 ﻿# 下にヘルプがあるぞ
 <#
 .SYNOPSIS
-    プレビュー付きMiraBox録画用スクリプト（ハードウェアエンコード完全版）じゃ。
+    MiraBox録画用スクリプト（ハードウェアエンコード・録画専用版）じゃ。
 .DESCRIPTION
-    teeマルチプレクサによるゼロコピー分岐に加え、
-    プレビュー側(ffplay)にWindows標準のハードウェアアクセラレーション(d3d11va)を導入。
-    ベンダーごとの条件分岐を排除し、保守性と完全なVRAM内処理(ゼロコピー表示)を実現した最終形態じゃ！
+    プレビュー機能を完全に排除し、純粋にMiraBoxからの映像と音声をファイルに記録するだけのシンプルなスクリプトじゃ。
+    不安定な要素をなくし、確実な録画を優先したぞ。
 .EXAMPLE
-    .\Record-MiraBox-RawPreview.ps1
+    .\Record-MiraBox.ps1
 #>
 param([switch]$h, [switch]$help)
 if ($h -or $help) { Get-Help $MyInvocation.MyCommand.Path -Detailed; exit }
@@ -112,42 +111,13 @@ $encoderSettings = . $optionsScriptPath -HwScanMode Optional
 if (-not $encoderSettings) { exit 0 }
 #endregion
 
-#region 録画とプレビュー処理
-$udpClient = New-Object System.Net.Sockets.UdpClient(0)
-$randomPort = [int](($udpClient.Client.LocalEndPoint) -as [System.Net.IPEndPoint]).Port
-$udpClient.Close()
-
-Write-Host "ポート番号 $randomPort で安全に通信を開始するのじゃ！`n" -ForegroundColor Cyan
-
+#region 録画処理
 $outputFileName = "MiraBox_Record_$((Get-Date).ToString('yyyyMMdd_HHmmss')).mkv"
 
-$ffmpegCmd = Get-Command -Name $global:Settings.FfmpegPath -ErrorAction SilentlyContinue
-$ffmpegDir = ""
-if ($ffmpegCmd) {
-    if ($ffmpegCmd.Source) { $ffmpegDir = Split-Path $ffmpegCmd.Source }
-    elseif ($ffmpegCmd.Path) { $ffmpegDir = Split-Path $ffmpegCmd.Path }
-}
+Write-Host "`n録画を開始するのじゃ！プレビューはもう出ないから、安定して記録できるはずじゃぞ！`n" -ForegroundColor Cyan
 
-$ffplayPath = "ffplay"
-if ($ffmpegDir -and (Test-Path (Join-Path $ffmpegDir "ffplay.exe"))) {
-    $ffplayPath = Join-Path $ffmpegDir "ffplay.exe"
-}
+# teeやTCPの処理をすべて消し、単一ファイルへの出力に専念させるのじゃ
+$ffmpegArgs = "-f dshow -video_size 1920x1080 -framerate 60 -pixel_format yuyv422 -rtbufsize 1024M -i video=`"MiraBox Video Capture`":audio=`"デジタル オーディオ インターフェイス (MiraBox Audio Capture)`" -map 0:v -map 0:a $($encoderSettings.Video) -pix_fmt nv12 $($encoderSettings.Audio) `"$outputFileName`""
 
-# プレビュー表示側：おぬしの提案通り、Windows標準のD3D11VA(DXVA2の後継)に任せるのじゃ！
-$ffplayArgsArray = @("-window_title", "Preview", "-x", "640", "-an", "-fflags", "nobuffer", "-flags", "low_delay", "-hwaccel", "d3d11va", "-i", "udp://127.0.0.1:$randomPort")
-
-$ffplayProc = Start-Process -FilePath $ffplayPath -ArgumentList $ffplayArgsArray -PassThru
-
-Start-Sleep -Seconds 1
-
-try {
-    # 生映像(YUYV422)を一度だけエンコードし、teeマルチプレクサでMKVとUDPにそのまま流し込む究極魔法じゃ！
-    $ffmpegArgs = "-f dshow -video_size 1920x1080 -framerate 60 -pixel_format yuyv422 -rtbufsize 1024M -i video=`"MiraBox Video Capture`":audio=`"デジタル オーディオ インターフェイス (MiraBox Audio Capture)`" -map 0:v -map 0:a $($encoderSettings.Video) -pix_fmt nv12 $($encoderSettings.Audio) -f tee `"[f=matroska]$outputFileName|[f=mpegts]udp://127.0.0.1:$randomPort`""
-    Start-Process -FilePath $global:Settings.FfmpegPath -ArgumentList $ffmpegArgs -WorkingDirectory $outputDir -Wait -NoNewWindow
-}
-finally {
-    if ($ffplayProc -and -not $ffplayProc.HasExited) {
-        Stop-Process -Id $ffplayProc.Id -Force -ErrorAction SilentlyContinue
-    }
-}
+Start-Process -FilePath $global:Settings.FfmpegPath -ArgumentList $ffmpegArgs -WorkingDirectory $outputDir -Wait -NoNewWindow
 #endregion
