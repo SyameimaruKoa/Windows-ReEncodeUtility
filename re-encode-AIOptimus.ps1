@@ -322,6 +322,8 @@ function Invoke-FfmpegEncode {
             -RedirectStandardError $stderrFile
         # PS 5.1ではハンドルを事前にキャッシュしないと終了後にExitCodeがnullになる
         $null = $proc.Handle
+        $startPos = $null
+        $totalSizeVal = 0.0
         while (-not $proc.HasExited) {
             Start-Sleep -Milliseconds 500
             if (Test-Path $progressFile) {
@@ -331,20 +333,85 @@ function Invoke-FfmpegEncode {
                     $speedLine = $progContent | Where-Object { $_ -match '^speed=' } | Select-Object -Last 1
                     $fpsLine = $progContent | Where-Object { $_ -match '^fps=' } | Select-Object -Last 1
                     $bitrateLine = $progContent | Where-Object { $_ -match '^bitrate=' } | Select-Object -Last 1
+                    $totalSizeLine = $progContent | Where-Object { $_ -match '^total_size=' } | Select-Object -Last 1
                     if ($outTimeLine) {
                         $outTime = (($outTimeLine -split '=', 2)[1]).Trim()
                         $speed = if ($speedLine) { (($speedLine -split '=', 2)[1]).Trim() } else { "N/A" }
                         $fps = if ($fpsLine) { (($fpsLine -split '=', 2)[1]).Trim() } else { "N/A" }
                         $bitrate = if ($bitrateLine) { (($bitrateLine -split '=', 2)[1]).Trim() } else { "N/A" }
+                        
+                        if ($totalSizeLine) {
+                            $rawSize = (($totalSizeLine -split '=', 2)[1]).Trim()
+                            if ($rawSize -match '^\d+$') {
+                                $totalSizeVal = [double]$rawSize
+                            }
+                        }
+                        
+                        $formattedSize = "0 B"
+                        if ($totalSizeVal -gt 0) {
+                            if ($totalSizeVal -ge 1GB) { $formattedSize = "{0:F2} GB" -f ($totalSizeVal / 1GB) }
+                            elseif ($totalSizeVal -ge 1MB) { $formattedSize = "{0:F2} MB" -f ($totalSizeVal / 1MB) }
+                            elseif ($totalSizeVal -ge 1KB) { $formattedSize = "{0:F2} KB" -f ($totalSizeVal / 1KB) }
+                            else { $formattedSize = "{0} B" -f $totalSizeVal }
+                        }
+                        
                         $pct = ""
+                        $line1 = "  進捗: $outTime / 速度: $speed$pct / fps: $fps / bitrate: $bitrate / 作成済: $formattedSize"
+                        $line2 = "  予測: 計算中..."
+                        
                         if ($DurationSeconds -gt 0 -and $outTime -ne "N/A") {
                             try {
                                 $currentSec = [TimeSpan]::Parse($outTime).TotalSeconds
-                                $pct = " ({0:F1}%)" -f [Math]::Min(100, ($currentSec / $DurationSeconds) * 100)
+                                if ($currentSec -gt 0) {
+                                    $progressRatio = $currentSec / $DurationSeconds
+                                    $pct = " ({0:F1}%)" -f [Math]::Min(100, $progressRatio * 100)
+                                    $line1 = "  進捗: $outTime / 速度: $speed$pct / fps: $fps / bitrate: $bitrate / 作成済: $formattedSize"
+                                    
+                                    $elapsedSec = ((Get-Date) - $startTime).TotalSeconds
+                                    if ($progressRatio -gt 0.001 -and $elapsedSec -gt 0) {
+                                        $remainingSec = ($elapsedSec / $progressRatio) - $elapsedSec
+                                        if ($remainingSec -lt 0) { $remainingSec = 0 }
+                                        
+                                        $remainingTs = [TimeSpan]::FromSeconds($remainingSec)
+                                        $remainingStr = $remainingTs.ToString('hh\:mm\:ss')
+                                        $completionTime = (Get-Date).AddSeconds($remainingSec).ToString('HH:mm:ss')
+                                        
+                                        $predSizeStr = "N/A"
+                                        $predBitrateStr = "N/A"
+                                        if ($totalSizeVal -gt 0) {
+                                            $predictedSize = $totalSizeVal / $progressRatio
+                                            if ($predictedSize -ge 1GB) { $predSizeStr = "{0:F2} GB" -f ($predictedSize / 1GB) }
+                                            elseif ($predictedSize -ge 1MB) { $predSizeStr = "{0:F2} MB" -f ($predictedSize / 1MB) }
+                                            elseif ($predictedSize -ge 1KB) { $predSizeStr = "{0:F2} KB" -f ($predictedSize / 1KB) }
+                                            else { $predSizeStr = "{0} B" -f $predictedSize }
+                                            
+                                            $avgBitrateBps = ($predictedSize * 8) / $DurationSeconds
+                                            if ($avgBitrateBps -ge 1MB) { $predBitrateStr = "{0:F2} Mbps" -f ($avgBitrateBps / 1000000) }
+                                            elseif ($avgBitrateBps -ge 1KB) { $predBitrateStr = "{0:F2} kbps" -f ($avgBitrateBps / 1000) }
+                                            else { $predBitrateStr = "{0} bps" -f $avgBitrateBps }
+                                        }
+                                        $line2 = "  予測: [サイズ: $predSizeStr / 平均レート: $predBitrateStr] / 完了予定: $completionTime (残り: $remainingStr)"
+                                    }
+                                }
                             }
                             catch {}
                         }
-                        Write-Host "`r  進捗: $outTime / 速度: $speed$pct / fps: $fps / bitrate: $bitrate       " -NoNewline
+                        
+                        try {
+                            if ($null -ne $startPos) {
+                                $pos = $Host.UI.RawUI.CursorPosition
+                                $pos.Y = [math]::Max(0, $pos.Y - 1)
+                                $pos.X = 0
+                                $Host.UI.RawUI.CursorPosition = $pos
+                            } else {
+                                $startPos = $Host.UI.RawUI.CursorPosition
+                            }
+                        } catch {}
+                        
+                        $pad1 = [math]::Max(0, 120 - $line1.Length)
+                        $pad2 = [math]::Max(0, 120 - $line2.Length)
+                        Write-Host ($line1 + (" " * $pad1))
+                        Write-Host ($line2 + (" " * $pad2)) -NoNewline
                     }
                 }
                 catch {}
@@ -352,7 +419,38 @@ function Invoke-FfmpegEncode {
         }
         $proc.WaitForExit()
         $elapsed = (Get-Date) - $startTime
-        Write-Host "`r  完了 (所要時間: $($elapsed.ToString('hh\:mm\:ss')))                         "
+        try {
+            if ($null -ne $startPos) {
+                $pos = $Host.UI.RawUI.CursorPosition
+                $pos.Y = [math]::Max(0, $pos.Y - 1)
+                $pos.X = 0
+                $Host.UI.RawUI.CursorPosition = $pos
+            }
+        } catch {}
+        
+        $finalSizeStr = "N/A"
+        $finalBitrateStr = "N/A"
+        if ($totalSizeVal -gt 0) {
+            if ($totalSizeVal -ge 1GB) { $finalSizeStr = "{0:F2} GB" -f ($totalSizeVal / 1GB) }
+            elseif ($totalSizeVal -ge 1MB) { $finalSizeStr = "{0:F2} MB" -f ($totalSizeVal / 1MB) }
+            elseif ($totalSizeVal -ge 1KB) { $finalSizeStr = "{0:F2} KB" -f ($totalSizeVal / 1KB) }
+            else { $finalSizeStr = "{0} B" -f $totalSizeVal }
+            
+            if ($DurationSeconds -gt 0) {
+                $avgBitrateBps = ($totalSizeVal * 8) / $DurationSeconds
+                if ($avgBitrateBps -ge 1MB) { $finalBitrateStr = "{0:F2} Mbps" -f ($avgBitrateBps / 1000000) }
+                elseif ($avgBitrateBps -ge 1KB) { $finalBitrateStr = "{0:F2} kbps" -f ($avgBitrateBps / 1000) }
+                else { $finalBitrateStr = "{0} bps" -f $avgBitrateBps }
+            }
+        }
+        
+        $finalLine1 = "  完了 (所要時間: $($elapsed.ToString('hh\:mm\:ss')))"
+        $finalLine2 = "  出力サイズ: $finalSizeStr / 平均レート: $finalBitrateStr"
+        $pad1 = [math]::Max(0, 120 - $finalLine1.Length)
+        $pad2 = [math]::Max(0, 120 - $finalLine2.Length)
+        
+        Write-Host ($finalLine1 + (" " * $pad1))
+        Write-Host ($finalLine2 + (" " * $pad2))
         Write-Log "エンコード所要時間: $($elapsed.ToString('hh\:mm\:ss'))"
         $stdout = ""; $stderr = ""
         if (Test-Path $stdoutFile) { $stdout = Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction SilentlyContinue }
