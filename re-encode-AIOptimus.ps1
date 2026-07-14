@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     動画ファイルを一括で再エンコードするPowerShellスクリプトじゃ。
 .DESCRIPTION
@@ -324,6 +324,47 @@ function Invoke-FfmpegEncode {
         $null = $proc.Handle
         $startPos = $null
         $totalSizeVal = 0.0
+        $maxBitrateVal = 0.0
+        $lastFlushedSize = 0.0
+        $lastFlushedFrame = 0.0
+        $avgFrameSize = 0.0
+        
+        $guessBitrateBps = 3000000.0  # デフォルト3Mbps
+        $fpsGuess = 30.0              # デフォルト30fps
+        $inputPath = $null
+        if ($Arguments -match '-i\s+"([^"]+)"') {
+            $inputPath = $Matches[1]
+        } elseif ($Arguments -match '-i\s+(\S+)') {
+            $inputPath = $Matches[1]
+        }
+        if ($inputPath -and (Test-Path $inputPath) -and $DurationSeconds -gt 0) {
+            try {
+                $inputSize = (Get-Item $inputPath).Length
+                $inputBitrateBps = ($inputSize * 8) / $DurationSeconds
+                # 圧縮率を約15%と仮定した推定ビットレート
+                $guessBitrateBps = $inputBitrateBps * 0.15
+                if ($guessBitrateBps -lt 500000) { $guessBitrateBps = 500000 } # 最小500kbps
+                
+                # 入力ビデオのフレームレートを取得
+                $rFrameRate = & $global:Settings.FfprobePath -v quiet -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 "$inputPath" 2>$null
+                if ($rFrameRate -match '^(\d+)/(\d+)$') {
+                    $num = [double]$Matches[1]
+                    $den = [double]$Matches[2]
+                    if ($den -gt 0) { $fpsGuess = $num / $den }
+                } elseif ($rFrameRate -as [double]) {
+                    $fpsGuess = [double]$rFrameRate
+                }
+            } catch {}
+        }
+        
+        try {
+            Write-Log "DEBUG: HostName=$($Host.Name), WindowWidth=$($Host.UI.RawUI.WindowSize.Width), BufferWidth=$($Host.UI.RawUI.BufferSize.Width)" -Level "DEBUG"
+        } catch {
+            Write-Log "DEBUG: Failed to read console settings: $_" -Level "WARN"
+        }
+        if ($Arguments -match '\.(webm|mkv|mp4|mov)"?\s*$') {
+            Write-Host "  ※注記: WebM/MKV/MP4等のコンテナは書込みバッファリングを行うため、容量や予測値の更新に遅延が生じる場合があります。" -ForegroundColor Yellow
+        }
         while (-not $proc.HasExited) {
             Start-Sleep -Milliseconds 500
             if (Test-Path $progressFile) {
@@ -334,9 +375,21 @@ function Invoke-FfmpegEncode {
                     $fpsLine = $progContent | Where-Object { $_ -match '^fps=' } | Select-Object -Last 1
                     $bitrateLine = $progContent | Where-Object { $_ -match '^bitrate=' } | Select-Object -Last 1
                     $totalSizeLine = $progContent | Where-Object { $_ -match '^total_size=' } | Select-Object -Last 1
+                    $frameCountLine = $progContent | Where-Object { $_ -match '^frame=' } | Select-Object -Last 1
                     if ($outTimeLine) {
                         $outTime = (($outTimeLine -split '=', 2)[1]).Trim()
-                        $speed = if ($speedLine) { (($speedLine -split '=', 2)[1]).Trim() } else { "N/A" }
+                        if ($outTime -match '^(\d{2}:\d{2}:\d{2}\.\d{3})\d*$') {
+                            $outTime = $Matches[1]
+                        }
+                        $speed = "N/A"
+                        if ($speedLine) {
+                            $rawSpeed = (($speedLine -split '=', 2)[1]).Trim()
+                            if ($rawSpeed -match '([\d\.]+)\s*x?') {
+                                $speed = "{0:F2}x" -f [double]$Matches[1]
+                            } else {
+                                $speed = $rawSpeed
+                            }
+                        }
                         $fps = if ($fpsLine) { (($fpsLine -split '=', 2)[1]).Trim() } else { "N/A" }
                         $bitrate = if ($bitrateLine) { (($bitrateLine -split '=', 2)[1]).Trim() } else { "N/A" }
                         
@@ -344,6 +397,22 @@ function Invoke-FfmpegEncode {
                             $rawSize = (($totalSizeLine -split '=', 2)[1]).Trim()
                             if ($rawSize -match '^\d+$') {
                                 $totalSizeVal = [double]$rawSize
+                            }
+                        }
+                        
+                        $frameCount = 0.0
+                        if ($frameCountLine) {
+                            $rawFrame = (($frameCountLine -split '=', 2)[1]).Trim()
+                            if ($rawFrame -match '^\d+$') {
+                                $frameCount = [double]$rawFrame
+                            }
+                        }
+                        
+                        if ($totalSizeVal -gt 100KB -and $totalSizeVal -gt $lastFlushedSize) {
+                            $lastFlushedSize = $totalSizeVal
+                            if ($frameCount -gt 0) {
+                                $lastFlushedFrame = $frameCount
+                                $avgFrameSize = $lastFlushedSize / $lastFlushedFrame
                             }
                         }
                         
@@ -356,8 +425,36 @@ function Invoke-FfmpegEncode {
                         }
                         
                         $pct = ""
-                        $line1 = "  進捗: $outTime / 速度: $speed$pct / fps: $fps / bitrate: $bitrate / 作成済: $formattedSize"
+                        # ビットレートの表記修正用
+                        $formattedBitrate = "N/A"
+                        if ($bitrate -match '([\d\.]+)\s*(k?bits/s|kbps|kb)') {
+                            $num = [double]$Matches[1]
+                            $unit = $Matches[2]
+                            $formattedBitrate = "{0:F1} kbps" -f $num
+                        } else {
+                            $formattedBitrate = $bitrate
+                        }
+                        
+                        $line1 = "  進捗: $outTime ($formattedSize) / 速度: $speed$pct / fps: $fps / bitrate: $formattedBitrate"
                         $line2 = "  予測: 計算中..."
+                        
+                        # 推定サイズ用のフォーマッタ定義
+                        $formatEstSize = {
+                            param([double]$bytes)
+                            if ($bytes -lt 999.5) {
+                                return "{0} B" -f [int][math]::Round($bytes)
+                            }
+                            $kb = $bytes / 1024
+                            if ($kb -lt 999.995) {
+                                return "{0:F2} KB" -f $kb
+                            }
+                            $mb = $kb / 1024
+                            if ($mb -lt 999.995) {
+                                return "{0:F2} MB" -f $mb
+                            }
+                            $gb = $mb / 1024
+                            return "{0:F2} GB" -f $gb
+                        }
                         
                         if ($DurationSeconds -gt 0 -and $outTime -ne "N/A") {
                             try {
@@ -365,7 +462,53 @@ function Invoke-FfmpegEncode {
                                 if ($currentSec -gt 0) {
                                     $progressRatio = $currentSec / $DurationSeconds
                                     $pct = " ({0:F1}%)" -f [Math]::Min(100, $progressRatio * 100)
-                                    $line1 = "  進捗: $outTime / 速度: $speed$pct / fps: $fps / bitrate: $bitrate / 作成済: $formattedSize"
+                                    
+                                    # ビットレート換算容量の計算
+                                    $diffSizeStr = "0 B"
+                                    $bitrateVal = 0.0
+                                    $formattedBitrate = "N/A"
+                                    if ($bitrate -match '([\d\.]+)\s*(k?bits/s|kbps|kb)') {
+                                        $num = [double]$Matches[1]
+                                        $unit = $Matches[2]
+                                        $currentBitrateVal = if ($unit -match 'k') { $num * 1000 } else { $num }
+                                        
+                                        # 初期のヘッダースパイクを避けるため、100KB以上または1.5秒以上経過してからピークビットレートを追跡
+                                        if ($totalSizeVal -gt 100KB -or $currentSec -gt 1.5) {
+                                            if ($currentBitrateVal -gt $maxBitrateVal) {
+                                                $maxBitrateVal = $currentBitrateVal
+                                            }
+                                        } else {
+                                            $maxBitrateVal = $currentBitrateVal
+                                        }
+                                        
+                                        $bitrateVal = if ($maxBitrateVal -gt 0) { $maxBitrateVal } else { $currentBitrateVal }
+                                        
+                                        # フレーム数ベースでの高精度サイズ推定
+                                        if ($avgFrameSize -gt 0 -and $lastFlushedFrame -gt 0 -and $frameCount -ge $lastFlushedFrame) {
+                                            $unflushedFrames = $frameCount - $lastFlushedFrame
+                                            $estSizeVal = $lastFlushedSize + ($unflushedFrames * $avgFrameSize)
+                                        } else {
+                                            if ($frameCount -gt 0) {
+                                                # 初回書き出し前は、推測ビットレートと入力ビデオのフレームレートから1フレームあたりのサイズを仮定
+                                                # これにより、フレーム数/経過秒数の比率に応じて予測サイズも動的に微小更新されます
+                                                $guessFrameSize = ($guessBitrateBps / 8) / $fpsGuess
+                                                $estSizeVal = $frameCount * $guessFrameSize
+                                            } else {
+                                                $estSizeVal = ($guessBitrateBps / 8) * $currentSec
+                                            }
+                                        }
+                                        
+                                        # 差分（推定バッファサイズ）の計算
+                                        $diffVal = [math]::Max(0.0, $estSizeVal - $totalSizeVal)
+                                        $diffSizeStr = &$formatEstSize $diffVal
+                                        
+                                        $formattedBitrate = "{0:F1} kbps" -f $num
+                                    } else {
+                                        $formattedBitrate = $bitrate
+                                    }
+                                    
+                                    $sizeDisplay = "$formattedSize + $diffSizeStr"
+                                    $line1 = "  進捗: $outTime ($sizeDisplay) / 速度: $speed$pct / fps: $fps / bitrate: $formattedBitrate"
                                     
                                     $elapsedSec = ((Get-Date) - $startTime).TotalSeconds
                                     if ($progressRatio -gt 0.001 -and $elapsedSec -gt 0) {
@@ -378,23 +521,23 @@ function Invoke-FfmpegEncode {
                                         
                                         $predSizeStr = "N/A"
                                         $predBitrateStr = "N/A"
-                                        if ($totalSizeVal -gt 0) {
-                                            $predictedSize = $totalSizeVal / $progressRatio
-                                            if ($predictedSize -ge 1GB) { $predSizeStr = "{0:F2} GB" -f ($predictedSize / 1GB) }
-                                            elseif ($predictedSize -ge 1MB) { $predSizeStr = "{0:F2} MB" -f ($predictedSize / 1MB) }
-                                            elseif ($predictedSize -ge 1KB) { $predSizeStr = "{0:F2} KB" -f ($predictedSize / 1KB) }
-                                            else { $predSizeStr = "{0} B" -f $predictedSize }
-                                            
+                                        
+                                        $activeBitrate = if ($bitrateVal -gt 0) { $bitrateVal } else { $guessBitrateBps }
+                                        if ($activeBitrate -gt 0) {
+                                            # フレーム数ベースの推定から予測サイズと平均ビットレートを計算
+                                            $predictedSize = ($estSizeVal / $currentSec) * $DurationSeconds
+                                            $predSizeStr = &$formatEstSize $predictedSize
+                                             
                                             $avgBitrateBps = ($predictedSize * 8) / $DurationSeconds
-                                            if ($avgBitrateBps -ge 1MB) { $predBitrateStr = "{0:F2} Mbps" -f ($avgBitrateBps / 1000000) }
-                                            elseif ($avgBitrateBps -ge 1KB) { $predBitrateStr = "{0:F2} kbps" -f ($avgBitrateBps / 1000) }
+                                            if ($avgBitrateBps -ge 1000000) { $predBitrateStr = "{0:F2} Mbps" -f ($avgBitrateBps / 1000000) }
+                                            elseif ($avgBitrateBps -ge 1000) { $predBitrateStr = "{0:F2} kbps" -f ($avgBitrateBps / 1000) }
                                             else { $predBitrateStr = "{0} bps" -f $avgBitrateBps }
                                         }
+                                        
                                         $line2 = "  予測: [サイズ: $predSizeStr / 平均レート: $predBitrateStr] / 完了予定: $completionTime (残り: $remainingStr)"
                                     }
                                 }
-                            }
-                            catch {}
+                            } catch {}
                         }
                         
                         try {
@@ -408,10 +551,20 @@ function Invoke-FfmpegEncode {
                             }
                         } catch {}
                         
-                        $pad1 = [math]::Max(0, 120 - $line1.Length)
-                        $pad2 = [math]::Max(0, 120 - $line2.Length)
-                        Write-Host ($line1 + (" " * $pad1))
-                        Write-Host ($line2 + (" " * $pad2)) -NoNewline
+                        $consoleWidth = 120
+                        try {
+                            if ($Host.UI.RawUI.WindowSize.Width -gt 0) {
+                                $consoleWidth = $Host.UI.RawUI.WindowSize.Width
+                            }
+                        } catch {}
+                        $maxWidth = [math]::Min(100, $consoleWidth - 5)
+                        if ($maxWidth -lt 40) { $maxWidth = 40 }
+                        $line1Sub = if ($line1.Length -gt $maxWidth) { $line1.Substring(0, $maxWidth) } else { $line1 }
+                        $line2Sub = if ($line2.Length -gt $maxWidth) { $line2.Substring(0, $maxWidth) } else { $line2 }
+                        $pad1 = [math]::Max(0, $maxWidth - $line1Sub.Length)
+                        $pad2 = [math]::Max(0, $maxWidth - $line2Sub.Length)
+                        Write-Host ($line1Sub + (" " * $pad1))
+                        Write-Host ($line2Sub + (" " * $pad2)) -NoNewline
                     }
                 }
                 catch {}
@@ -446,11 +599,21 @@ function Invoke-FfmpegEncode {
         
         $finalLine1 = "  完了 (所要時間: $($elapsed.ToString('hh\:mm\:ss')))"
         $finalLine2 = "  出力サイズ: $finalSizeStr / 平均レート: $finalBitrateStr"
-        $pad1 = [math]::Max(0, 120 - $finalLine1.Length)
-        $pad2 = [math]::Max(0, 120 - $finalLine2.Length)
+        $consoleWidth = 120
+        try {
+            if ($Host.UI.RawUI.WindowSize.Width -gt 0) {
+                $consoleWidth = $Host.UI.RawUI.WindowSize.Width
+            }
+        } catch {}
+        $maxWidth = [math]::Min(100, $consoleWidth - 5)
+        if ($maxWidth -lt 40) { $maxWidth = 40 }
+        $finalLine1Sub = if ($finalLine1.Length -gt $maxWidth) { $finalLine1.Substring(0, $maxWidth) } else { $finalLine1 }
+        $finalLine2Sub = if ($finalLine2.Length -gt $maxWidth) { $finalLine2.Substring(0, $maxWidth) } else { $finalLine2 }
+        $pad1 = [math]::Max(0, $maxWidth - $finalLine1Sub.Length)
+        $pad2 = [math]::Max(0, $maxWidth - $finalLine2Sub.Length)
         
-        Write-Host ($finalLine1 + (" " * $pad1))
-        Write-Host ($finalLine2 + (" " * $pad2))
+        Write-Host ($finalLine1Sub + (" " * $pad1))
+        Write-Host ($finalLine2Sub + (" " * $pad2))
         Write-Log "エンコード所要時間: $($elapsed.ToString('hh\:mm\:ss'))"
         $stdout = ""; $stderr = ""
         if (Test-Path $stdoutFile) { $stdout = Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction SilentlyContinue }
