@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     動画ファイルを一括で再エンコードするPowerShellスクリプトじゃ。
 .DESCRIPTION
@@ -188,6 +188,46 @@ function Get-MediaInfoString {
     }
     catch { $lines += "メディア情報の取得に失敗: $_" }
     return ($lines -join "`n")
+}
+function Get-AudioMappingFamily {
+    param([string]$FilePath)
+    try {
+        $jsonStr = & $global:Settings.FfprobePath -v quiet -print_format json -show_streams -select_streams a:0 "$FilePath" 2>$null | Out-String
+        if ([string]::IsNullOrWhiteSpace($jsonStr)) { return "" }
+        $json = $jsonStr | ConvertFrom-Json
+        if (-not $json.streams -or $json.streams.Count -eq 0) { return "" }
+
+        $stream = $json.streams[0]
+        $layout = $stream.channel_layout
+        $channels = $stream.channels
+
+        if (-not $layout) {
+            $layout = "unknown"
+        }
+
+        # Ambisonics layout mapping (mapping family 2)
+        if ($layout -match 'ambisonic') {
+            $validAmbisonicChannels = @(1, 4, 9, 16, 25, 36, 49, 64, 81, 100, 121, 144, 169, 196, 225)
+            if ($channels -in $validAmbisonicChannels) {
+                return "-mapping_family 2"
+            } else {
+                return "-mapping_family 255"
+            }
+        }
+
+        # Non-standard or unknown layout mappings with 3+ channels (mapping family 255)
+        $standardLayouts = @("mono", "stereo", "2.1", "3.0", "3.0(back)", "4.0", "quad", "5.0", "5.0(side)", "5.1", "5.1(side)", "6.0", "6.0(front)", "hexagonal", "6.1", "6.1(back)", "6.1(front)", "7.0", "7.0(front)", "7.1", "7.1(wide)", "7.1(wide-side)", "octagonal")
+
+        if ($channels -gt 2) {
+            if ($layout -eq "unknown" -or $layout -eq "unspecified" -or $layout -notin $standardLayouts) {
+                return "-mapping_family 255"
+            }
+        }
+    }
+    catch {
+        # Silent failure, fallback to default behavior
+    }
+    return ""
 }
 
 function Get-InputDuration {
@@ -2074,7 +2114,15 @@ function Invoke-SplitEncodeFile {
                 $ffmpegArgsList += @("-map", "0:v:0", "-map", "$($audioInputIndex):a:0", "-c:a", "copy")
             }
             else {
-                $ffmpegArgsList += $audioOptions.Split(' ', $splitOptions)
+                $audioArgs = $audioOptions.Split(' ', $splitOptions)
+                $ffmpegArgsList += $audioArgs
+                if ($audioOptions -match '-c:a\s+libopus') {
+                    $mappingFamily = Get-AudioMappingFamily -FilePath $InputFile
+                    if ($mappingFamily) {
+                        $ffmpegArgsList += $mappingFamily.Split(' ', $splitOptions)
+                        Write-Log "音声マッピングファミリー適用: $mappingFamily" -Level "DEBUG"
+                    }
+                }
             }
 
             $ffmpegArgsList += "`"$outputFilePath`""
@@ -2389,7 +2437,17 @@ function Invoke-EncodeFile {
         
         # !!ここでエラーが出ないように明示的に展開!!
         if ($tempAudioOutFile) { $ffmpegArgsList += @("-map", "0:v:0", "-map", "$($audioInputIndex):a:0", "-c:a", "copy") }
-        else { $ffmpegArgsList += $audioOptions.Split(' ', $splitOptions) }
+        else {
+            $audioArgs = $audioOptions.Split(' ', $splitOptions)
+            $ffmpegArgsList += $audioArgs
+            if ($audioOptions -match '-c:a\s+libopus') {
+                $mappingFamily = Get-AudioMappingFamily -FilePath $InputFile
+                if ($mappingFamily) {
+                    $ffmpegArgsList += $mappingFamily.Split(' ', $splitOptions)
+                    Write-Log "音声マッピングファミリー適用: $mappingFamily" -Level "DEBUG"
+                }
+            }
+        }
         
         if ($useFfmpegMetadata) { $ffmpegArgsList += @("-map_metadata", "$metadataInputIndex") }
         $ffmpegArgsList += "`"$outputFile`""
