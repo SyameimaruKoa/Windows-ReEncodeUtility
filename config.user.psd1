@@ -14,7 +14,7 @@
 
     # --- 補助ツール (オプション) ---
     ExifToolPath     = "exiftool"
-    LosslessCutPath  = "C:\Users\kouki\OneDrive\PortableApps\LosslessCutPortable\LosslessCutPortable.exe"
+    LosslessCutPath  = "C:\Users\kouki\OneDrive\PortableApps\LosslessCutPortable\LosslessCutPortableFast.bat"
 
     # --- その他 ---
     NotifyScriptPath = "" # エラー通知などに使うスクリプトのパスじゃ。

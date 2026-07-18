@@ -161,7 +161,7 @@ ffprobe -version
 
     # --- 補助ツール (オプション) ---
     ExifToolPath     = "exiftool"
-    LosslessCutPath  = "C:\path\to\LosslessCutPortable.exe"
+    LosslessCutPath  = "C:\path\to\LosslessCutPortableFast.bat"
 
     # --- その他 ---
     NotifyScriptPath = ""                 # エラー通知用スクリプトのパス
