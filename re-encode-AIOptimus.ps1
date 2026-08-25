@@ -778,6 +778,67 @@ function Sanitize-FileName {
         -replace '\|', '｜' `
         -replace '[\r\n]', '' # 改行も削除
 }
+
+function Select-DeinterlaceOption {
+    <#
+    .SYNOPSIS
+        インターレース処理を行うかどうかの確認およびフィルター選択メニューを表示し、解決済みのフィルター文字列（または "None"）を返す。
+    #>
+    $filterValues = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")
+
+    $actionIndex = Show-Menu -Title "インターレース処理（解除・逆テレシネ等）を行いますか？" -Choices @(
+        "行わない (スキップ)",
+        "自動判定する (動画を解析して判定 ※時間がかかります)",
+        "手動で選択する (解析をスキップして直接フィルター指定)"
+    )
+
+    $selectedFilter = "None"
+    if ($actionIndex -eq 1) {
+        Write-Host "インターレース判定を実行中..." -ForegroundColor Cyan
+        $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
+        if ($isInterlaced) {
+            $idx = Show-Menu -Title "インターレースが検出されました。解除方法を選択してください。" -Choices @(
+                "行わない",
+                "fieldmatch,decimate (逆テレシネ: 通常のアニメ等に)",
+                "fieldmatch,nnedi,decimate (逆テレシネ: 極高品質 ※重い)",
+                "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)",
+                "nnedi (極高品質: 学習ウェイトDL必要 ※重い)",
+                "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"
+            )
+            if ($idx -ge 0 -and $idx -lt $filterValues.Length) {
+                $selectedFilter = $filterValues[$idx]
+            }
+        }
+        else {
+            $idx = Show-Menu -Title "インターレースは検出されませんでした (プログレッシブ判定)。`n特定フレームの除去や強制インターレース解除を行いますか？" -Choices @(
+                "行わない",
+                "fieldmatch,decimate (強制逆テレシネ: 通常)",
+                "fieldmatch,nnedi,decimate (強制逆テレシネ: 極高品質 ※重い)",
+                "bwdif (強制インターレース解除: 高品質)",
+                "nnedi (強制インターレース解除: 極高品質 ※重い)",
+                "w3fdif (強制インターレース解除: 標準・高速)"
+            )
+            if ($idx -ge 0 -and $idx -lt $filterValues.Length) {
+                $selectedFilter = $filterValues[$idx]
+            }
+        }
+    }
+    elseif ($actionIndex -eq 2) {
+        $idx = Show-Menu -Title "インターレース解除 / 逆テレシネフィルターを選択してください。" -Choices @(
+            "行わない",
+            "fieldmatch,decimate (逆テレシネ: 通常のアニメ等に)",
+            "fieldmatch,nnedi,decimate (逆テレシネ: 極高品質 ※重い)",
+            "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)",
+            "nnedi (極高品質: 学習ウェイトDL必要 ※重い)",
+            "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"
+        )
+        if ($idx -ge 0 -and $idx -lt $filterValues.Length) {
+            $selectedFilter = $filterValues[$idx]
+        }
+    }
+
+    return Resolve-DeinterlaceFilter -filter $selectedFilter
+}
 #endregion
 
 #region 外部エンコーダー関連
@@ -1555,15 +1616,7 @@ function Invoke-PlatformAutoSetup {
     $confirm = Show-Menu -Title "この設定でよろしいですか？" -Choices @("はい", "いいえ、やり直します")
     if ($confirm -eq 1) { return Invoke-PlatformUploadSetup }
 
-    $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
-    if ($isInterlaced) {
-        $deinterlace = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (逆テレシネ: 通常のアニメ等に)", "fieldmatch,nnedi,decimate (逆テレシネ: 極高品質 ※重い)", "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)", "nnedi (極高品質: 学習ウェイトDL必要 ※重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
-    }
-    else {
-        $deinterlace = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (強制逆テレシネ: 通常)", "fieldmatch,nnedi,decimate (強制逆テレシネ: 極高品質 ※重い)", "bwdif (強制インターレース解除: 高品質)", "nnedi (強制インターレース解除: 極高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
-    }
-
-    $deinterlace = Resolve-DeinterlaceFilter -filter $deinterlace
+    $deinterlace = Select-DeinterlaceOption
     $finalVF = $auto.ScaleFilter
     if ($deinterlace -ne "None") {
         if ($finalVF) {
@@ -1920,15 +1973,7 @@ function Invoke-PlatformDetailedSetup {
     $confirm = Show-Menu -Title "この設定でよろしいですか？" -Choices @("はい", "いいえ、やり直します")
     if ($confirm -eq 1) { return Invoke-PlatformUploadSetup }
 
-    $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
-    if ($isInterlaced) {
-        $deinterlace = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (逆テレシネ: 通常のアニメ等に)", "fieldmatch,nnedi,decimate (逆テレシネ: 極高品質 ※重い)", "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)", "nnedi (極高品質: 学習ウェイトDL必要 ※重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
-    }
-    else {
-        $deinterlace = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (強制逆テレシネ: 通常)", "fieldmatch,nnedi,decimate (強制逆テレシネ: 極高品質 ※重い)", "bwdif (強制インターレース解除: 高品質)", "nnedi (強制インターレース解除: 極高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
-    }
-
-    $deinterlace = Resolve-DeinterlaceFilter -filter $deinterlace
+    $deinterlace = Select-DeinterlaceOption
     $finalVF = $scaleFilter
     if ($deinterlace -ne "None") {
         if ($finalVF) {
@@ -2100,21 +2145,13 @@ function Invoke-InteractiveSetup {
     $cut = @("No", "Yes")[(Show-Menu -Title "動画をカットしますか？ (LosslessCutを使用)" -Choices @("いいえ", "はい"))]
     $metadata = @("ExifTool", "Ffmpeg", "None")[(Show-Menu -Title "動画のメタデータ(撮影日時など)を保持しますか？" -Choices @("ExifToolで全コピー", "ffmpeg形式で一部保持", "保持しない"))]
     
-    $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
-    if ($isInterlaced) {
-        $deinterlace = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "インターレース解除を行いますか？" -Choices @("行わない", "fieldmatch,decimate (逆テレシネ: 通常のアニメ等に)", "fieldmatch,nnedi,decimate (逆テレシネ: 極高品質 ※重い)", "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)", "nnedi (極高品質: 学習ウェイトDL必要 ※重い)", "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"))]
-    }
-    else {
-        $deinterlace = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")[(Show-Menu -Title "特定フレームの除去 (プログレッシブと判定済 / 強制インタレ解除も可)" -Choices @("行わない", "fieldmatch,decimate (強制逆テレシネ: 通常)", "fieldmatch,nnedi,decimate (強制逆テレシネ: 極高品質 ※重い)", "bwdif (強制インターレース解除: 高品質)", "nnedi (強制インターレース解除: 極高品質 ※重い)", "w3fdif (強制インターレース解除: 標準・高速)"))]
-    }
+    $deinterlace = Select-DeinterlaceOption
 
     $additionalVF = ""; $additionalArgs = ""
     if ((Show-Menu -Title "追加のビデオフィルター(-vf)やオプションを使いますか？" -Choices @("いいえ", "はい")) -eq 1) {
         $additionalVF = Read-Host "ffmpegの「-vf」として使用するフィルターを入力 (例: scale=1280:-1)"
         $additionalArgs = Read-Host "その他のffmpeg引数を追加 (例: -max_muxing_queue_size 1024)"
     }
-    
-    $deinterlace = Resolve-DeinterlaceFilter -filter $deinterlace
     if ($deinterlace -ne "None") {
         if ($additionalVF) {
             $additionalVF = "$deinterlace,$additionalVF"
