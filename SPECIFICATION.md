@@ -17,6 +17,7 @@
 | **数値設定の思想** | **定番の推奨プリセット選択肢から選ぶのを基本**とし、**`カスタム...` 選択時のみ数値入力ボックスが有効化**される |
 | **初期セットアップ** | **`config.json` 未存在時は PATH / 一般配置場所を自動走査して自動生成**（FFmpeg未検出時は警告ダイアログ表示） |
 | **ログ保存** | **エンコード完了時、出力動画と同階層に `<出力名>_encode.log` を自動生成**（完全コマンド、実行時間、平均fps、HW使用状況、エラーログを記録） |
+| **通知機能** | **完了通知音 (System Sound)**、**外部通知スクリプト (`notify_script_path`)**、および **Discord WebHook 通知 (`discord_webhook_url`)** に対応 |
 | **OS 連携** | **エクスプローラー「送る (SendTo)」** および **動画右クリックメニュー (`SystemFileAssociations\video`)** 起動 |
 | **多重起動制御** | **エンコード前 (Idle)**: 既存ウィンドウのキューに追加して最前面化<br>**エンコード中 (Encoding)**: 独立した別ターミナルウィンドウとして新規起動 |
 
@@ -219,7 +220,7 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
 - 実行中に受け付ける操作は `Space` (一時停止/再開), `Esc` (中断), `F3` (ログ展開/スクロール), `Alt+D` (詳細確認) のみに限定。
 
 ### 5.2 キュー連続実行 & エラーハンドリング
-- キュー内のファイルがエンコードエラーになった場合、エラーログを出力し、通知スクリプト（`notify_script_path`）を実行した上で**スキップし、残りのファイルのエンコードを自動継続**。
+- キュー内のファイルがエンコードエラーになった場合、エラーログを出力し、通知スクリプト（`notify_script_path`）および Discord WebHook（`discord_webhook_url`）を実行した上で**スキップし、残りのファイルのエンコードを自動継続**。
 
 ### 5.3 中断（キャンセル）時の自動クリーンアップ
 - エンコード途中で中断された場合、FFmpeg プロセスを即座に安全キルし、**書き込み途中の不完全な出力ファイルおよび一時ファイル（WAV、2-Passログ等）を自動的に即座に削除**。
@@ -233,6 +234,11 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
 - **計算式**:
   $$\text{TargetBitrate (kbps)} = \frac{(\text{MaxFileSizeMB} \times 1024 \times 8 \times 0.985) - (\text{AudioBitrateKbps} \times \text{DurationSec})}{\text{DurationSec}}$$
   ※ コンテナオーバーヘッドとして $1.5\%$ を安全マージンとして差し引く。
+- **プラットフォーム別コーデック制限**:
+  - **Twitter**: H.264 のみ（最大 1280x720 自動縮小、最大 60fps、音声 AAC）。非対応コーデックは選択肢から自動除外。
+  - **Discord**: H.264 / H.265 / AV1 / VP9（10MB上限）。
+  - **catbox.moe / uguu.se / GitHub**: 汎用。
+  - **GitHub Release (2GB)**: CRF 18 高画質優先（`no_maxrate: true`）。
 - **パラメータ設定**:
   - `-maxrate <TargetBitrate>k -bufsize <TargetBitrate * 2>k` を自動付与。
   - `音声コピー` 時は ffprobe で実測した音声ビットレートを使用。
@@ -255,7 +261,7 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
   - `bwdif`, `yadif`, `w3fdif`, `nnedi`
   - `fieldmatch,decimate` (24fps 逆テレシネ)
   - `fieldmatch,nnedi=weights='...':deint=interlaced,decimate`
-- **nnedi3 自動取得**: `nnedi3_weights.bin` が未存在の場合、公式リポジトリから自動ダウンロードし、パスを安全にエスケープ（`\` ➔ `/`, `:` ➔ `\:`) して埋め込み。
+- **nnedi3 自動取得とエラー時挙動**: `nnedi3_weights.bin` が未存在の場合、公式リポジトリから自動ダウンロードを試行。**ダウンロード失敗時はフォールバックせずエラーとして該当動画をスキップ**する。
 
 ### 5.8 外部音声エンコーダ & 特殊チャンネル処理 (`internal/core/audio_pipeline.go`, `audio_mapping.go`)
 - **外部エンコーダパイプライン**:
@@ -345,7 +351,8 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
         "fdkaac_path": "fdkaac",
         "exiftool_path": "exiftool",
         "losslesscut_path": "",
-        "notify_script_path": ""
+        "notify_script_path": "",
+        "discord_webhook_url": ""
     },
     "output": {
         "default_mode": "General",
@@ -395,5 +402,5 @@ Windows-ReEncodeUtility/
     │     ├── log_view.go           # インライン・ログコンソール (F3)
     │     └── context_menu.go       # 右クリック/SendTo登録ダイアログ (F2)
     ├── core/                       # コアロジック (HWスキャン・互換制御・P/Eコア検出・引数生成・各モードロジック)
-    └── runner/                     # FFmpeg実行・進捗解析・一時停止・タスクバー同期・電源制御
+    └── runner/                     # FFmpeg実行・進捗解析・一時停止・タスクバー同期・電源制御・Discord通知
 ```
