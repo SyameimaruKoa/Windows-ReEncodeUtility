@@ -14,14 +14,15 @@
 | **バイナリ形態** | **完全自己完結型 単一バイナリ (`ReEncodeUtility.exe` 約10MB〜12MB)** |
 | **配置・ポータビリティ** | **`config.json` および `Templates/` は実行ファイルと同階層に完全集約**（作成不可時は警告を表示して起動中止） |
 | **ビルド自動化** | **`build.bat` (Shift-JIS / -h/--help対応 / 完了時一時停止) のみで完結**（ps1廃止） |
+| **文字コード・パス対応** | **Windows UTF-16 Wide API (`CreateProcessW`) により、日本語・特殊記号・長パスの文字化けを完全防止** |
 | **操作体系** | **1画面完結型ダッシュボード (4大モード別専用UI ＋ Keyboard-First ＋ マウス完全対応)**<br>スマートデフォルトにより「起動 ➔ 即 Enter」で開始可能 |
-| **キュー処理の思想** | **キューに存在するすべての動画が同一設定でエンコード対象**（不要な動画は `Delete` キーで削除） |
+| **キュー処理の思想** | **キューに存在するすべての動画が同一設定でエンコード対象**（非動画は自動除外・不要な動画は `Delete` キーで削除） |
 | **テンプレートの扱い** | **テンプレートは必要な時のみオンデマンドで読込 (`F4`)・保存 (`F5`) する補助機能**（テンプレート使用前提を撤廃） |
 | **数値設定の思想** | **定番の推奨プリセット選択肢から選ぶのを基本**とし、**`カスタム...` 選択時のみ数値入力ボックスが有効化**される |
 | **初期セットアップ** | **`config.json` 未存在時は PATH / 一般配置場所を自動走査して同階層に生成**（FFmpeg未検出時は警告ダイアログ表示） |
 | **ログ保存** | **エンコード完了時、出力動画と同階層に `<出力名>_encode.log` を自動生成**（完全コマンド、実行時間、平均fps、HW使用状況、エラーログを記録） |
 | **通知機能** | **完了通知音 (System Sound)**、**外部通知スクリプト (`notify_script_path`)**、および **Discord WebHook 通知 (`discord_webhook_url`, 完了時メンション対応)** に対応 |
-| **OS 連携** | **エクスプローラー「送る (SendTo)」** および **動画右クリックメニュー (`SystemFileAssociations\video`)** 起動 |
+| **OS 連携** | **エクスプローラー「送る (SendTo)」** および **動画右クリックメニュー (`SystemFileAssociations\video`)** 起動（UAC管理者権限不要で `F2` から登録・解除可能） |
 | **多重起動制御** | **エンコード前 (Idle)**: 既存ウィンドウのキューに追加して最前面化 (`Named Pipe`)<br>**エンコード中 (Encoding)**: 独立した別ターミナルウィンドウとして新規起動 |
 
 ---
@@ -294,8 +295,9 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
 - シャットダウン / 再起動 / 休止 が選択されている場合、全処理完了時に画面中央に **60秒の安全カウントダウンダイアログ** を表示。
 - カウントダウン中に **`[キャンセル (Esc)]`** を押すと即座に電源アクションを阻止し、TUI待機状態に復帰。
 
-### 5.12 メディア情報解析 (ffprobe) の非同期実行
+### 5.12 メディア情報解析 (ffprobe) の非同期実行 & 非動画ファイル安全スキップ
 - メディア情報解析（`ffprobe`）は非同期 goroutine で実行され、ネットワークドライブや巨大ファイルでも**タイムアウトによる強制打ち切りは行わず、確実に解析完了まで待機**。TUI メイン描画スレッドは一切ブロックされない。
+- **非動画ファイルの安全スキップ**: `ffprobe` 解析で動画ストリーム（`codec_type: "video"`）が検出されないファイル（テキストや破損ファイル等）は、自動的にキューから除外し、ログコンソールに `[WARN] 非動画ファイルのためスキップ: <ファイル名>` を記録。
 
 ### 5.13 カット時間指定の柔軟パース & LosslessCut 連携
 - 開始時間・終了時間入力欄は、以下の多様な書式を自動パース：
@@ -366,9 +368,11 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
 - `NtSuspendProcess` / `NtResumeProcess` により、FFmpeg プロセスを即座に一時停止 / 再開。
 
 ### 6.4 エクスプローラー連携ワンクリック登録 (`internal/ui/context_menu.go`)
-- レジストリキー: `HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\video\shell\ReEncodeUtility`
-- コマンド: `"C:\path\to\ReEncodeUtility.exe" "%1"`
-- アイコン設定および SendTo ショートカット（`%APPDATA%\Microsoft\Windows\SendTo\ReEncodeUtility.lnk`）の自動生成・削除。
+- **管理者権限（UAC）不要**:
+  - レジストリキー: `HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\video\shell\ReEncodeUtility`
+  - コマンド: `"C:\path\to\ReEncodeUtility.exe" "%1"`
+  - SendTo ショートカット: `%APPDATA%\Microsoft\Windows\SendTo\ReEncodeUtility.lnk`
+  - HKCU およびユーザーの APPDATA を使用するため、管理者権限なしで `F2` から安全かつ即座に登録・削除が可能。
 
 ### 6.5 TUI モーダルダイアログ操作体系
 - `F1` (ヘルプ), `F2` (連携登録), `F4` (テンプレート読込), `F5` (テンプレート保存) 押下時：
