@@ -1,7 +1,7 @@
 # Windows-ReEncodeUtility (Go + Bubble Tea TUI 版) 完全技術仕様書
 
 本書は、`Windows-ReEncodeUtility` の PowerShell 実装（`re-encode-AIOptimus.ps1` 他 約3,500行）を Go 言語およびモダン TUI フレームワーク（`Bubble Tea` / `Lip Gloss`）へ完全移植・リニューアルするための確定技術仕様書である。
-記載されている文言・選択肢・パラメータ定義・内部ロジックは、現行 PowerShell スクリプトの記述およびこれまでの全決定事項に完全準拠する。
+記載されている文言・選択肢・パラメータ定義・内部ロジックは、現行 PowerShell スクリプト（`config.user.psd1` を含む）の記述およびこれまでの全決定事項に完全準拠する。
 
 ---
 
@@ -19,7 +19,7 @@
 | **キュー処理の思想** | **キューに存在するすべての動画が同一設定でエンコード対象**（非動画は自動除外・不要な動画は `Delete` キーで削除） |
 | **テンプレートの扱い** | **テンプレートは必要な時のみオンデマンドで読込 (`F4`)・保存 (`F5`) する補助機能**（テンプレート使用前提を撤廃） |
 | **数値設定の思想** | **定番の推奨プリセット選択肢から選ぶのを基本**とし、**`カスタム...` 選択時のみ数値入力ボックスが有効化**される |
-| **初期セットアップ** | **`config.json` 未存在時は PATH / 一般配置場所を自動走査して同階層に生成**（FFmpeg未検出時は警告ダイアログ表示） |
+| **初期セットアップ** | **`config.user.psd1` の設定を Go 版 `config.json` に完全引き継ぎ**（未存在時は PATH / 一般配置場所を自動走査して生成、FFmpeg未検出時は警告ダイアログ表示） |
 | **ログ保存** | **エンコード完了時、出力動画と同階層に `<出力名>_encode.log` を自動生成**（完全コマンド、実行時間、平均fps、HW使用状況、エラーログを記録） |
 | **通知機能** | **完了通知音 (System Sound)**、**外部通知スクリプト (`notify_script_path`)**、および **Discord WebHook 通知 (`discord_webhook_url`, 完了時メンション対応)** に対応 |
 | **OS 連携** | **エクスプローラー「送る (SendTo)」** および **動画右クリックメニュー (`SystemFileAssociations\video`)** 起動（UAC管理者権限不要で `F2` から登録・解除可能） |
@@ -235,7 +235,7 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
   - **デフォルト**: `Skip`（スキップ）
   - **切替可能**: メイン画面の詳細設定および `config.json` 内で `AutoRename`（連番 `_01`, `_02`）または `Overwrite`（強制上書き）に切り替え可能。
 
-### 5.5 プラットフォーム容量逆算ロジック (`bitrate_calc.go`)
+### 5.5 プラットフォーム容量逆算ロジック & 容量超過警告 (`bitrate_calc.go`)
 - **計算式**:
   $$\text{TargetBitrate (kbps)} = \frac{(\text{MaxFileSizeMB} \times 1024 \times 8 \times 0.985) - (\text{AudioBitrateKbps} \times \text{DurationSec})}{\text{DurationSec}}$$
   ※ コンテナオーバーヘッドとして $1.5\%$ を安全マージンとして差し引く。
@@ -248,6 +248,7 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
   - `-maxrate <TargetBitrate>k -bufsize <TargetBitrate * 2>k` を自動付与。
   - `音声コピー` 時は ffprobe で実測した音声ビットレートを使用。
   - `音声なし` 時は 音声 0MB として全容量を映像に配分。
+- **容量超過警告ロジック**: エンコード完了後、出力ファイルの実サイズがプラットフォーム目標サイズを超過していた場合、ログコンソールに黄色で `[WARN] ファイルサイズ上限超過: XX MB > 目標 MB` を警告表示。
 
 ### 5.6 ハードウェア検出 & デコード/転送制御 (`internal/core/hw_scanner.go`, `hw_compat.go`)
 - **対応HW**: NVIDIA (NVENC/CUDA), Intel (QSV), AMD (AMF), Vulkan, D3D12VA, MediaFoundation (MF), CPU (Software)
@@ -287,7 +288,7 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
 - **セグメント個別エンコード**: 各セグメントごとに `-ss` / `-to` を指定し、個別に出力・ログ記録。
 
 ### 5.10 メタデータ & 編集 & DASH PTS補正 (`internal/core/metadata.go`)
-- **ExifTool**: `-api largefilesupport=1 -tagsfromfile <Input> -all:all -overwrite_original <Output>`
+- **ExifTool**: `-api largefilesupport=1 -tagsfromfile <Input> -all:all -overwrite_original <Output>`（実行後に残る `*_original` バックアップファイルを自動削除クリーンアップ）。
 - **ffmetadata**: `ffmpeg -f ffmetadata` 経由でのメタデータコピー。
 - **DASH PTS補正**: 入力が DASH または断片化 MP4 の場合、`-fflags +genpts` を自動付与。
 
@@ -399,7 +400,7 @@ Pure Go ビルド用の Windows バッチファイル。PowerShell スクリプ�
 
 ---
 
-## 8. 設定ファイル `config.json` 完全仕様
+## 8. 設定ファイル `config.json` 完全仕様 (config.user.psd1 完全引継ぎ)
 
 ```json
 {
@@ -410,7 +411,7 @@ Pure Go ビルド用の Windows バッチファイル。PowerShell スクリプ�
         "nero_aac_path": "neroAacEnc",
         "fdkaac_path": "fdkaac",
         "exiftool_path": "exiftool",
-        "losslesscut_path": "LosslessCut.bat",
+        "losslesscut_path": "C:\\Users\\kouki\\OneDrive\\PortableApps\\LosslessCutPortable\\LosslessCutPortableFast.bat",
         "notify_script_path": "",
         "discord_webhook_url": "",
         "discord_mention_user_id": "",
