@@ -11,7 +11,8 @@
 | **開発言語 / UI** | **Go 1.22+** / **Bubble Tea (`github.com/charmbracelet/bubbletea`)**<br>スタイリング: **Lip Gloss** / UI部品: **Bubbles** |
 | **ビルド特性** | **`CGO_ENABLED=0` 純粋 Go 完全対応（ビルド時間 1〜2秒・GCC/Cコンパイラ不要）** |
 | **バイナリ形態** | **完全自己完結型 単一バイナリ (`ReEncodeUtility.exe` 約10MB〜12MB)** |
-| **操作体系** | **1画面完結型ダッシュボード (Keyboard-First ＋ マウスクリック/スクロール完全対応)**<br>スマートデフォルトにより「起動 ➔ 即 Enter」で開始可能 |
+| **操作体系** | **1画面完結型ダッシュボード (パラメータ直接設定が主役 ＋ Keyboard-First ＋ マウス完全対応)**<br>スマートデフォルトにより「起動 ➔ 即 Enter」で開始可能 |
+| **テンプレートの扱い** | **テンプレートは必要な時のみオンデマンドで読込 (`F4`)・保存 (`F5`) する補助機能**（テンプレート使用前提を撤廃） |
 | **OS 連携** | **エクスプローラー「送る (SendTo)」** および **動画右クリックメニュー (`SystemFileAssociations\video`)** 起動 |
 | **多重起動制御** | **エンコード前 (Idle)**: 既存ウィンドウのキューに追加して最前面化<br>**エンコード中 (Encoding)**: 独立した別ターミナルウィンドウとして新規起動 |
 
@@ -20,47 +21,46 @@
 ## 2. 確定画面レイアウト設計 (1画面 TUI ダッシュボード)
 
 ```text
-┌─ Windows-ReEncodeUtility ─────────────────────────────────────────── [⚙ 連携登録 (F2)] [F1: ヘルプ] ─┐
-│  [キュー] 処理対象 (2件 - フォルダ自動展開)   │  [エンコード設定]                                     │
-│  ┌───────────────────────────────────────┐  │  ① モード   : (o)通常  ( )プラットフォーム  ( )中間  ( )分割 │
-│  │ [x] 1. sample_video.mp4 (1080p, 2.1GB)│  │  ② プロファイル: [ Twitter (512MB / 720p / H264)   ▼] [💾保存]│
-│  │ [x] 2. clip_4k.mkv      (4K,   5.4GB) │  │                                                      │
-│  │                                       │  │  ▼ モード別・基本パラメータ ───────────────────────── │
-│  │                                       │  │  ハードウェア : [ NVIDIA (NVENC)                   ▼]│
-│  └───────────────────────────────────────┘  │  映像コーデック: [ H.264 (自動選択)                ▼]│
-│  [Ctrl+↑/↓: 順序入替] [▲][▼]              │  品質 (CRF)   : [ 18 ] ───●──────── (容量内で最大品質) │
-│                                             │  エンコード速度: [ P4 (標準)                       ▼]│
-│  [選択ファイルのメディア情報]               │  音声設定     : [ AAC (128kbps)                   ▼]│
-│  ・長さ: 00:03:45 / 解像度: 1920x1080       │  インターレース: [ 自動検出 (idet解析)             ▼]│
-│  ・映像: h264, 60.0 fps, yuv420p            │  出力形式     : [ mp4                             ▼]│
-│  ・音声: aac, 48000Hz, stereo               │                                                      │
-│                                             │  [▼ 詳細設定・リソース制御 を開く (Alt+D)]           │
-│                                             │  ・CPU制限    : [ 全コア使用 (標準)               ▼] │
-│                                             │                 [ Pコアのみ (性能優先)             ] │
-│                                             │                 [ Eコアのみ (静音・裏作業用)       ] │
-│                                             │                 [ EcoQoS / 省電力低優先度         ] │
-│                                             │  ・同名ファイル: [ スキップ (Skip)                 ▼] │
-│                                             │                 [ 自動連番 (AutoRename)          ] │
-│                                             │                 [ 上書き (Overwrite)             ] │
-│                                             │  ・2-Pass モード: [ [ ] OFF ]                          │
-│                                             │  ・メタデータ保持: [ ExifToolで全コピー            ▼] │
-│                                             │  ・カット区間  : 開始 [ 00:00:00 ] 終了 [ 00:00:00 ] │
-│                                             │  ・追加 VF    : [ scale=1280:-2                   ] │
-│                                             │  ・追加 引数   : [ -max_muxing_queue_size 1024     ] │
-│                                             │  ・完了後電源  : [ 何もしない                     ▼] │
-├─────────────────────────────────────────────┴──────────────────────────────────────────────────────┤
-│  進捗: [████████████████████████████████░░░░░░░░░░░░░░░░] 58% (00:02:10 / 00:03:45)                 │
-│  速度: 3.20x │ fps: 192 │ 出力予測: 485 MB / 512 MB (上限OK) │ 残り時間: 00:00:29 (完了予定: 21:12)   │
-│  ※ Windows タスクバーに進捗率（緑バー / エラー時赤バー）をリアルタイム同期表示                       │
-├────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│  [▼ ログコンソール (F3キー / クリックで展開)]                                                      │
-│  [INFO ] [2026-08-28 14:28:00] 入力ファイル情報取得完了: sample_video.mp4                          │
-│  [INFO ] [2026-08-28 14:28:01] HWデコード互換: hwdownload,format=nv12 を自動挿入                  │
-│  [DEBUG] [2026-08-28 14:28:02] [CMD] "ffmpeg" -hide_banner -y -hwaccel cuda ...                  │
-│  [INFO ] [2026-08-28 14:28:03] [GPU/HW処理情報] デコード: GPU (cuda) / エンコード: GPU (nvenc)   │
-├────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│  [Tab] 項目移動   [Space] 一時停止/再開   [Del] 削除  │  [Esc] 中断/終了     [Enter] エンコード開始 │
-└────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─ Windows-ReEncodeUtility ───────── [📂 テンプレート読込 (F4)] [💾 保存 (F5)] [⚙ 連携登録 (F2)] [F1: ヘルプ] ─┐
+│  [キュー] 処理対象 (2件 - フォルダ自動展開)   │  [エンコード設定]                                                 │
+│  ┌───────────────────────────────────────┐  │  実行モード   : (o)通常  ( )プラットフォーム  ( )中間  ( )分割             │
+│  │ [x] 1. sample_video.mp4 (1080p, 2.1GB)│  │                                                                  │
+│  │ [x] 2. clip_4k.mkv      (4K,   5.4GB) │  │  ▼ パラメータ直接設定 ────────────────────────────────────────── │
+│  │                                       │  │  ハードウェア : [ NVIDIA (NVENC)                               ▼]│
+│  └───────────────────────────────────────┘  │  映像コーデック: [ H.264 (自動選択)                            ▼]│
+│  [Ctrl+↑/↓: 順序入替] [▲][▼]              │  品質 (CRF)   : [ 18 ] ───●──────── (容量内で最大品質)             │
+│                                             │  エンコード速度: [ P4 (標準)                                   ▼]│
+│  [選択ファイルのメディア情報]               │  音声設定     : [ AAC (128kbps)                               ▼]│
+│  ・長さ: 00:03:45 / 解像度: 1920x1080       │  インターレース: [ 自動検出 (idet解析)                         ▼]│
+│  ・映像: h264, 60.0 fps, yuv420p            │  出力形式     : [ mp4                                         ▼]│
+│  ・音声: aac, 48000Hz, stereo               │                                                                  │
+│                                             │  [▼ 詳細設定・リソース制御 を開く (Alt+D)]                       │
+│                                             │  ・CPU制限    : [ 全コア使用 (標準)                           ▼] │
+│                                             │                 [ Pコアのみ (性能優先)                         ] │
+│                                             │                 [ Eコアのみ (静音・裏作業用)                   ] │
+│                                             │                 [ EcoQoS / 省電力低優先度                     ] │
+│                                             │  ・同名ファイル: [ スキップ (Skip)                             ▼] │
+│                                             │                 [ 自動連番 (AutoRename)                       ] │
+│                                             │                 [ 上書き (Overwrite)                          ] │
+│                                             │  ・2-Pass モード: [ [ ] OFF ]                                      │
+│                                             │  ・メタデータ保持: [ ExifToolで全コピー                        ▼] │
+│                                             │  ・カット区間  : 開始 [ 00:00:00 ] 終了 [ 00:00:00 ]             │
+│                                             │  ・追加 VF    : [ scale=1280:-2                               ] │
+│                                             │  ・追加 引数   : [ -max_muxing_queue_size 1024                 ] │
+│                                             │  ・完了後電源  : [ 何もしない                                 ▼] │
+├─────────────────────────────────────────────┴──────────────────────────────────────────────────────────────────┤
+│  進捗: [████████████████████████████████░░░░░░░░░░░░░░░░] 58% (00:02:10 / 00:03:45)                             │
+│  速度: 3.20x │ fps: 192 │ 出力予測: 485 MB / 512 MB (上限OK) │ 残り時間: 00:00:29 (完了予定: 21:12)               │
+│  ※ Windows タスクバーに進捗率（緑バー / エラー時赤バー）をリアルタイム同期表示                                 │
+├────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  [▼ ログコンソール (F3キー / クリックで展開)]                                                                  │
+│  [INFO ] [2026-08-28 14:30:00] 入力ファイル情報取得完了: sample_video.mp4                                      │
+│  [INFO ] [2026-08-28 14:30:01] HWデコード互換: hwdownload,format=nv12 を自動挿入                              │
+│  [DEBUG] [2026-08-28 14:30:02] [CMD] "ffmpeg" -hide_banner -y -hwaccel cuda ...                              │
+│  [INFO ] [2026-08-28 14:30:03] [GPU/HW処理情報] デコード: GPU (cuda) / エンコード: GPU (nvenc)               │
+├────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  [Tab] 項目移動   [Space] 一時停止/再開   [Del] 削除  │  [Esc] 中断/終了     [Enter] エンコード開始             │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### キーボードショートカット一覧 & マウス操作
@@ -71,9 +71,11 @@
 | **`Space`** | エンコード中の一時停止（サスペンド）/ 再開（レジューム） |
 | **`Ctrl + ↑` / `Ctrl + ↓`** | キュー内で選択中の動画ファイルの処理順序を上下に入れ替え |
 | **`Delete`** | キューから選択中の動画ファイルを削除 |
-| **`Tab` / `Shift+Tab`** | 設定項目のフォーカス順次移動（Lip Gloss ハイライト枠表示） |
+| **`Tab` / `Shift+Tab`** | 設定項目のフォーカス順次移動（Lip Gloss シアン枠ハイライト） |
 | **`↑` / `↓`** | ドロップダウンの選択肢変更、キュー一覧のカーソル移動 |
 | **`Alt + D`** | 詳細設定アコーディオンの展開 / 格納 |
+| **`F4`** | **テンプレート読込ダイアログ表示**（保存済みテンプレートから設定を一括流し込み） |
+| **`F5`** | **現在の設定をテンプレートとして保存ダイアログ表示** |
 | **`F3`** | インライン・ログコンソールの展開 / 格納 |
 | **`F2`** | 右クリックメニュー / SendTo 連携登録ダイアログ表示 |
 | **`F1`** | ヘルプ・ショートカット一覧ダイアログ表示 |
@@ -81,81 +83,71 @@
 
 ---
 
-## 3. 初期同梱プロファイル（Profiles/*.json）完全定義
+## 3. テンプレート（Templates）仕様
 
-### 3.1 通常モード用 (`Profiles/general/`)
-1. **`high_quality_av1.json`**:
-   - 映像: AV1 / CRF: 22 / プリセット: 標準 / 音声: Opus 160kbps / 出力: mkv
-2. **`psvr_sbs_full.json`**:
-   - 映像: H.264 / CRF: 18 / フィルタ: SBS変換 / 音声: AAC 192kbps / 出力: mp4
-3. **`psvr_sbs_half.json`**:
-   - 映像: H.264 / CRF: 18 / フィルタ: ハーフSBS変換 / 音声: AAC 192kbps / 出力: mp4
-4. **`psvr_sbs_crop_16_9.json`**:
-   - 映像: H.264 / CRF: 18 / フィルタ: 16:9 クロップ ＋ SBS / 出力: mp4
-5. **`psvr_sbs_crop_4_3.json`**:
-   - 映像: H.264 / CRF: 18 / フィルタ: 4:3 クロップ ＋ SBS / 出力: mp4
+テンプレートは常時強制されるものではなく、**「必要な時だけ呼び出し・保存する」**オンデマンド機能として動作します。
 
-### 3.2 プラットフォームモード用 (`Profiles/platform/`)
-1. **`twitter_512mb.json`**:
-   - 上限: 512MB / 最大解像度: 1280x720 / 映像: H.264 / CRF: 18 (maxrate逆算) / 音声: AAC 128kbps / 出力: mp4
-2. **`discord_10mb.json`**:
-   - 上限: 10MB / 映像: H.264またはAV1 / CRF: 24 (maxrate逆算) / 音声: Opus 64kbps または HE-AAC 48kbps / 出力: mp4
-3. **`catbox_200mb.json`**:
-   - 上限: 200MB / 映像: 任意 / CRF: 20 (maxrate逆算) / 音声: 128kbps / 出力: mp4
-4. **`uguu_64mb.json`**:
-   - 上限: 64MB / 映像: 任意 / CRF: 22 (maxrate逆算) / 音声: 96kbps / 出力: mp4
-5. **`github_100mb.json`**:
-   - 上限: 100MB / 映像: 任意 / CRF: 20 (maxrate逆算) / 音声: 128kbps / 出力: webm / mp4
-6. **`github_release_2gb.json`**:
-   - 上限: 2048MB / **`no_maxrate: true`** (ビットレート制限なし・CRF 18 高品質優先) / 出力: mkv
+### ディレクトリ構成 (`Templates/`)
+```
+Templates/
+  ├── psvr_sbs_full.json
+  ├── psvr_sbs_half.json
+  ├── psvr_sbs_crop_16_9.json
+  └── psvr_sbs_crop_4_3.json
+```
 
-### 3.3 中間ファイルモード用 (`Profiles/intermediate/`)
-1. **`prores_422hq.json`**:
-   - 映像: ProRes 422 HQ (`prores_ks -profile:v 3`) / ピクセル形式: `yuv422p10le` / 音声: PCM / 出力: mkv / mov
-2. **`dnxhr_hqx.json`**:
-   - 映像: DNxHR HQX (`dnxhd -profile:v dnxhr_hqx`) / ピクセル形式: `yuv422p10le` / 音声: PCM / 出力: mkv / mov
-3. **`lossless_flac.json`**:
-   - 映像: FFV1 (`ffv1 -level 3`) / ピクセル形式: `yuv444p` / 音声: FLAC / 出力: mkv
-
-### 3.4 分割モード用 (`Profiles/split/`)
-1. **`chapter_text_name.json`**:
-   - 分割ソース: 内部チャプター / 命名規則: テキスト名 (`元名_チャプター名.ext`)
-2. **`srt_number_name.json`**:
-   - 分割ソース: 外部SRT字幕 / 命名規則: 連番 (`元名_01.ext`)
+### テンプレートの適用フロー
+1. `F4` または `[📂 テンプレート読込]` ボタンを押すと、`Templates/*.json` の一覧ダイアログが表示される。
+2. 選択したテンプレートの内容（モード、HW、コーデック、CRF、速度、音声、フィルタ等）が、現在の画面の入力項目へ一括で反映される。
+3. 反映後も、ユーザーは画面上の任意のパラメータを個別に微調整可能。
 
 ---
 
-## 4. コアロジック & エッジケース確定仕様
+## 4. 実行モード別の動作仕様
 
-### 4.1 キュー連続実行 & エラーハンドリング
+1. **通常モード (`General`)**:
+   - 全パラメータ（HW、映像コーデック、CRF/ビットレート、速度、音声、インターレース等）を自由に直接設定。
+2. **プラットフォームモード (`Platform`)**:
+   - 画面上に「プリセット (Twitter 512MB / Discord 10MB / catbox 200MB / uguu 64MB / GitHub 100MB / GitHub Release 2GB / カスタム)」または「目標ファイルサイズ (MB)」の入力欄が出現。
+   - 動画の長さから **maxrate / bufsize / ビットレートが自動逆算**される。
+3. **中間ファイル作成モード (`Intermediate`)**:
+   - 高品質編集用フォーマット（ProRes 422HQ, DNxHR HQX, FFV1 ロスレス, FLAC/PCM）がセットされ、出力コンテナが `mkv`/`mov` に最適化。
+4. **チャプター/字幕分割モード (`Split`)**:
+   - 分割ソース（内部チャプター / 外部SRT）および命名規則（テキスト名 / 連番）の専用設定パネルが出現。
+
+---
+
+## 5. コアロジック & エッジケース確定仕様
+
+### 5.1 キュー連続実行 & エラーハンドリング
 - キュー内のファイルがエンコードエラーになった場合、そのファイルのエラーログを出力・記録し、通知スクリプト（`notify_script_path`）を実行した上で**スキップし、残りのファイルのエンコードを自動継続**する。
 
-### 4.2 中断（キャンセル）時の自動クリーンアップ
+### 5.2 中断（キャンセル）時の自動クリーンアップ
 - エンコード途中で `Escape` キーまたは中断操作が行われた場合、FFmpeg プロセスを即座に安全キルし、**書き込み途中の不完全な出力ファイルおよび一時ファイル（WAV、2-Passログ等）を自動的に即座に削除**する。
 
-### 4.3 出力ファイル名衝突（重複）ハンドリング
+### 5.3 出力ファイル名衝突（重複）ハンドリング
 - 出力先に同名ファイルが既に存在する場合の挙動：
   - **デフォルト**: `Skip`（スキップ）
   - **切替可能**: メイン画面の詳細設定および `config.json` 内で `AutoRename`（連番 `_01`, `_02`）または `Overwrite`（強制上書き）に切り替え可能。
 
-### 4.4 電源アクション安全カウントダウン
+### 5.4 電源アクション安全カウントダウン
 - シャットダウン / 再起動 / 休止 が選択されている場合、全処理完了時に画面中央に **60秒の安全カウントダウンダイアログ** を表示。
 - カウントダウン中に **`[キャンセル (Esc)]`** を押すと即座に電源アクションを阻止し、TUI待機状態に復帰。
 
-### 4.5 メディア情報解析 (ffprobe) の非同期実行
+### 5.5 メディア情報解析 (ffprobe) の非同期実行
 - メディア情報解析（`ffprobe`）は非同期 goroutine で実行され、ネットワークドライブや巨大ファイルでも**タイムアウトによる強制打ち切りは行わず、確実に解析完了まで待機**する。TUI メイン描画スレッドは一切ブロックされない。
 
-### 4.6 カット時間指定の柔軟パース
+### 5.6 カット時間指定の柔軟パース
 - 開始時間・終了時間入力欄は、以下の多様な書式を自動パース：
   - `00:01:23.500`（時:分:秒.ミリ秒）
   - `01:23`（分:秒 ➔ `00:01:23`）
   - `83` / `83.5`（秒数直打ち ➔ 秒数として解釈）
   - 空欄または `00:00:00` の場合は `-ss` / `-to` 引数を付与しない。
 
-### 4.7 ディスク空き容量事前チェック
+### 5.7 ディスク空き容量事前チェック
 - エンコード開始前、出力先ドライブの空き容量を自動取得し、不足（入力サイズ未満等）の場合は事前に警告ダイアログを表示。
 
-### 4.8 ハードウェア検出 & デコード/転送制御 (`internal/core/hw_scanner.go`, `hw_compat.go`)
+### 5.8 ハードウェア検出 & デコード/転送制御 (`internal/core/hw_scanner.go`, `hw_compat.go`)
 - **対応HW**: NVIDIA (NVENC/CUDA), Intel (QSV), AMD (AMF), Vulkan, D3D12VA, MediaFoundation (MF), CPU (Software)
 - **キャッシュ**: `.cache/hardware-scan-cache.json`（マシン名・FFmpegシグネチャ検証）
 - **HWデコード出力形式**: `cuda`, `qsv`, `d3d11`, `dxva2`, `vulkan`
@@ -163,14 +155,14 @@
 - **extra_hw_frames 制御**: 同一GPU系統（CUDAデコード+NVENC、QSVデコード+QSVエンコード）以外の組み合わせ時に `-extra_hw_frames 64` を自動付与。
 - **エラー自動リトライ**: stderr からドライバ/GPUエラー（DXVA/CUDA/QSV failure）を検知した場合、自動的に `-hwaccel` を除外して CPU/標準フォールバックで即座に1回再実行。
 
-### 4.9 プラットフォーム容量逆算ロジック (`internal/core/bitrate_calc.go`)
+### 5.9 プラットフォーム容量逆算ロジック (`internal/core/bitrate_calc.go`)
 - **計算式**:
   $$\text{TargetBitrate (kbps)} = \frac{(\text{MaxFileSizeMB} \times 1024 \times 8 \times 0.985) - (\text{AudioBitrateKbps} \times \text{DurationSec})}{\text{DurationSec}}$$
   ※ コンテナオーバーヘッドとして $1.5\%$ を安全マージンとして差し引く。
 - **パラメータ設定**:
   - `-maxrate <TargetBitrate>k -bufsize <TargetBitrate * 2>k` を自動付与。
 
-### 4.10 インターレース検出 & 解除 (`internal/core/deinterlace.go`)
+### 5.10 インターレース検出 & 解除 (`internal/core/deinterlace.go`)
 - **選択肢**: `なし (スキップ)` / `自動検出 (idet解析)` / `手動指定 (個別フィルタ)`
 - **自動検出フロー**:
   1. `ffprobe` による `field_order` (tb, bt, tt, bb) および `interlaced_frame=1` 検証。
@@ -181,7 +173,7 @@
   - `fieldmatch,nnedi=weights='...':deint=interlaced,decimate`
 - **nnedi3 自動取得**: `nnedi3_weights.bin` が未存在の場合、公式リポジトリから自動ダウンロードし、パスを安全にエスケープ（`\` ➔ `/`, `:` ➔ `\:`) して埋め込み。
 
-### 4.11 外部音声エンコーダ & 特殊チャンネル処理 (`internal/core/audio_pipeline.go`, `audio_mapping.go`)
+### 5.11 外部音声エンコーダ & 特殊チャンネル処理 (`internal/core/audio_pipeline.go`, `audio_mapping.go`)
 - **外部エンコーダパイプライン**:
   1. `qaac` / `neroAacEnc` / `fdkaac` 選択時、FFmpeg で一時 WAV を切り出し（`-vn -map_chapters -1 -map_metadata -1 -f wav`）。
   2. 外部エンコーダで `.m4a` エンコード。
@@ -191,46 +183,46 @@
   - Ambisonics (`ambisonic`): 適切なチャンネル数なら `-mapping_family 2`、その他は `-mapping_family 255`。
   - 3ch以上の非標準/unknown レイアウト: `-mapping_family 255` を自動付与。
 
-### 4.12 チャプター & 字幕分割エンジン (`internal/core/split_engine.go`)
+### 5.12 チャプター & 字幕分割エンジン (`internal/core/split_engine.go`)
 - **分割ソース**:
   - `内部チャプター`: `ffprobe -show_chapters` から開始/終了時間を抽出。
   - `外部SRT字幕`: 入力動画と同名の `.srt` ファイルからタイムコードとテキストを正規表現パース。
 - **命名規則**: `テキスト名 (元名_チャプター名.ext)` または `連番 (元名_01.ext)`。
 - **セグメント個別エンコード**: 各セグメントごとに `-ss` / `-to` を指定し、個別に出力・ログ記録。
 
-### 4.13 メタデータ & 編集 & DASH PTS補正 (`internal/core/metadata.go`)
+### 5.13 メタデータ & 編集 & DASH PTS補正 (`internal/core/metadata.go`)
 - **ExifTool**: `-api largefilesupport=1 -tagsfromfile <Input> -all:all -overwrite_original <Output>`
 - **ffmetadata**: `ffmpeg -f ffmetadata` 経由でのメタデータコピー。
 - **DASH PTS補正**: 入力が DASH または断片化 MP4 の場合、`-fflags +genpts` を自動付与。
 
 ---
 
-## 5. 高度なリソース・OS制御仕様
+## 6. 高度なリソース・OS制御仕様
 
-### 5.1 CPU 制限 (P-Core / E-Core / EcoQoS) (`internal/runner/cpu_control.go`)
+### 6.1 CPU 制限 (P-Core / E-Core / EcoQoS) (`internal/runner/cpu_control.go`)
 - **Windows API 連携**:
   - `GetLogicalProcessorInformationEx` (RelationProcessorCore) により、PコアとEコアの論理プロセッサマスクを自動判別。
   - `SetProcessAffinityMask(procHandle, mask)` により、FFmpeg プロセスを指定コアにのみバインド。
   - `SetPriorityClass(procHandle, BELOW_NORMAL_PRIORITY_CLASS | IDLE_PRIORITY_CLASS)`。
   - `SetProcessInformation` (ProcessPowerThrottling: EcoQoS / Windows 11 Efficiency Mode)。
 
-### 5.2 Windows タスクバー進捗表示 (`internal/runner/taskbar.go`)
+### 6.2 Windows タスクバー進捗表示 (`internal/runner/taskbar.go`)
 - `ITaskbarList3` COM インターフェースにより、タスクバーアイコンに進捗率を同期。
   - 通常時: `TBPF_NORMAL` (緑色プログレスバー)
   - 一時停止時: `TBPF_PAUSED` (黄色プログレスバー)
   - エラー時: `TBPF_ERROR` (赤色プログレスバー)
 
-### 5.3 プロセス一時停止 / 再開 (`internal/runner/process.go`)
+### 6.3 プロセス一時停止 / 再開 (`internal/runner/process.go`)
 - `NtSuspendProcess` / `NtResumeProcess` により、FFmpeg プロセスを即座に一時停止 / 再開。
 
-### 5.4 エクスプローラー連携ワンクリック登録 (`internal/ui/context_menu.go`)
+### 6.4 エクスプローラー連携ワンクリック登録 (`internal/ui/context_menu.go`)
 - レジストリキー: `HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\video\shell\ReEncodeUtility`
 - コマンド: `"C:\path\to\ReEncodeUtility.exe" "%1"`
 - アイコン設定および SendTo ショートカット（`%APPDATA%\Microsoft\Windows\SendTo\ReEncodeUtility.lnk`）の自動生成・削除。
 
 ---
 
-## 6. 設定ファイル `config.json` 完全仕様
+## 7. 設定ファイル `config.json` 完全仕様
 
 ```json
 {
@@ -253,7 +245,6 @@
     },
     "behavior": {
         "default_mode": "General",
-        "default_profile": "high_quality_av1",
         "cpu_restriction": "All",
         "play_sound_on_complete": true,
         "keep_window_open_on_complete": true,
@@ -264,17 +255,17 @@
 
 ---
 
-## 7. ディレクトリ構成 & ソースコード構成 (Pure Go / Bubble Tea)
+## 8. ディレクトリ構成 & ソースコード構成 (Pure Go / Bubble Tea)
 
 ```
 Windows-ReEncodeUtility/
 ├── SPECIFICATION.md                # 本仕様書
 ├── config.json                     # 設定ファイル
-├── Profiles/
-│   ├── general/                    # 通常モード用プロファイル (high_quality_av1, psvr_sbs_*)
-│   ├── platform/                   # プラットフォームモード用プロファイル (twitter, discord, catbox, uguu, github_*)
-│   ├── intermediate/               # 中間ファイルモード用プロファイル (prores_422hq, dnxhr_hqx, lossless_flac)
-│   └── split/                      # 分割モード用プロファイル (chapter_text_name, srt_number_name)
+├── Templates/                      # ユーザーテンプレート保存用フォルダ (.json)
+│   ├── psvr_sbs_full.json
+│   ├── psvr_sbs_half.json
+│   ├── psvr_sbs_crop_16_9.json
+│   └── psvr_sbs_crop_4_3.json
 ├── cmd/
 │   └── reencode/
 │       └── main.go                 # エントリポイント・Named Pipe 判定
@@ -282,9 +273,10 @@ Windows-ReEncodeUtility/
     ├── config/                     # config.json 読み書き & パス探索
     ├── ui/                         # Bubble Tea TUI レイヤー
     │     ├── model.go              # メイン Model (TEA State Machine)
-    │     ├── view.go               # Lip Gloss レイアウト描画 (ダッシュボード)
+    │     ├── view.go               # Lip Gloss レイアウト描画 (1画面ダッシュボード)
     │     ├── queue_view.go         # 左ペイン: キュー一覧 & メディア情報
-    │     ├── config_view.go        # 右ペイン: モード切替 & プロファイル & CPU制限
+    │     ├── config_view.go        # 右ペイン: モード切替 & 直接パラメータ設定 & CPU制限
+    │     ├── template_dialog.go    # F4: テンプレート読込 / F5: テンプレート保存ダイアログ
     │     ├── progress_view.go      # 下部: プログレスバー & リアルタイム統計
     │     ├── log_view.go           # インライン・ログコンソール (F3)
     │     └── context_menu.go       # 右クリック/SendTo登録ダイアログ (F2)
