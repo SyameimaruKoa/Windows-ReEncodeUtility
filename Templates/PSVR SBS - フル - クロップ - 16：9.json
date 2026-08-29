@@ -1,0 +1,20 @@
+{
+    "name": "PSVR SBS - フル - クロップ - 16：9",
+    "mode": "General",
+    "hw_decoder": "d3d11va",
+    "hw_encoder": "CPU",
+    "video_codec": "libx264",
+    "quality_mode": "crf",
+    "crf": 18,
+    "bitrate_kbps": 0,
+    "speed_preset": "slow",
+    "audio_encoder": "internal_aac",
+    "audio_bitrate": "192k",
+    "deinterlace": "none",
+    "output_ext": "mp4",
+    "two_pass": false,
+    "metadata_mode": "ExifTool",
+    "additional_vf": "",
+    "additional_args": "-filter_complex \"[0:v]crop=iw/2:ih:0:0[left_raw];[0:v]crop=iw/2:ih:iw/2:0[right_raw];[left_raw]lenscorrection=cx=0.5:cy=0.5:k1=-0.16:k2=-0.16[left_corrected];[right_raw]lenscorrection=cx=0.5:cy=0.5:k1=-0.16:k2=-0.16[right_corrected];[left_corrected]crop=iw:iw*9/16[left_cropped];[right_corrected]crop=iw:iw*9/16[right_cropped];[left_cropped][right_cropped]hstack[out]\" -map \"[out]\" -map 0:a?",
+    "after_power": "none"
+}

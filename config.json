@@ -1,0 +1,29 @@
+{
+    "tools": {
+        "ffmpeg_path": "ffmpeg",
+        "ffprobe_path": "ffprobe",
+        "qaac_path": "qaac64",
+        "nero_aac_path": "neroAacEnc",
+        "fdkaac_path": "fdkaac",
+        "exiftool_path": "exiftool",
+        "losslesscut_path": "C:\\Users\\kouki\\OneDrive\\PortableApps\\LosslessCutPortable\\LosslessCutPortableFast.bat",
+        "notify_script_path": "",
+        "discord_webhook_url": "",
+        "discord_mention_user_id": "",
+        "discord_mention_on": "QueueCompleteOnly"
+    },
+    "output": {
+        "default_mode": "General",
+        "fixed_output_dir": "",
+        "subfolder_name": "encoded_output",
+        "overwrite_action": "Skip",
+        "open_dir_on_complete": false
+    },
+    "behavior": {
+        "default_mode": "General",
+        "cpu_restriction": "All",
+        "play_sound_on_complete": true,
+        "keep_window_open_on_complete": true,
+        "temp_dir": ""
+    }
+}
