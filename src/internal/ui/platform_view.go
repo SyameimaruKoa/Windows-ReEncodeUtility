@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"strings"
 
 	"windows-reencode-utility/src/internal/core"
 
@@ -11,8 +10,6 @@ import (
 
 // RenderPlatformView renders the settings panel for Platform Mode.
 func RenderPlatformView(s *core.PlatformSettings, selItem *core.QueueItem, activeField int, outerWidth, outerHeight int, focused bool) string {
-	var b strings.Builder
-
 	innerWidth := outerWidth - 4
 	if innerWidth < 20 {
 		innerWidth = 20
@@ -22,14 +19,15 @@ func RenderPlatformView(s *core.PlatformSettings, selItem *core.QueueItem, activ
 		fieldWidth = 64
 	}
 
-	// Title line
+	var items []ScrollableItem
+
+	// Title line (Field 0)
 	title := "モード: [ プラットフォーム向け (Platform) ]"
 	if activeField == 0 && focused {
-		b.WriteString(ActiveItemStyle.Render(PadRightDisplay(title, innerWidth)))
+		items = append(items, ScrollableItem{0, ActiveItemStyle.Render(PadRightDisplay(title, innerWidth))})
 	} else {
-		b.WriteString(HeaderTitleStyle.Render(title))
+		items = append(items, ScrollableItem{0, HeaderTitleStyle.Render(title)})
 	}
-	b.WriteString("\n\n")
 
 	preset := core.FindPlatformPreset(s.SelectedPlatform)
 
@@ -40,24 +38,21 @@ func RenderPlatformView(s *core.PlatformSettings, selItem *core.QueueItem, activ
 	}
 	platFormatted := FormatDropdownField("投稿先プラットフォーム", platName, fieldWidth, true)
 	if activeField == 1 && focused {
-		b.WriteString(ActiveItemStyle.Render(PadRightDisplay(platFormatted, innerWidth)))
+		items = append(items, ScrollableItem{1, ActiveItemStyle.Render(PadRightDisplay(platFormatted, innerWidth))})
 	} else {
-		b.WriteString(NormalItemStyle.Render(platFormatted))
+		items = append(items, ScrollableItem{1, NormalItemStyle.Render(platFormatted)})
 	}
-	b.WriteString("\n")
 
 	// Auto calculate toggle (Field 2)
 	autoFormatted := FormatDropdownField("おまかせ自動逆算設定  ", formatBoolToggle(s.AutoSetting), fieldWidth, false)
 	if activeField == 2 && focused {
-		b.WriteString(ActiveItemStyle.Render(PadRightDisplay(autoFormatted, innerWidth)))
+		items = append(items, ScrollableItem{2, ActiveItemStyle.Render(PadRightDisplay(autoFormatted, innerWidth))})
 	} else {
-		b.WriteString(NormalItemStyle.Render(autoFormatted))
+		items = append(items, ScrollableItem{2, NormalItemStyle.Render(autoFormatted)})
 	}
-	b.WriteString("\n\n")
 
 	divLine := "▼ おまかせ自動設定サマリー (ファイル長から自動計算) ──"
-	b.WriteString(HeaderTitleStyle.Render(divLine))
-	b.WriteString("\n")
+	items = append(items, ScrollableItem{-1, HeaderTitleStyle.Render(divLine)})
 
 	durSec := float64(60)
 	if selItem != nil && selItem.Info.DurationSec > 0 {
@@ -79,26 +74,21 @@ func RenderPlatformView(s *core.PlatformSettings, selItem *core.QueueItem, activ
 		resStr = fmt.Sprintf("最大 %dx%d (自動縮小)", preset.TargetMaxWidth, preset.TargetMaxHeight)
 	}
 
-	b.WriteString(NormalItemStyle.Render(fmt.Sprintf("・解像度         : %s\n", resStr)))
-	b.WriteString(NormalItemStyle.Render(fmt.Sprintf("・目標ビットレート: %d kbps (自動逆算)\n", targetKbps)))
-	b.WriteString(NormalItemStyle.Render(fmt.Sprintf("・音声           : AAC (%d kbps)\n", audioBitrate)))
-	b.WriteString(NormalItemStyle.Render(fmt.Sprintf("・出力形式       : .%s\n", s.OutputExt)))
-	b.WriteString(NormalItemStyle.Render(fmt.Sprintf("・目標上限サイズ : %.1f MB (安全マージン 1.5%% 適用)\n", targetMaxMB)))
+	items = append(items, ScrollableItem{-1, NormalItemStyle.Render(fmt.Sprintf("・解像度         : %s", resStr))})
+	items = append(items, ScrollableItem{-1, NormalItemStyle.Render(fmt.Sprintf("・目標ビットレート: %d kbps (自動逆算)", targetKbps))})
+	items = append(items, ScrollableItem{-1, NormalItemStyle.Render(fmt.Sprintf("・音声           : AAC (%d kbps)", audioBitrate))})
+	items = append(items, ScrollableItem{-1, NormalItemStyle.Render(fmt.Sprintf("・出力形式       : .%s", s.OutputExt))})
+	items = append(items, ScrollableItem{-1, NormalItemStyle.Render(fmt.Sprintf("・目標上限サイズ : %.1f MB (安全マージン 1.5%% 適用)", targetMaxMB))})
 
-	b.WriteString("\n")
+	// Start button (Field 99)
 	startBtnText := "▶ [ エンコード開始 (Enter / Ctrl+Enter) ]"
 	startBtnStyle := lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true)
 	if activeField == 99 && focused {
-		b.WriteString(ActiveItemStyle.Render(PadRightDisplay(startBtnText, innerWidth)))
+		items = append(items, ScrollableItem{99, ActiveItemStyle.Render(PadRightDisplay(startBtnText, innerWidth))})
 	} else {
-		b.WriteString(startBtnStyle.Render(startBtnText))
+		items = append(items, ScrollableItem{99, startBtnStyle.Render(startBtnText)})
 	}
-	b.WriteString("\n")
 
-	panel := PanelStyle
-	if focused {
-		panel = PanelFocusStyle
-	}
 	contentWidth := outerWidth - 2
 	contentHeight := outerHeight - 2
 	if contentWidth < 10 {
@@ -107,7 +97,14 @@ func RenderPlatformView(s *core.PlatformSettings, selItem *core.QueueItem, activ
 	if contentHeight < 10 {
 		contentHeight = 10
 	}
-	return panel.Width(contentWidth).Height(contentHeight).Render(b.String())
+
+	renderedContent := RenderScrollableLines(items, activeField, contentHeight)
+
+	panel := PanelStyle
+	if focused {
+		panel = PanelFocusStyle
+	}
+	return panel.Width(contentWidth).Height(contentHeight).Render(renderedContent)
 }
 
 func formatBoolToggle(v bool) string {

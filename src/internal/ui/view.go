@@ -179,3 +179,54 @@ func ClampHeight(s string, maxH int) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// ScrollableItem represents a single render line associated with an activeField index.
+type ScrollableItem struct {
+	FieldIdx int
+	Content  string
+}
+
+// RenderScrollableLines slices items so that the activeField item is always visible within maxLines,
+// preserving all ANSI styling and highlights without mutating line content.
+func RenderScrollableLines(items []ScrollableItem, activeField int, maxLines int) string {
+	total := len(items)
+	if total == 0 {
+		return ""
+	}
+	if total <= maxLines {
+		var lines []string
+		for _, it := range items {
+			lines = append(lines, it.Content)
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	// Find the index of activeField in items
+	activeIdx := 0
+	for i, it := range items {
+		if it.FieldIdx == activeField {
+			activeIdx = i
+			break
+		}
+	}
+
+	start := 0
+	if activeIdx >= maxLines {
+		start = activeIdx - maxLines + 1
+	}
+	end := start + maxLines
+	if end > total {
+		end = total
+		start = end - maxLines
+		if start < 0 {
+			start = 0
+		}
+	}
+
+	var visibleLines []string
+	for i := start; i < end; i++ {
+		visibleLines = append(visibleLines, items[i].Content)
+	}
+
+	return strings.Join(visibleLines, "\n")
+}

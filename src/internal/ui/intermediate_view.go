@@ -10,8 +10,6 @@ import (
 
 // RenderIntermediateView renders the right panel for Intermediate mode.
 func RenderIntermediateView(s *core.IntermediateSettings, activeField int, outerWidth, outerHeight int, focused bool) string {
-	var b strings.Builder
-
 	innerWidth := outerWidth - 4
 	if innerWidth < 20 {
 		innerWidth = 20
@@ -21,14 +19,15 @@ func RenderIntermediateView(s *core.IntermediateSettings, activeField int, outer
 		fieldWidth = 64
 	}
 
-	// Title line
+	var items []ScrollableItem
+
+	// Title line (Field 0)
 	title := "モード: [ 中間ファイル作成 (Intermediate) ]"
 	if activeField == 0 && focused {
-		b.WriteString(ActiveItemStyle.Render(PadRightDisplay(title, innerWidth)))
+		items = append(items, ScrollableItem{0, ActiveItemStyle.Render(PadRightDisplay(title, innerWidth))})
 	} else {
-		b.WriteString(HeaderTitleStyle.Render(title))
+		items = append(items, ScrollableItem{0, HeaderTitleStyle.Render(title)})
 	}
-	b.WriteString("\n\n")
 
 	fields := []struct {
 		label string
@@ -43,27 +42,20 @@ func RenderIntermediateView(s *core.IntermediateSettings, activeField int, outer
 	for _, f := range fields {
 		formatted := FormatDropdownField(f.label, f.value, fieldWidth, true)
 		if f.idx == activeField && focused {
-			b.WriteString(ActiveItemStyle.Render(PadRightDisplay(formatted, innerWidth)))
+			items = append(items, ScrollableItem{f.idx, ActiveItemStyle.Render(PadRightDisplay(formatted, innerWidth))})
 		} else {
-			b.WriteString(NormalItemStyle.Render(formatted))
+			items = append(items, ScrollableItem{f.idx, NormalItemStyle.Render(formatted)})
 		}
-		b.WriteString("\n")
 	}
 
-	b.WriteString("\n")
 	startBtnText := "▶ [ エンコード開始 (Enter / Ctrl+Enter) ]"
 	startBtnStyle := lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true)
 	if activeField == 99 && focused {
-		b.WriteString(ActiveItemStyle.Render(PadRightDisplay(startBtnText, innerWidth)))
+		items = append(items, ScrollableItem{99, ActiveItemStyle.Render(PadRightDisplay(startBtnText, innerWidth))})
 	} else {
-		b.WriteString(startBtnStyle.Render(startBtnText))
+		items = append(items, ScrollableItem{99, startBtnStyle.Render(startBtnText)})
 	}
-	b.WriteString("\n")
 
-	panel := PanelStyle
-	if focused {
-		panel = PanelFocusStyle
-	}
 	contentWidth := outerWidth - 2
 	contentHeight := outerHeight - 2
 	if contentWidth < 10 {
@@ -72,7 +64,14 @@ func RenderIntermediateView(s *core.IntermediateSettings, activeField int, outer
 	if contentHeight < 10 {
 		contentHeight = 10
 	}
-	return panel.Width(contentWidth).Height(contentHeight).Render(b.String())
+
+	renderedContent := RenderScrollableLines(items, activeField, contentHeight)
+
+	panel := PanelStyle
+	if focused {
+		panel = PanelFocusStyle
+	}
+	return panel.Width(contentWidth).Height(contentHeight).Render(renderedContent)
 }
 
 func formatInterFormat(f string) string {

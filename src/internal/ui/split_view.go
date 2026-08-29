@@ -11,8 +11,6 @@ import (
 
 // RenderSplitView renders the right panel for Split mode.
 func RenderSplitView(s *core.SplitSettings, selItem *core.QueueItem, activeField int, outerWidth, outerHeight int, focused bool) string {
-	var b strings.Builder
-
 	innerWidth := outerWidth - 4
 	if innerWidth < 20 {
 		innerWidth = 20
@@ -22,14 +20,15 @@ func RenderSplitView(s *core.SplitSettings, selItem *core.QueueItem, activeField
 		fieldWidth = 64
 	}
 
-	// Title line
+	var items []ScrollableItem
+
+	// Title line (Field 0)
 	title := "モード: [ チャプター/字幕分割 (Split) ]"
 	if activeField == 0 && focused {
-		b.WriteString(ActiveItemStyle.Render(PadRightDisplay(title, innerWidth)))
+		items = append(items, ScrollableItem{0, ActiveItemStyle.Render(PadRightDisplay(title, innerWidth))})
 	} else {
-		b.WriteString(HeaderTitleStyle.Render(title))
+		items = append(items, ScrollableItem{0, HeaderTitleStyle.Render(title)})
 	}
-	b.WriteString("\n\n")
 
 	fields := []struct {
 		label string
@@ -44,34 +43,26 @@ func RenderSplitView(s *core.SplitSettings, selItem *core.QueueItem, activeField
 	for _, f := range fields {
 		formatted := FormatDropdownField(f.label, f.value, fieldWidth, true)
 		if f.idx == activeField && focused {
-			b.WriteString(ActiveItemStyle.Render(PadRightDisplay(formatted, innerWidth)))
+			items = append(items, ScrollableItem{f.idx, ActiveItemStyle.Render(PadRightDisplay(formatted, innerWidth))})
 		} else {
-			b.WriteString(NormalItemStyle.Render(formatted))
+			items = append(items, ScrollableItem{f.idx, NormalItemStyle.Render(formatted)})
 		}
-		b.WriteString("\n")
 	}
 
 	segCount := 0
 	if selItem != nil {
 		segCount = len(selItem.Segments)
 	}
-	b.WriteString("\n")
-	b.WriteString(NormalItemStyle.Render(fmt.Sprintf("検出セグメント   : 全 %d セグメントを検出\n", segCount)))
+	items = append(items, ScrollableItem{-1, NormalItemStyle.Render(fmt.Sprintf("検出セグメント   : 全 %d セグメントを検出", segCount))})
 
-	b.WriteString("\n")
 	startBtnText := "▶ [ エンコード開始 (Enter / Ctrl+Enter) ]"
 	startBtnStyle := lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true)
 	if activeField == 99 && focused {
-		b.WriteString(ActiveItemStyle.Render(PadRightDisplay(startBtnText, innerWidth)))
+		items = append(items, ScrollableItem{99, ActiveItemStyle.Render(PadRightDisplay(startBtnText, innerWidth))})
 	} else {
-		b.WriteString(startBtnStyle.Render(startBtnText))
+		items = append(items, ScrollableItem{99, startBtnStyle.Render(startBtnText)})
 	}
-	b.WriteString("\n")
 
-	panel := PanelStyle
-	if focused {
-		panel = PanelFocusStyle
-	}
 	contentWidth := outerWidth - 2
 	contentHeight := outerHeight - 2
 	if contentWidth < 10 {
@@ -80,7 +71,14 @@ func RenderSplitView(s *core.SplitSettings, selItem *core.QueueItem, activeField
 	if contentHeight < 10 {
 		contentHeight = 10
 	}
-	return panel.Width(contentWidth).Height(contentHeight).Render(b.String())
+
+	renderedContent := RenderScrollableLines(items, activeField, contentHeight)
+
+	panel := PanelStyle
+	if focused {
+		panel = PanelFocusStyle
+	}
+	return panel.Width(contentWidth).Height(contentHeight).Render(renderedContent)
 }
 
 func formatSplitSource(s string) string {

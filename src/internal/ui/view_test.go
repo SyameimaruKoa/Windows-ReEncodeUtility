@@ -138,3 +138,95 @@ func TestCycleNavigation(t *testing.T) {
 		t.Errorf("Expected HwDecoder to change on -1 from none")
 	}
 }
+
+func TestRenderScrollableLines(t *testing.T) {
+	items := []ScrollableItem{
+		{0, "Line 0 (Title)"},
+		{1, "Line 1 (HW Decoder)"},
+		{2, "Line 2 (HW Encoder)"},
+		{3, "Line 3 (Video Codec)"},
+		{4, "Line 4 (Quality)"},
+		{5, "Line 5 (Speed)"},
+		{6, "Line 6 (Audio)"},
+		{7, "Line 7 (Deinterlace)"},
+		{8, "Line 8 (Ext)"},
+		{9, "Line 9 (Advanced Toggle)"},
+		{10, "Line 10 (CPU)"},
+		{11, "Line 11 (AV1)"},
+		{12, "Line 12 (Overwrite)"},
+		{13, "Line 13 (TwoPass)"},
+		{14, "Line 14 (Metadata)"},
+		{15, "Line 15 (Cut)"},
+		{16, "Line 16 (VF)"},
+		{17, "Line 17 (Args)"},
+		{18, "Line 18 (Power)"},
+		{99, "Line 99 (Start)"},
+	}
+
+	maxLines := 8
+
+	// When selecting bottom item (Field 99)
+	outBottom := RenderScrollableLines(items, 99, maxLines)
+	linesBottom := strings.Split(outBottom, "\n")
+	if len(linesBottom) != maxLines {
+		t.Errorf("Expected %d lines, got %d", maxLines, len(linesBottom))
+	}
+	if !strings.Contains(outBottom, "Line 99 (Start)") {
+		t.Errorf("Expected outBottom to contain Line 99 (Start), got %s", outBottom)
+	}
+
+	// When selecting top item (Field 0)
+	outTop := RenderScrollableLines(items, 0, maxLines)
+	linesTop := strings.Split(outTop, "\n")
+	if len(linesTop) != maxLines {
+		t.Errorf("Expected %d lines, got %d", maxLines, len(linesTop))
+	}
+	if !strings.Contains(outTop, "Line 0 (Title)") {
+		t.Errorf("Expected outTop to contain Line 0 (Title), got %s", outTop)
+	}
+
+	// When selecting middle item (Field 10)
+	outMid := RenderScrollableLines(items, 10, maxLines)
+	if !strings.Contains(outMid, "Line 10 (CPU)") {
+		t.Errorf("Expected outMid to contain Line 10 (CPU), got %s", outMid)
+	}
+}
+
+func TestRenderGeneralViewScrolling(t *testing.T) {
+	s := core.GeneralSettings{
+		HwDecoder:     "d3d11va",
+		HwEncoder:     "Intel",
+		VideoCodec:    "libx264",
+		QualityIndex:  1,
+		SpeedPreset:   "medium",
+		AudioEncoder:  "internal_aac",
+		AudioPreset:   "192k",
+		Deinterlace:   core.DeinterlaceNone,
+		OutputExt:     "mp4",
+		ShowAdvanced:  true,
+		CPULimit:      core.CPURestrictionAll,
+		Overwrite:     core.OverwriteSkip,
+		TwoPass:       false,
+		Metadata:      core.MetadataExifTool,
+		CutStart:      "00:00:10",
+		CutEnd:        "00:01:00",
+		AfterPower:    core.PowerNone,
+	}
+
+	// Test height that is smaller than total items (approx 18 items)
+	smallHeight := 10
+	renderedBottom := RenderGeneralView(&s, 99, 70, smallHeight, true)
+	if !strings.Contains(renderedBottom, "エンコード開始") {
+		t.Errorf("Expected RenderGeneralView with activeField 99 to contain start button, got:\n%s", renderedBottom)
+	}
+
+	renderedTop := RenderGeneralView(&s, 0, 70, smallHeight, true)
+	if !strings.Contains(renderedTop, "通常エンコード") {
+		t.Errorf("Expected RenderGeneralView with activeField 0 to contain title, got:\n%s", renderedTop)
+	}
+
+	renderedCut := RenderGeneralView(&s, 15, 70, smallHeight, true)
+	if !strings.Contains(renderedCut, "カット区間") {
+		t.Errorf("Expected RenderGeneralView with activeField 15 to contain cut field, got:\n%s", renderedCut)
+	}
+}
