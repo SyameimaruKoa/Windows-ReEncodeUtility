@@ -112,3 +112,54 @@ func TestNeedsGenPTS(t *testing.T) {
 		t.Errorf("Expected false for matroska")
 	}
 }
+
+func TestAudioPipelineArgs(t *testing.T) {
+	// 1. qaac args test
+	qaacArgs := BuildExternalAudioArgs("qaac", "tvbr91", "", "in.wav", "out.m4a")
+	if len(qaacArgs) < 4 || qaacArgs[1] != "--tvbr" || qaacArgs[2] != "91" {
+		t.Errorf("Expected qaac args with --tvbr 91, got: %v", qaacArgs)
+	}
+
+	qaacHeArgs := BuildExternalAudioArgs("qaac", "he64", "", "in.wav", "out.m4a")
+	if len(qaacHeArgs) < 5 || qaacHeArgs[1] != "--he" || qaacHeArgs[2] != "--cvbr" || qaacHeArgs[3] != "64" {
+		t.Errorf("Expected qaac args with --he --cvbr 64, got: %v", qaacHeArgs)
+	}
+
+	// 2. nero args test
+	neroArgs := BuildExternalAudioArgs("nero", "q050", "", "in.wav", "out.m4a")
+	if len(neroArgs) < 6 || neroArgs[4] != "-q" || neroArgs[5] != "0.50" {
+		t.Errorf("Expected nero args with -q 0.50, got: %v", neroArgs)
+	}
+
+	neroHeArgs := BuildExternalAudioArgs("nero", "q035", "", "in.wav", "out.m4a")
+	if len(neroHeArgs) < 7 || neroHeArgs[4] != "-he" || neroHeArgs[5] != "-q" || neroHeArgs[6] != "0.35" {
+		t.Errorf("Expected nero args with -he -q 0.35, got: %v", neroHeArgs)
+	}
+
+	// 3. fdkaac args test
+	fdkArgs := BuildExternalAudioArgs("fdkaac", "m4", "", "in.wav", "out.m4a")
+	if len(fdkArgs) < 4 || fdkArgs[0] != "-m" || fdkArgs[1] != "4" {
+		t.Errorf("Expected fdkaac args with -m 4, got: %v", fdkArgs)
+	}
+
+	fdkHeArgs := BuildExternalAudioArgs("fdkaac", "m3", "", "in.wav", "out.m4a")
+	if len(fdkHeArgs) < 6 || fdkHeArgs[0] != "-p" || fdkHeArgs[1] != "5" || fdkHeArgs[2] != "-m" || fdkHeArgs[3] != "3" {
+		t.Errorf("Expected fdkaac args with -p 5 -m 3, got: %v", fdkHeArgs)
+	}
+
+	// 4. Internal audio args test
+	opusArgs := BuildInternalAudioArgs("opus", "192k", "")
+	if len(opusArgs) < 4 || opusArgs[1] != "libopus" || opusArgs[3] != "192k" {
+		t.Errorf("Expected internal opus args with 192k, got: %v", opusArgs)
+	}
+
+	flacArgs := BuildInternalAudioArgs("flac", "comp12", "")
+	if len(flacArgs) < 4 || flacArgs[1] != "flac" || flacArgs[3] != "12" {
+		t.Errorf("Expected internal flac args with 12, got: %v", flacArgs)
+	}
+
+	aacArgs := BuildInternalAudioArgs("internal_aac", "custom", "160k")
+	if len(aacArgs) < 4 || aacArgs[1] != "aac" || aacArgs[3] != "160k" {
+		t.Errorf("Expected internal aac args with 160k, got: %v", aacArgs)
+	}
+}

@@ -39,9 +39,9 @@ func RenderGeneralView(s *core.GeneralSettings, activeField int, outerWidth, out
 		{"HWデコード   ", formatHwDecoder(s.HwDecoder), 1},
 		{"HWエンコーダ ", formatHwEncoder(s.HwEncoder), 2},
 		{"映像コーデック", formatCodec(s.VideoCodec), 3},
-		{"品質 (CRF)   ", formatQuality(s.QualityIndex, s.CustomCRF, s.CustomBitrate), 4},
+		{"品質設定     ", formatQuality(s), 4},
 		{"速度プリセット", s.SpeedPreset, 5},
-		{"音声設定     ", formatAudioEncoder(s.AudioEncoder, s.AudioPreset), 6},
+		{"音声設定     ", formatAudioEncoder(s), 6},
 		{"インターレース", formatDeinterlace(s.Deinterlace), 7},
 		{"コンテナ形式 ", strings.ToUpper(s.OutputExt), 8},
 	}
@@ -194,49 +194,239 @@ func formatCodec(c string) string {
 	}
 }
 
-func formatQuality(idx int, customCRF int, customBitrate string) string {
-	switch idx {
-	case 0:
-		return "最高画質 (CRF 18 / アーカイブ)"
-	case 1:
-		return "高画質   (CRF 22 / 推奨)"
-	case 2:
-		return "標準画質 (CRF 26 / 軽量)"
-	case 3:
-		return "低画質   (CRF 30 / 超軽量)"
-	case 4:
-		if customCRF > 0 {
-			return fmt.Sprintf("カスタム (CRF %d)", customCRF)
-		} else if customBitrate != "" {
-			return fmt.Sprintf("カスタム (%s)", customBitrate)
+func formatQuality(s *core.GeneralSettings) string {
+	hw := s.HwEncoder
+	codec := strings.ToLower(s.VideoCodec)
+
+	if s.CustomBitrate != "" {
+		return fmt.Sprintf("カスタムレート (%s)", s.CustomBitrate)
+	}
+
+	if s.CustomQualityValue != "" {
+		if hw == "NVIDIA" {
+			return fmt.Sprintf("カスタム (CQ %s)", s.CustomQualityValue)
+		} else if hw == "Intel" {
+			return fmt.Sprintf("カスタム (GQ %s)", s.CustomQualityValue)
+		} else if hw == "AMD" {
+			return fmt.Sprintf("カスタム (QP %s)", s.CustomQualityValue)
+		} else if strings.Contains(codec, "rav1e") {
+			return fmt.Sprintf("カスタム (QP %s)", s.CustomQualityValue)
 		}
-		return "カスタム"
-	default:
-		return "高画質   (CRF 22 / 推奨)"
+		return fmt.Sprintf("カスタム (CRF %s)", s.CustomQualityValue)
+	}
+
+	if s.CustomCRF > 0 {
+		return fmt.Sprintf("カスタム (CRF %d)", s.CustomCRF)
+	}
+
+	switch hw {
+	case "NVIDIA":
+		switch s.QualityIndex {
+		case 0:
+			return "高品質 (CQ:23)"
+		case 1:
+			return "中品質 (CQ:28)"
+		case 2:
+			return "高速   (CQ:32)"
+		default:
+			return "中品質 (CQ:28)"
+		}
+	case "Intel":
+		if strings.Contains(codec, "vp9") {
+			switch s.QualityIndex {
+			case 0:
+				return "高品質 (Q:25)"
+			case 1:
+				return "中品質 (Q:30)"
+			case 2:
+				return "低品質 (Q:40)"
+			default:
+				return "中品質 (Q:30)"
+			}
+		}
+		switch s.QualityIndex {
+		case 0:
+			return "高品質 (GQ:20)"
+		case 1:
+			return "中品質 (GQ:25)"
+		case 2:
+			return "低品質 (GQ:30)"
+		default:
+			return "中品質 (GQ:25)"
+		}
+	case "AMD":
+		switch s.QualityIndex {
+		case 0:
+			return "高品質 (QP:22)"
+		case 1:
+			return "中品質 (QP:28)"
+		case 2:
+			return "低品質 (QP:35)"
+		default:
+			return "中品質 (QP:28)"
+		}
+	case "Vulkan", "D3D12VA", "MF":
+		switch s.QualityIndex {
+		case 0:
+			return "高品質 (8000k)"
+		case 1:
+			return "標準品質 (4000k)"
+		default:
+			return "標準品質 (4000k)"
+		}
+	default: // CPU
+		if strings.Contains(codec, "svt") || strings.Contains(codec, "aom") {
+			switch s.QualityIndex {
+			case 0:
+				return "高品質 (CRF:20)"
+			case 1:
+				return "中品質 (CRF:30)"
+			default:
+				return "高品質 (CRF:20)"
+			}
+		} else if strings.Contains(codec, "rav1e") {
+			switch s.QualityIndex {
+			case 0:
+				return "高品質 (QP:80)"
+			case 1:
+				return "中品質 (QP:120)"
+			case 2:
+				return "低品質 (QP:160)"
+			default:
+				return "中品質 (QP:120)"
+			}
+		} else if strings.Contains(codec, "vp") {
+			switch s.QualityIndex {
+			case 0:
+				return "高品質 (CRF:30)"
+			case 1:
+				return "中品質 (CRF:35)"
+			default:
+				return "高品質 (CRF:30)"
+			}
+		}
+		// x264, x265
+		switch s.QualityIndex {
+		case 0:
+			return "最高画質 (CRF 18 / アーカイブ)"
+		case 1:
+			return "高画質   (CRF 22 / 推奨)"
+		case 2:
+			return "標準画質 (CRF 26 / 軽量)"
+		case 3:
+			return "低画質   (CRF 30 / 超軽量)"
+		default:
+			return "高画質   (CRF 22 / 推奨)"
+		}
 	}
 }
 
-func formatAudioEncoder(enc, preset string) string {
+func formatAudioEncoder(s *core.GeneralSettings) string {
+	enc := s.AudioEncoder
+	preset := s.AudioPreset
+	custom := s.AudioCustom
+
 	switch enc {
 	case "copy":
 		return "音声をそのままコピー (-c:a copy)"
-	case "internal_aac":
-		return fmt.Sprintf("内蔵 AAC (%s)", preset)
-	case "qaac":
-		return fmt.Sprintf("qaac: AAC-LC (%s)", preset)
-	case "nero":
-		return fmt.Sprintf("neroAacEnc: AAC (%s)", preset)
-	case "fdkaac":
-		return fmt.Sprintf("fdkaac: AAC (%s)", preset)
-	case "opus":
-		return "Opus (libopus 128k)"
-	case "vorbis":
-		return "Vorbis (libvorbis q4)"
-	case "flac":
-		return "FLAC (ロスレス無劣化)"
 	case "none":
 		return "音声なし (-an)"
+	case "internal_aac":
+		if preset == "custom" && custom != "" {
+			return fmt.Sprintf("内蔵 AAC: カスタム (%s)", custom)
+		}
+		if preset == "" {
+			preset = "192k"
+		}
+		return fmt.Sprintf("内蔵 AAC (%s)", preset)
+	case "qaac":
+		if preset == "custom" && custom != "" {
+			return fmt.Sprintf("qaac: カスタム (%s)", custom)
+		}
+		switch preset {
+		case "tvbr91", "192k", "":
+			return "qaac: AAC-LC TVBR 91 (~192k)"
+		case "tvbr73", "160k":
+			return "qaac: AAC-LC TVBR 73 (~160k)"
+		case "tvbr64", "128k":
+			return "qaac: AAC-LC TVBR 64 (~128k)"
+		case "he80":
+			return "qaac: HE-AAC CVBR 80k"
+		case "he64":
+			return "qaac: HE-AAC CVBR 64k"
+		case "he48":
+			return "qaac: HE-AAC CVBR 48k"
+		default:
+			return fmt.Sprintf("qaac: %s", preset)
+		}
+	case "nero":
+		if preset == "custom" && custom != "" {
+			return fmt.Sprintf("Nero: カスタム (%s)", custom)
+		}
+		switch preset {
+		case "q065", "high":
+			return "Nero: AAC-LC (-q 0.65)"
+		case "q050", "standard", "":
+			return "Nero: AAC-LC (-q 0.50)"
+		case "q035", "normal_he":
+			return "Nero: HE-AAC (-q 0.35)"
+		case "q020", "low_he":
+			return "Nero: HE-AAC (-q 0.20)"
+		default:
+			return fmt.Sprintf("Nero: %s", preset)
+		}
+	case "fdkaac":
+		if preset == "custom" && custom != "" {
+			return fmt.Sprintf("fdkaac: カスタム (%s)", custom)
+		}
+		switch preset {
+		case "m5", "vbr5":
+			return "fdkaac: AAC-LC (VBR 5 最高品質)"
+		case "m4", "vbr4", "":
+			return "fdkaac: AAC-LC (VBR 4 高品質)"
+		case "m3", "vbr3_he":
+			return "fdkaac: HE-AAC (VBR 3 標準)"
+		case "m2", "vbr2_he":
+			return "fdkaac: HE-AAC (VBR 2 低品質)"
+		default:
+			return fmt.Sprintf("fdkaac: %s", preset)
+		}
+	case "opus":
+		if preset == "custom" && custom != "" {
+			return fmt.Sprintf("Opus: カスタム (%s)", custom)
+		}
+		if preset == "" {
+			preset = "128k"
+		}
+		return fmt.Sprintf("Opus (libopus %s)", preset)
+	case "vorbis":
+		if preset == "custom" && custom != "" {
+			return fmt.Sprintf("Vorbis: カスタム (q:a %s)", custom)
+		}
+		if preset == "q6" || preset == "high" {
+			return "Vorbis: 高品質 (q:a 6)"
+		}
+		return "Vorbis: 標準品質 (q:a 4)"
+	case "flac":
+		if preset == "custom" && custom != "" {
+			return fmt.Sprintf("FLAC: カスタム (レベル %s)", custom)
+		}
+		if preset == "comp12" || preset == "high" {
+			return "FLAC (圧縮レベル 12 高圧縮)"
+		} else if preset == "comp5" || preset == "fast" {
+			return "FLAC (圧縮レベル 5 高速)"
+		}
+		return "FLAC (圧縮レベル 8 標準)"
 	default:
+		if strings.Contains(enc, "_") {
+			if preset == "custom" && custom != "" {
+				return fmt.Sprintf("%s: カスタム (%s)", enc, custom)
+			}
+			if preset == "" {
+				preset = "192k"
+			}
+			return fmt.Sprintf("%s (%s)", enc, preset)
+		}
 		return enc
 	}
 }

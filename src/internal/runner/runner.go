@@ -377,6 +377,7 @@ func (r *Runner) encodeGeneral(
 			encPath,
 			s.AudioEncoder,
 			s.AudioPreset,
+			s.AudioCustom,
 			item.Path,
 			r.cfg.Behavior.TempDir,
 			string(s.CPULimit),
@@ -451,7 +452,7 @@ func (r *Runner) encodeGeneral(
 // encodeExternalAudioRestricted executes the audio pipeline strictly bound to CPU restrictions.
 func (r *Runner) encodeExternalAudioRestricted(
 	ctx context.Context,
-	ffmpegPath, encoderPath, encoderType, preset, inputVideo, tempDir, restriction string,
+	ffmpegPath, encoderPath, encoderType, preset, customVal, inputVideo, tempDir, restriction string,
 	onProgress core.AudioProgressCallback,
 ) (string, []string, error) {
 	if tempDir == "" {
@@ -505,7 +506,7 @@ func (r *Runner) encodeExternalAudioRestricted(
 	}
 
 	// Step 2: Encode with external tool using StartProcessRestricted
-	audArgs := core.BuildExternalAudioArgs(encoderType, preset, "", wavFile, m4aFile)
+	audArgs := core.BuildExternalAudioArgs(encoderType, preset, customVal, wavFile, m4aFile)
 	cmdLogs = append(cmdLogs, fmt.Sprintf("[Step 2: 外部音声エンコード] \"%s\" %s", encoderPath, strings.Join(audArgs, " ")))
 
 	audProc, err := StartProcessRestricted(encoderPath, audArgs, nil, "", restriction, r.coreInfo)
@@ -942,50 +943,142 @@ func (r *Runner) buildGeneralArgs(item *core.QueueItem, s core.GeneralSettings, 
 	// Video codec and quality
 	args = append(args, "-c:v", s.VideoCodec)
 
-	if s.CustomCRF > 0 {
-		args = append(args, "-crf", strconv.Itoa(s.CustomCRF))
-	} else if s.CustomBitrate != "" {
-		args = append(args, "-b:v", s.CustomBitrate)
-	} else {
-		// Standard quality index
-		crfMap := []int{18, 22, 26, 30}
-		if s.QualityIndex >= 0 && s.QualityIndex < len(crfMap) {
-			args = append(args, "-crf", strconv.Itoa(crfMap[s.QualityIndex]))
+	hw := s.HwEncoder
+	codecLower := strings.ToLower(s.VideoCodec)
+
+	if s.CustomBitrate != "" {
+		if hw == "AMD" {
+			args = append(args, "-rc", "vbr_peak", "-b:v", s.CustomBitrate)
+		} else if hw == "NVIDIA" {
+			args = append(args, "-rc", "vbr", "-b:v", s.CustomBitrate)
 		} else {
-			args = append(args, "-crf", "22")
+			args = append(args, "-b:v", s.CustomBitrate)
+		}
+	} else if s.CustomQualityValue != "" {
+		switch hw {
+		case "NVIDIA":
+			args = append(args, "-rc", "vbr", "-cq", s.CustomQualityValue)
+		case "Intel":
+			if strings.Contains(codecLower, "vp9") || strings.Contains(codecLower, "mjpeg") {
+				args = append(args, "-q:v", s.CustomQualityValue)
+			} else {
+				args = append(args, "-global_quality", s.CustomQualityValue)
+			}
+		case "AMD":
+			args = append(args, "-rc", "cqp", "-qp_i", s.CustomQualityValue, "-qp_p", s.CustomQualityValue, "-qp_b", s.CustomQualityValue)
+		default: // CPU
+			if strings.Contains(codecLower, "rav1e") {
+				args = append(args, "-qp", s.CustomQualityValue)
+			} else if strings.Contains(codecLower, "aom") || strings.Contains(codecLower, "vp") {
+				args = append(args, "-crf", s.CustomQualityValue, "-b:v", "0")
+			} else {
+				args = append(args, "-crf", s.CustomQualityValue)
+			}
+		}
+	} else if s.CustomCRF > 0 {
+		args = append(args, "-crf", strconv.Itoa(s.CustomCRF))
+	} else {
+		// Standard quality presets according to HW and Codec
+		switch hw {
+		case "NVIDIA":
+			cqMap := []string{"23", "28", "32"}
+			cq := "28"
+			if s.QualityIndex >= 0 && s.QualityIndex < len(cqMap) {
+				cq = cqMap[s.QualityIndex]
+			}
+			args = append(args, "-rc", "vbr", "-cq", cq)
+		case "Intel":
+			if strings.Contains(codecLower, "vp9") {
+				qMap := []string{"25", "30", "40"}
+				q := "30"
+				if s.QualityIndex >= 0 && s.QualityIndex < len(qMap) {
+					q = qMap[s.QualityIndex]
+				}
+				args = append(args, "-q:v", q)
+			} else {
+				gqMap := []string{"20", "25", "30"}
+				gq := "25"
+				if s.QualityIndex >= 0 && s.QualityIndex < len(gqMap) {
+					gq = gqMap[s.QualityIndex]
+				}
+				args = append(args, "-global_quality", gq)
+			}
+		case "AMD":
+			qpMap := []string{"22", "28", "35"}
+			qp := "28"
+			if s.QualityIndex >= 0 && s.QualityIndex < len(qpMap) {
+				qp = qpMap[s.QualityIndex]
+			}
+			args = append(args, "-rc", "cqp", "-qp_i", qp, "-qp_p", qp, "-qp_b", qp)
+		case "Vulkan", "D3D12VA", "MF":
+			brMap := []string{"8000k", "4000k"}
+			br := "4000k"
+			if s.QualityIndex >= 0 && s.QualityIndex < len(brMap) {
+				br = brMap[s.QualityIndex]
+			}
+			args = append(args, "-b:v", br)
+		default: // CPU
+			if strings.Contains(codecLower, "svt") {
+				crfMap := []string{"20", "30"}
+				crf := "20"
+				if s.QualityIndex >= 0 && s.QualityIndex < len(crfMap) {
+					crf = crfMap[s.QualityIndex]
+				}
+				args = append(args, "-crf", crf)
+			} else if strings.Contains(codecLower, "aom") {
+				crfMap := []string{"20", "30"}
+				crf := "20"
+				if s.QualityIndex >= 0 && s.QualityIndex < len(crfMap) {
+					crf = crfMap[s.QualityIndex]
+				}
+				args = append(args, "-row-mt", "1", "-tiles", "2x2", "-crf", crf, "-b:v", "0")
+			} else if strings.Contains(codecLower, "rav1e") {
+				qpMap := []string{"80", "120", "160"}
+				qp := "120"
+				if s.QualityIndex >= 0 && s.QualityIndex < len(qpMap) {
+					qp = qpMap[s.QualityIndex]
+				}
+				args = append(args, "-tiles", "4", "-qp", qp)
+			} else if strings.Contains(codecLower, "vp") {
+				crfMap := []string{"30", "35"}
+				crf := "30"
+				if s.QualityIndex >= 0 && s.QualityIndex < len(crfMap) {
+					crf = crfMap[s.QualityIndex]
+				}
+				args = append(args, "-crf", crf, "-b:v", "0")
+			} else {
+				crfMap := []string{"18", "22", "26", "30"}
+				crf := "22"
+				if s.QualityIndex >= 0 && s.QualityIndex < len(crfMap) {
+					crf = crfMap[s.QualityIndex]
+				}
+				args = append(args, "-crf", crf)
+			}
 		}
 	}
 
 	if s.SpeedPreset != "" {
-		args = append(args, "-preset", s.SpeedPreset)
+		if strings.Contains(codecLower, "vp") {
+			args = append(args, "-cpu-used", s.SpeedPreset)
+		} else if strings.Contains(codecLower, "rav1e") {
+			args = append(args, "-speed", s.SpeedPreset)
+		} else if hw == "AMD" {
+			args = append(args, "-quality", s.SpeedPreset)
+		} else {
+			args = append(args, "-preset", s.SpeedPreset)
+		}
 	}
 
 	// Audio options
 	isExternalAudio := core.IsExternalAudioEncoder(s.AudioEncoder)
 	if !isExternalAudio {
-		switch s.AudioEncoder {
-		case "copy":
-			args = append(args, "-c:a", "copy")
-		case "none":
-			args = append(args, "-an")
-		case "opus":
-			args = append(args, "-c:a", "libopus", "-b:a", "128k")
+		internalArgs := core.BuildInternalAudioArgs(s.AudioEncoder, s.AudioPreset, s.AudioCustom)
+		args = append(args, internalArgs...)
+		if s.AudioEncoder == "opus" {
 			mapFamily := core.GetAudioMappingFamily(r.cfg.Tools.FfprobePath, item.Path)
 			if mapFamily != "" {
 				args = append(args, "-mapping_family", mapFamily)
 			}
-		case "vorbis":
-			args = append(args, "-c:a", "libvorbis", "-q:a", "4")
-		case "flac":
-			args = append(args, "-c:a", "flac")
-		case "internal_aac":
-			fallthrough
-		default:
-			bitrate := s.AudioPreset
-			if bitrate == "" {
-				bitrate = "192k"
-			}
-			args = append(args, "-c:a", "aac", "-b:a", bitrate)
 		}
 	} else {
 		if tempAudioM4a != "" {

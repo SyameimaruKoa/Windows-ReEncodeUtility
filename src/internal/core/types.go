@@ -173,28 +173,32 @@ type Template struct {
 
 // GeneralSettings defines parameters for General mode.
 type GeneralSettings struct {
-	HwDecoder      string // "none", "cuda", "qsv", "d3d11va", "dxva2", "vulkan"
-	HwEncoder      string // "NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF", "CPU"
-	VideoCodec     string // "libx264", "h264_nvenc", "h264_qsv", etc.
-	QualityIndex   int
-	CustomCRF      int
-	CustomBitrate  string
-	SpeedPreset    string
-	AudioEncoder   string // "copy", "none", "qaac", "nero", "fdkaac", "opus", "vorbis", "flac", "internal_aac"
-	AudioPreset    string
-	Deinterlace    DeinterlaceMode
-	OutputExt      string // "mp4", "mkv", "mov", "webm"
-	CPULimit       CPURestriction
-	AV1Engine      string // "libsvtav1", "libaom-av1", "rav1e"
-	Overwrite      OverwriteAction
-	TwoPass        bool
-	Metadata       MetadataMode
-	CutStart       string
-	CutEnd         string
-	AdditionalVF   string
-	AdditionalArgs string
-	AfterPower     PowerAction
-	ShowAdvanced   bool
+	HwDecoder          string // "none", "cuda", "qsv", "d3d11va", "dxva2", "vulkan"
+	HwEncoder          string // "NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF", "CPU"
+	VideoCodec         string // "libx264", "h264_nvenc", "h264_qsv", etc.
+	QualityIndex       int
+	QualityMode        string // "preset", "custom_crf", "custom_bitrate", "custom_cq", "custom_gq", "custom_qp"
+	CustomCRF          int
+	CustomBitrate      string
+	CustomQualityValue string
+	SpeedPreset        string
+	AudioEncoder       string // "copy", "none", "qaac", "nero", "fdkaac", "opus", "vorbis", "flac", "internal_aac"
+	AudioPreset        string
+	AudioCustom        string
+	AudioProfile       string // "lc", "he"
+	Deinterlace        DeinterlaceMode
+	OutputExt          string // "mp4", "mkv", "mov", "webm"
+	CPULimit           CPURestriction
+	AV1Engine          string // "libsvtav1", "libaom-av1", "rav1e"
+	Overwrite          OverwriteAction
+	TwoPass            bool
+	Metadata           MetadataMode
+	CutStart           string
+	CutEnd             string
+	AdditionalVF       string
+	AdditionalArgs     string
+	AfterPower         PowerAction
+	ShowAdvanced       bool
 }
 
 // PlatformSettings defines parameters for Platform upload mode.

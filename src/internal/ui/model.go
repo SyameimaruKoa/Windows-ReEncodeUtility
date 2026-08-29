@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ const (
 	StateSaveTemplateDialog
 	StateShutdownCountdown
 	StateDropdownDialog
+	StateTextInputDialog
 )
 
 // NamedPipeAddMsg is sent when another instance forwards video paths via Named Pipe.
@@ -86,6 +88,10 @@ type MainModel struct {
 	dialogValues    []string
 	dialogIndex     int
 	dropdownFieldID int
+	audioSubDialog  bool
+
+	// Text input state
+	textInput TextInputState
 
 	// Shutdown countdown
 	countdownSec int
@@ -827,6 +833,7 @@ func (m *MainModel) openDropdownDialog() {
 	m.dialogChoices = nil
 	m.dialogValues = nil
 	m.dialogIndex = 0
+	m.audioSubDialog = false
 
 	switch m.mode {
 	case core.ModeGeneral:
@@ -858,23 +865,140 @@ func (m *MainModel) openDropdownDialog() {
 
 		case 3: // Codec
 			m.dialogTitle = "映像コーデックの選択"
-			options := []DropdownOption{
-				{"H.264 / AVC (互換性最優先)", "libx264"},
-				{"H.265 / HEVC (高圧縮・高画質)", "libx265"},
-				{"AV1 (最新世代・超高圧縮)", "libsvtav1"},
-				{"VP9 (Web / YouTube向け)", "libvpx-vp9"},
+			switch m.generalSet.HwEncoder {
+			case "NVIDIA":
+				options := []DropdownOption{
+					{"H.264 / AVC (h264_nvenc)", "h264_nvenc"},
+					{"H.265 / HEVC (hevc_nvenc)", "hevc_nvenc"},
+					{"AV1 (av1_nvenc)", "av1_nvenc"},
+				}
+				m.setDropdownOptions(options, m.generalSet.VideoCodec)
+			case "Intel":
+				options := []DropdownOption{
+					{"H.264 / AVC (h264_qsv)", "h264_qsv"},
+					{"H.265 / HEVC (hevc_qsv)", "hevc_qsv"},
+					{"AV1 (av1_qsv)", "av1_qsv"},
+					{"VP9 (vp9_qsv)", "vp9_qsv"},
+				}
+				m.setDropdownOptions(options, m.generalSet.VideoCodec)
+			case "AMD":
+				options := []DropdownOption{
+					{"H.264 / AVC (h264_amf)", "h264_amf"},
+					{"H.265 / HEVC (hevc_amf)", "hevc_amf"},
+					{"AV1 (av1_amf)", "av1_amf"},
+				}
+				m.setDropdownOptions(options, m.generalSet.VideoCodec)
+			default:
+				options := []DropdownOption{
+					{"H.264 / AVC (libx264 / 互換性最優先)", "libx264"},
+					{"H.265 / HEVC (libx265 / 高圧縮・高画質)", "libx265"},
+					{"AV1 (libsvtav1 / 高速・高効率)", "libsvtav1"},
+					{"AV1 (libaom-av1 / 最高品質・非常に低速)", "libaom-av1"},
+					{"AV1 (rav1e / 中速)", "rav1e"},
+					{"VP9 (libvpx-vp9 / Web・YouTube向け)", "libvpx-vp9"},
+				}
+				m.setDropdownOptions(options, m.generalSet.VideoCodec)
 			}
-			m.setDropdownOptions(options, m.generalSet.VideoCodec)
 
 		case 4: // Quality
-			m.dialogTitle = "品質設定 (CRF) の選択"
-			options := []DropdownOption{
-				{"最高画質 (CRF 18 / アーカイブ・保存向け)", "0"},
-				{"高画質   (CRF 22 / 推奨バランス)", "1"},
-				{"標準画質 (CRF 26 / 容量重視)", "2"},
-				{"低画質   (CRF 30 / プレビュー・超軽量)", "3"},
+			hw := m.generalSet.HwEncoder
+			codec := strings.ToLower(m.generalSet.VideoCodec)
+
+			switch hw {
+			case "NVIDIA":
+				m.dialogTitle = "NVIDIA NVENC 品質設定の選択"
+				options := []DropdownOption{
+					{"高品質 (CQ:23 / 高画質保存)", "cq_23"},
+					{"中品質 (CQ:28 / 推奨バランス)", "cq_28"},
+					{"高速   (CQ:32 / 容量重視)", "cq_32"},
+					{"カスタム品質 (CQ値を直接数値入力)", "custom_cq"},
+					{"カスタムビットレート (例: 8000k, 12M)", "custom_bitrate"},
+				}
+				m.setDropdownOptions(options, "cq_28")
+
+			case "Intel":
+				if strings.Contains(codec, "vp9") {
+					m.dialogTitle = "Intel QSV VP9 品質設定の選択"
+					options := []DropdownOption{
+						{"高品質 (Q:25 / 高画質)", "q_25"},
+						{"中品質 (Q:30 / 標準)", "q_30"},
+						{"低品質 (Q:40 / 軽量)", "q_40"},
+						{"カスタム品質 (Q値を直接数値入力)", "custom_q"},
+						{"カスタムビットレート (例: 8000k)", "custom_bitrate"},
+					}
+					m.setDropdownOptions(options, "q_30")
+				} else {
+					m.dialogTitle = "Intel QSV 品質設定の選択"
+					options := []DropdownOption{
+						{"高品質 (GQ:20 / 高画質保存)", "gq_20"},
+						{"中品質 (GQ:25 / 推奨バランス)", "gq_25"},
+						{"低品質 (GQ:30 / 容量重視)", "gq_30"},
+						{"カスタム品質 (GQ値を直接数値入力)", "custom_gq"},
+						{"カスタムビットレート (例: 8000k, 12M)", "custom_bitrate"},
+					}
+					m.setDropdownOptions(options, "gq_25")
+				}
+
+			case "AMD":
+				m.dialogTitle = "AMD AMF 品質設定の選択"
+				options := []DropdownOption{
+					{"高品質 (QP:22 / 高画質保存)", "qp_22"},
+					{"中品質 (QP:28 / 推奨バランス)", "qp_28"},
+					{"低品質 (QP:35 / 容量重視)", "qp_35"},
+					{"カスタム品質 (QP値を直接数値入力)", "custom_qp"},
+					{"カスタムビットレート (例: 8000k, 12M)", "custom_bitrate"},
+				}
+				m.setDropdownOptions(options, "qp_28")
+
+			case "Vulkan", "D3D12VA", "MF":
+				m.dialogTitle = "ビットレート品質設定の選択"
+				options := []DropdownOption{
+					{"高品質 (8000 kbps)", "br_8000k"},
+					{"標準品質 (4000 kbps)", "br_4000k"},
+					{"カスタムビットレート (例: 6000k, 10M)", "custom_bitrate"},
+				}
+				m.setDropdownOptions(options, "br_4000k")
+
+			default: // CPU
+				if strings.Contains(codec, "svt") || strings.Contains(codec, "aom") {
+					m.dialogTitle = "AV1 品質設定 (CRF) の選択"
+					options := []DropdownOption{
+						{"高品質 (CRF 20 / 高精細)", "crf_20"},
+						{"中品質 (CRF 30 / 標準バランス)", "crf_30"},
+						{"カスタム品質 (CRF値を直接入力)", "custom_crf"},
+						{"カスタムビットレート (例: 4000k)", "custom_bitrate"},
+					}
+					m.setDropdownOptions(options, "crf_20")
+				} else if strings.Contains(codec, "rav1e") {
+					m.dialogTitle = "rav1e 品質設定 (QP) の選択"
+					options := []DropdownOption{
+						{"高品質 (QP:80 / 高画質)", "qp_80"},
+						{"中品質 (QP:120 / 標準バランス)", "qp_120"},
+						{"低品質 (QP:160 / 軽量)", "qp_160"},
+						{"カスタム品質 (QP 0~255)", "custom_qp"},
+					}
+					m.setDropdownOptions(options, "qp_120")
+				} else if strings.Contains(codec, "vp") {
+					m.dialogTitle = "VP9 品質設定 (CRF) の選択"
+					options := []DropdownOption{
+						{"高品質 (CRF 30 / 高画質)", "crf_30"},
+						{"中品質 (CRF 35 / 標準バランス)", "crf_35"},
+						{"カスタム品質 (CRF値を直接入力)", "custom_crf"},
+					}
+					m.setDropdownOptions(options, "crf_30")
+				} else {
+					m.dialogTitle = "品質設定 (CRF) の選択"
+					options := []DropdownOption{
+						{"最高画質 (CRF 18 / アーカイブ・保存向け)", "crf_18"},
+						{"高画質   (CRF 22 / 推奨バランス)", "crf_22"},
+						{"標準画質 (CRF 26 / 容量重視)", "crf_26"},
+						{"低画質   (CRF 30 / プレビュー・超軽量)", "crf_30_low"},
+						{"カスタム品質 (CRF 0~51 を直接入力)", "custom_crf"},
+						{"カスタムビットレート (例: 5000k, 8M)", "custom_bitrate"},
+					}
+					m.setDropdownOptions(options, "crf_22")
+				}
 			}
-			m.setDropdownOptions(options, fmt.Sprintf("%d", m.generalSet.QualityIndex))
 
 		case 5: // Speed
 			m.dialogTitle = "エンコード速度プリセットの選択"
@@ -892,15 +1016,16 @@ func (m *MainModel) openDropdownDialog() {
 			m.setDropdownOptions(options, m.generalSet.SpeedPreset)
 
 		case 6: // Audio
-			m.dialogTitle = "音声設定の選択"
+			m.dialogTitle = "音声コーデックの選択"
 			options := []DropdownOption{
 				{"音声をそのままコピー (-c:a copy / 最速・無劣化)", "copy"},
-				{"内蔵 AAC (192kbps / 高音質・汎用)", "internal_aac"},
-				{"外部 qaac (AAC-LC / 最高音質)", "qaac"},
-				{"外部 neroAacEnc (AAC)", "nero"},
-				{"外部 fdkaac (AAC)", "fdkaac"},
-				{"Opus (libopus 128k / 高音質)", "opus"},
-				{"FLAC (可逆圧縮ロスレス)", "flac"},
+				{"内蔵 AAC (汎用・高品質)", "internal_aac"},
+				{"外部 qaac (AAC 自動HE/LC / Apple最高音質)", "qaac"},
+				{"外部 neroAacEnc (AAC 自動HE/LC)", "nero"},
+				{"外部 fdkaac (AAC 自動HE/LC)", "fdkaac"},
+				{"Opus (libopus / 高音質・省容量)", "opus"},
+				{"Vorbis (libvorbis)", "vorbis"},
+				{"FLAC (可逆圧縮ロスレス・完全無劣化)", "flac"},
 				{"音声なし (-an / 映像のみ)", "none"},
 			}
 			m.setDropdownOptions(options, m.generalSet.AudioEncoder)
@@ -946,6 +1071,22 @@ func (m *MainModel) openDropdownDialog() {
 				{"リネーム (末尾に_1を付与して保存)", string(core.OverwriteAutoRename)},
 			}
 			m.setDropdownOptions(options, string(m.generalSet.Overwrite))
+
+		case 15: // Cut
+			m.dialogTitle = "カット区間 (LosslessCut連携) の設定"
+			options := []DropdownOption{
+				{"開始時間を入力する", "set_start"},
+				{"終了時間を入力する", "set_end"},
+				{"LosslessCut を起動して位置を確認", "launch_lossless"},
+				{"カット設定を解除 (全編エンコード)", "clear_cut"},
+			}
+			m.setDropdownOptions(options, "set_start")
+
+		case 16: // Additional VF
+			m.openTextInputDialog("追加ビデオフィルター (-vf) の入力", "適用するビデオフィルター文字列を入力してください (例: scale=1280:-1,fps=30):", m.generalSet.AdditionalVF, "scale=1280:-1", InputContextAdditionalVF)
+
+		case 17: // Additional Args
+			m.openTextInputDialog("追加 FFmpeg 引数の入力", "追加のコマンドライン引数を入力してください (例: -max_muxing_queue_size 1024):", m.generalSet.AdditionalArgs, "-max_muxing_queue_size 1024", InputContextAdditionalArgs)
 
 		case 18: // After Power
 			m.dialogTitle = "全キュー完了後の電源動作"
@@ -1014,6 +1155,99 @@ func (m *MainModel) openDropdownDialog() {
 	}
 }
 
+func (m *MainModel) openAudioQualitySubDialog() {
+	m.state = StateDropdownDialog
+	m.audioSubDialog = true
+	m.dialogChoices = nil
+	m.dialogValues = nil
+	m.dialogIndex = 0
+
+	switch m.generalSet.AudioEncoder {
+	case "qaac":
+		m.dialogTitle = "qaac 音声品質の選択 (LC=TVBR / HE=CVBR)"
+		options := []DropdownOption{
+			{"AAC-LC TVBR 91 (~192kbps / 高音質)", "tvbr91"},
+			{"AAC-LC TVBR 73 (~160kbps / 推奨)", "tvbr73"},
+			{"AAC-LC TVBR 64 (~128kbps / 標準)", "tvbr64"},
+			{"HE-AAC CVBR 80kbps", "he80"},
+			{"HE-AAC CVBR 64kbps", "he64"},
+			{"HE-AAC CVBR 48kbps", "he48"},
+			{"カスタム: AAC-LC (TVBR 0~127 品質指定)", "custom_tvbr"},
+			{"カスタム: HE-AAC (CVBR kbps ビットレート指定)", "custom_cvbr"},
+		}
+		m.setDropdownOptions(options, m.generalSet.AudioPreset)
+
+	case "nero":
+		m.dialogTitle = "Nero AAC 音声品質の選択 (≤-q0.40:HE / >-q0.40:LC 自動)"
+		options := []DropdownOption{
+			{"高品質 (-q 0.65 / AAC-LC)", "q065"},
+			{"標準品質 (-q 0.50 / AAC-LC)", "q050"},
+			{"通常品質 (-q 0.35 / HE-AAC 自動適用)", "q035"},
+			{"低品質 (-q 0.20 / HE-AAC 自動適用)", "q020"},
+			{"カスタム品質 (-q 0.0 ~ 1.0)", "custom"},
+		}
+		m.setDropdownOptions(options, m.generalSet.AudioPreset)
+
+	case "fdkaac":
+		m.dialogTitle = "fdkaac 音声品質の選択 (≤VBR3:HE / ≥VBR4:LC 自動)"
+		options := []DropdownOption{
+			{"最高品質 (VBR 5 / AAC-LC)", "m5"},
+			{"高品質   (VBR 4 / AAC-LC)", "m4"},
+			{"標準品質 (VBR 3 / HE-AAC 自動適用)", "m3"},
+			{"低品質   (VBR 2 / HE-AAC 自動適用)", "m2"},
+			{"カスタム (VBR 1 ~ 5)", "custom"},
+		}
+		m.setDropdownOptions(options, m.generalSet.AudioPreset)
+
+	case "opus":
+		m.dialogTitle = "Opus ビットレートの選択"
+		options := []DropdownOption{
+			{"192 kbps (最高音質)", "192k"},
+			{"160 kbps (高音質)", "160k"},
+			{"128 kbps (標準・推奨)", "128k"},
+			{"96 kbps (軽量)", "96k"},
+			{"64 kbps (低容量)", "64k"},
+			{"48 kbps (超軽量)", "48k"},
+			{"カスタムビットレート (例: 32k)", "custom"},
+		}
+		m.setDropdownOptions(options, m.generalSet.AudioPreset)
+
+	case "vorbis":
+		m.dialogTitle = "Vorbis 品質 (-q:a) の選択"
+		options := []DropdownOption{
+			{"高品質 (q:a 6)", "q6"},
+			{"標準品質 (q:a 4)", "q4"},
+			{"カスタム品質 (-1 ~ 10)", "custom"},
+		}
+		m.setDropdownOptions(options, m.generalSet.AudioPreset)
+
+	case "flac":
+		m.dialogTitle = "FLAC 圧縮レベルの選択"
+		options := []DropdownOption{
+			{"高圧縮 (圧縮レベル 12)", "comp12"},
+			{"標準   (圧縮レベル 8)", "comp8"},
+			{"高速   (圧縮レベル 5)", "comp5"},
+			{"カスタム圧縮レベル (0 ~ 12)", "custom"},
+		}
+		m.setDropdownOptions(options, m.generalSet.AudioPreset)
+
+	case "internal_aac":
+		fallthrough
+	default:
+		m.dialogTitle = fmt.Sprintf("%s ビットレートの選択", m.generalSet.AudioEncoder)
+		options := []DropdownOption{
+			{"320 kbps (最高音質)", "320k"},
+			{"256 kbps (高音質)", "256k"},
+			{"192 kbps (標準・推奨)", "192k"},
+			{"128 kbps (軽量)", "128k"},
+			{"96 kbps (低容量)", "96k"},
+			{"64 kbps (超軽量)", "64k"},
+			{"カスタムビットレート (例: 160k)", "custom"},
+		}
+		m.setDropdownOptions(options, m.generalSet.AudioPreset)
+	}
+}
+
 func (m *MainModel) setDropdownOptions(options []DropdownOption, currentValue string) {
 	for i, opt := range options {
 		m.dialogChoices = append(m.dialogChoices, opt.Label)
@@ -1024,11 +1258,130 @@ func (m *MainModel) setDropdownOptions(options []DropdownOption, currentValue st
 	}
 }
 
+func (m *MainModel) openTextInputDialog(title, prompt, initialVal, placeholder string, ctx TextInputContext) {
+	m.state = StateTextInputDialog
+	m.textInput = NewTextInputState(title, prompt, initialVal, placeholder, ctx)
+}
+
+func (m *MainModel) applyTextInput() {
+	val := strings.TrimSpace(m.textInput.Value)
+	switch m.textInput.Context {
+	case InputContextCustomQualityValue:
+		m.generalSet.CustomQualityValue = val
+		m.generalSet.CustomBitrate = ""
+		m.generalSet.CustomCRF = 0
+		if num, err := strconv.Atoi(val); err == nil {
+			m.generalSet.CustomCRF = num
+		}
+		m.addLog("INFO", fmt.Sprintf("映像品質カスタム値を設定しました: %s", val))
+
+	case InputContextCustomBitrate:
+		if val != "" && !strings.HasSuffix(val, "k") && !strings.HasSuffix(val, "K") && !strings.HasSuffix(val, "M") && !strings.HasSuffix(val, "m") {
+			if _, err := strconv.Atoi(val); err == nil {
+				val += "k"
+			}
+		}
+		m.generalSet.CustomBitrate = val
+		m.generalSet.CustomQualityValue = ""
+		m.generalSet.CustomCRF = 0
+		m.addLog("INFO", fmt.Sprintf("映像カスタムビットレートを設定しました: %s", val))
+
+	case InputContextCustomAudioVal:
+		m.generalSet.AudioCustom = val
+		m.addLog("INFO", fmt.Sprintf("音声カスタム品質値を設定しました: %s", val))
+
+	case InputContextCutStart:
+		m.generalSet.CutStart = val
+		m.addLog("INFO", fmt.Sprintf("カット開始時間を設定しました: %s", val))
+
+	case InputContextCutEnd:
+		m.generalSet.CutEnd = val
+		m.addLog("INFO", fmt.Sprintf("カット終了時間を設定しました: %s", val))
+
+	case InputContextAdditionalVF:
+		m.generalSet.AdditionalVF = val
+		m.addLog("INFO", fmt.Sprintf("追加ビデオフィルター (-vf) を設定しました: %s", val))
+
+	case InputContextAdditionalArgs:
+		m.generalSet.AdditionalArgs = val
+		m.addLog("INFO", fmt.Sprintf("追加 FFmpeg 引数を設定しました: %s", val))
+
+	case InputContextTemplateName:
+		if val == "" {
+			val = fmt.Sprintf("Template_%d", time.Now().Unix())
+		}
+		tmpl := &core.Template{
+			Name:           val,
+			Mode:           m.mode,
+			HwDecoder:      m.generalSet.HwDecoder,
+			HwEncoder:      m.generalSet.HwEncoder,
+			VideoCodec:     m.generalSet.VideoCodec,
+			SpeedPreset:    m.generalSet.SpeedPreset,
+			AudioEncoder:   m.generalSet.AudioEncoder,
+			AudioBitrate:   m.generalSet.AudioPreset,
+			Deinterlace:    m.generalSet.Deinterlace,
+			OutputExt:      m.generalSet.OutputExt,
+			TwoPass:        m.generalSet.TwoPass,
+			MetadataMode:   m.generalSet.Metadata,
+			AdditionalVF:   m.generalSet.AdditionalVF,
+			AdditionalArgs: m.generalSet.AdditionalArgs,
+			AfterPower:     m.generalSet.AfterPower,
+		}
+		err := core.SaveTemplate(m.cfg.TemplatesDir, tmpl)
+		if err == nil {
+			m.addLog("INFO", fmt.Sprintf("テンプレートを保存しました: %s", val))
+		} else {
+			m.addLog("ERROR", fmt.Sprintf("テンプレート保存失敗: %v", err))
+		}
+
+	case InputContextPlatformMaxMB:
+		if mb, err := strconv.ParseFloat(val, 64); err == nil && mb > 0 {
+			m.platformSet.CustomMaxMB = mb
+			m.addLog("INFO", fmt.Sprintf("プラットフォーム目標容量を設定しました: %.1f MB", mb))
+		}
+	}
+}
+
 func (m *MainModel) applyDropdownChoice() {
 	if m.dialogIndex < 0 || m.dialogIndex >= len(m.dialogValues) {
 		return
 	}
 	val := m.dialogValues[m.dialogIndex]
+
+	if m.audioSubDialog {
+		m.audioSubDialog = false
+		m.generalSet.AudioPreset = val
+		if val == "custom" || val == "custom_tvbr" || val == "custom_cvbr" {
+			prompt := "カスタム品質値を入力してください:"
+			placeholder := "91"
+			if val == "custom_tvbr" {
+				prompt = "TVBR値 (0 ~ 127) を入力してください:"
+				placeholder = "91"
+			} else if val == "custom_cvbr" {
+				prompt = "HE-AAC ビットレート (kbps, 例: 64) を入力してください:"
+				placeholder = "64"
+			} else if m.generalSet.AudioEncoder == "nero" {
+				prompt = "Nero -q 値 (0.0 ~ 1.0) を入力してください (≤0.40は自動HE):"
+				placeholder = "0.50"
+			} else if m.generalSet.AudioEncoder == "fdkaac" {
+				prompt = "FDK VBR 値 (1 ~ 5) を入力してください (≤3は自動HE):"
+				placeholder = "4"
+			} else if m.generalSet.AudioEncoder == "opus" || m.generalSet.AudioEncoder == "internal_aac" {
+				prompt = "ビットレートを入力してください (例: 128k, 192k):"
+				placeholder = "192k"
+			} else if m.generalSet.AudioEncoder == "vorbis" {
+				prompt = "Vorbis 品質値 (-1 ~ 10) を入力してください:"
+				placeholder = "4"
+			} else if m.generalSet.AudioEncoder == "flac" {
+				prompt = "FLAC 圧縮レベル (0 ~ 12) を入力してください:"
+				placeholder = "8"
+			}
+			m.openTextInputDialog("音声カスタム品質入力", prompt, m.generalSet.AudioCustom, placeholder, InputContextCustomAudioVal)
+			return
+		}
+		m.state = StateIdle
+		return
+	}
 
 	switch m.mode {
 	case core.ModeGeneral:
@@ -1040,13 +1393,43 @@ func (m *MainModel) applyDropdownChoice() {
 		case 3:
 			m.generalSet.VideoCodec = val
 		case 4:
-			var q int
-			fmt.Sscanf(val, "%d", &q)
-			m.generalSet.QualityIndex = q
+			m.generalSet.CustomQualityValue = ""
+			m.generalSet.CustomBitrate = ""
+			m.generalSet.CustomCRF = 0
+
+			switch val {
+			case "custom_cq":
+				m.openTextInputDialog("カスタム品質 (CQ) の入力", "CQ値 (例: 23, 28) を入力してください:", "", "28", InputContextCustomQualityValue)
+				return
+			case "custom_gq":
+				m.openTextInputDialog("カスタム品質 (GQ) の入力", "GQ値 (例: 20, 25) を入力してください:", "", "25", InputContextCustomQualityValue)
+			case "custom_q":
+				m.openTextInputDialog("カスタム品質 (Q) の入力", "Q値 (例: 25, 30) を入力してください:", "", "30", InputContextCustomQualityValue)
+			case "custom_qp":
+				m.openTextInputDialog("カスタム品質 (QP) の入力", "QP値 (例: 22, 28, 80) を入力してください:", "", "28", InputContextCustomQualityValue)
+			case "custom_crf":
+				m.openTextInputDialog("カスタム品質 (CRF) の入力", "CRF値 (例: 18, 22, 26) を入力してください:", "", "22", InputContextCustomQualityValue)
+				return
+			case "custom_bitrate":
+				m.openTextInputDialog("カスタムビットレートの入力", "ビットレート (例: 8000k, 12M) を入力してください:", "", "8000k", InputContextCustomBitrate)
+				return
+			case "cq_23", "gq_20", "qp_22", "qp_80", "crf_18", "crf_20", "br_8000k", "q_25":
+				m.generalSet.QualityIndex = 0
+			case "cq_28", "gq_25", "qp_28", "qp_120", "crf_22", "crf_35", "br_4000k", "q_30":
+				m.generalSet.QualityIndex = 1
+			case "cq_32", "gq_30", "qp_35", "qp_160", "crf_26", "q_40":
+				m.generalSet.QualityIndex = 2
+			case "crf_30_low", "crf_30":
+				m.generalSet.QualityIndex = 3
+			}
 		case 5:
 			m.generalSet.SpeedPreset = val
 		case 6:
 			m.generalSet.AudioEncoder = val
+			if val != "copy" && val != "none" {
+				m.openAudioQualitySubDialog()
+				return
+			}
 		case 7:
 			m.generalSet.Deinterlace = core.DeinterlaceMode(val)
 		case 8:
@@ -1055,6 +1438,29 @@ func (m *MainModel) applyDropdownChoice() {
 			m.generalSet.CPULimit = core.CPURestriction(val)
 		case 12:
 			m.generalSet.Overwrite = core.OverwriteAction(val)
+		case 15:
+			switch val {
+			case "set_start":
+				m.openTextInputDialog("カット開始時間の入力", "開始位置を入力してください (例: 00:01:15.000):", m.generalSet.CutStart, "00:00:00.000", InputContextCutStart)
+				return
+			case "set_end":
+				m.openTextInputDialog("カット終了時間の入力", "終了位置を入力してください (例: 00:03:30.500):", m.generalSet.CutEnd, "00:00:00.000", InputContextCutEnd)
+				return
+			case "launch_lossless":
+				if len(m.queueItems) > 0 && m.selectedQueue < len(m.queueItems) {
+					targetFile := m.queueItems[m.selectedQueue].Path
+					if m.cfg.Tools.LosslessCutPath != "" {
+						_ = execLosslessCut(m.cfg.Tools.LosslessCutPath, targetFile)
+						m.addLog("INFO", fmt.Sprintf("LosslessCut を起動しました: %s", filepath.Base(targetFile)))
+					} else {
+						m.addLog("WARN", "LosslessCut のパスが設定されていません")
+					}
+				}
+			case "clear_cut":
+				m.generalSet.CutStart = ""
+				m.generalSet.CutEnd = ""
+				m.addLog("INFO", "カット区間をクリアしました")
+			}
 		case 18:
 			m.generalSet.AfterPower = core.PowerAction(val)
 		}
@@ -1062,15 +1468,38 @@ func (m *MainModel) applyDropdownChoice() {
 	case core.ModePlatform:
 		if m.dropdownFieldID == 1 {
 			m.platformSet.SelectedPlatform = val
+			if val == "custom" {
+				m.openTextInputDialog("カスタム容量上限 (MB)", "目標ファイルサイズ (MB) を入力してください (例: 100):", "100", "MB", InputContextPlatformMaxMB)
+				return
+			}
 		}
 
 	case core.ModeIntermediate:
 		if m.dropdownFieldID == 1 {
 			m.interSet.Format = val
 		} else if m.dropdownFieldID == 2 {
-			m.interSet.AudioFormat = val
+			m.dialogTitle = "音声形式の選択"
+			options := []DropdownOption{
+				{"PCM 24-bit (非圧縮 / スタジオ品質)", "pcm24"},
+				{"FLAC (ロスレス可逆圧縮)", "flac"},
+			}
+			m.setDropdownOptions(options, m.interSet.AudioFormat)
+		} else {
+			m.state = StateIdle
+		}
+
+	case core.ModeSplit:
+		if m.activeField == 1 {
+			m.splitSet.SplitSource = cycleString([]string{"chapter", "srt"}, m.splitSet.SplitSource, 1)
+			m.state = StateIdle
+		} else if m.activeField == 2 {
+			m.splitSet.NamingRule = cycleString([]string{"text", "index"}, m.splitSet.NamingRule, 1)
+			m.state = StateIdle
+		} else {
+			m.state = StateIdle
 		}
 	}
+	m.state = StateIdle
 }
 
 // Dialog handlers
@@ -1120,16 +1549,21 @@ func (m *MainModel) openLoadTemplateDialog() {
 }
 
 func (m *MainModel) openSaveTemplateDialog() {
-	m.state = StateSaveTemplateDialog
-	m.dialogTitle = "現在の設定をテンプレートとして保存 (F5)"
-	m.dialogChoices = []string{
-		"新規テンプレートとして保存 (ファイル名: template_custom.json)",
-		"キャンセル",
-	}
-	m.dialogIndex = 0
+	m.openTextInputDialog("テンプレート保存 (F5)", "保存するテンプレート名を入力してください:", fmt.Sprintf("template_%d", time.Now().Unix()), "template_name", InputContextTemplateName)
 }
 
 func (m *MainModel) handleModalKey(key string) (tea.Model, tea.Cmd) {
+	if m.state == StateTextInputDialog {
+		done, accepted := m.textInput.HandleKey(key)
+		if done {
+			if accepted {
+				m.applyTextInput()
+			}
+			m.state = StateIdle
+		}
+		return m, nil
+	}
+
 	switch key {
 	case "esc":
 		m.state = StateIdle
@@ -1149,7 +1583,6 @@ func (m *MainModel) handleModalKey(key string) (tea.Model, tea.Cmd) {
 		switch m.state {
 		case StateDropdownDialog:
 			m.applyDropdownChoice()
-			m.state = StateIdle
 
 		case StateHelpDialog:
 			m.state = StateIdle
@@ -1199,6 +1632,7 @@ func (m *MainModel) handleModalKey(key string) (tea.Model, tea.Cmd) {
 					m.generalSet.VideoCodec = tmpl.VideoCodec
 					m.generalSet.SpeedPreset = tmpl.SpeedPreset
 					m.generalSet.AudioEncoder = tmpl.AudioEncoder
+					m.generalSet.AudioPreset = tmpl.AudioBitrate
 					m.generalSet.Deinterlace = tmpl.Deinterlace
 					m.generalSet.OutputExt = tmpl.OutputExt
 					m.generalSet.TwoPass = tmpl.TwoPass
@@ -1209,33 +1643,6 @@ func (m *MainModel) handleModalKey(key string) (tea.Model, tea.Cmd) {
 					m.addLog("INFO", fmt.Sprintf("テンプレート %q を読み込みました", selName))
 				} else {
 					m.addLog("ERROR", fmt.Sprintf("テンプレート読込失敗: %v", err))
-				}
-			}
-			m.state = StateIdle
-
-		case StateSaveTemplateDialog:
-			if m.dialogIndex == 0 {
-				tmpl := &core.Template{
-					Name:           fmt.Sprintf("Template_%d", time.Now().Unix()),
-					Mode:           m.mode,
-					HwDecoder:      m.generalSet.HwDecoder,
-					HwEncoder:      m.generalSet.HwEncoder,
-					VideoCodec:     m.generalSet.VideoCodec,
-					SpeedPreset:    m.generalSet.SpeedPreset,
-					AudioEncoder:   m.generalSet.AudioEncoder,
-					Deinterlace:    m.generalSet.Deinterlace,
-					OutputExt:      m.generalSet.OutputExt,
-					TwoPass:        m.generalSet.TwoPass,
-					MetadataMode:   m.generalSet.Metadata,
-					AdditionalVF:   m.generalSet.AdditionalVF,
-					AdditionalArgs: m.generalSet.AdditionalArgs,
-					AfterPower:     m.generalSet.AfterPower,
-				}
-				err := core.SaveTemplate(m.cfg.TemplatesDir, tmpl)
-				if err == nil {
-					m.addLog("INFO", fmt.Sprintf("テンプレートを保存しました: %s", tmpl.Name))
-				} else {
-					m.addLog("ERROR", fmt.Sprintf("テンプレート保存失敗: %v", err))
 				}
 			}
 			m.state = StateIdle
@@ -1306,7 +1713,6 @@ func (m *MainModel) View() string {
 	rightOuterW := targetW - leftOuterW
 
 	// Height calculations:
-	// Header(1) + \n(1) + Progress(5) + \n(1) + Log(3 or 9) + \n(1) + Footer(1) + \n(1) = 14 (or 20)
 	fixedLines := 14
 	if m.logExpanded {
 		fixedLines = 20
@@ -1375,6 +1781,10 @@ func (m *MainModel) View() string {
 	b.WriteString(footerStyle.Render(PadRightDisplay(footerText, targetW-4)))
 
 	// Modal Overlays
+	if m.state == StateTextInputDialog {
+		return RenderTextInputModal(&m.textInput, m.width, m.height)
+	}
+
 	if m.state == StateHelpDialog || m.state == StateContextMenuDialog ||
 		m.state == StateLoadTemplateDialog || m.state == StateSaveTemplateDialog ||
 		m.state == StateShutdownCountdown || m.state == StateDropdownDialog {

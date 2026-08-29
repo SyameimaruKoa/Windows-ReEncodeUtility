@@ -194,23 +194,23 @@ func TestRenderScrollableLines(t *testing.T) {
 
 func TestRenderGeneralViewScrolling(t *testing.T) {
 	s := core.GeneralSettings{
-		HwDecoder:     "d3d11va",
-		HwEncoder:     "Intel",
-		VideoCodec:    "libx264",
-		QualityIndex:  1,
-		SpeedPreset:   "medium",
-		AudioEncoder:  "internal_aac",
-		AudioPreset:   "192k",
-		Deinterlace:   core.DeinterlaceNone,
-		OutputExt:     "mp4",
-		ShowAdvanced:  true,
-		CPULimit:      core.CPURestrictionAll,
-		Overwrite:     core.OverwriteSkip,
-		TwoPass:       false,
-		Metadata:      core.MetadataExifTool,
-		CutStart:      "00:00:10",
-		CutEnd:        "00:01:00",
-		AfterPower:    core.PowerNone,
+		HwDecoder:    "d3d11va",
+		HwEncoder:    "Intel",
+		VideoCodec:   "libx264",
+		QualityIndex: 1,
+		SpeedPreset:  "medium",
+		AudioEncoder: "internal_aac",
+		AudioPreset:  "192k",
+		Deinterlace:  core.DeinterlaceNone,
+		OutputExt:    "mp4",
+		ShowAdvanced: true,
+		CPULimit:     core.CPURestrictionAll,
+		Overwrite:    core.OverwriteSkip,
+		TwoPass:      false,
+		Metadata:     core.MetadataExifTool,
+		CutStart:     "00:00:10",
+		CutEnd:       "00:01:00",
+		AfterPower:   core.PowerNone,
 	}
 
 	// Test height that is smaller than total items (approx 18 items)
@@ -228,5 +228,80 @@ func TestRenderGeneralViewScrolling(t *testing.T) {
 	renderedCut := RenderGeneralView(&s, 15, 70, smallHeight, true)
 	if !strings.Contains(renderedCut, "カット区間") {
 		t.Errorf("Expected RenderGeneralView with activeField 15 to contain cut field, got:\n%s", renderedCut)
+	}
+}
+
+func TestCustomVideoAndAudioFormatting(t *testing.T) {
+	s := core.GeneralSettings{
+		HwDecoder:          "d3d11va",
+		HwEncoder:          "NVIDIA",
+		VideoCodec:         "h264_nvenc",
+		QualityIndex:       1,
+		CustomQualityValue: "25",
+		SpeedPreset:        "p5",
+		AudioEncoder:       "qaac",
+		AudioPreset:        "tvbr91",
+		Deinterlace:        core.DeinterlaceNone,
+		OutputExt:          "mp4",
+	}
+
+	// Test custom CQ format
+	qStr := formatQuality(&s)
+	if !strings.Contains(qStr, "CQ 25") {
+		t.Errorf("Expected formatQuality to contain 'CQ 25', got: %s", qStr)
+	}
+
+	// Test custom Bitrate format
+	s.CustomQualityValue = ""
+	s.CustomBitrate = "8000k"
+	qStr2 := formatQuality(&s)
+	if !strings.Contains(qStr2, "8000k") {
+		t.Errorf("Expected formatQuality to contain '8000k', got: %s", qStr2)
+	}
+
+	// Test audio formatting
+	aStr := formatAudioEncoder(&s)
+	if !strings.Contains(aStr, "qaac: AAC-LC TVBR 91") {
+		t.Errorf("Expected formatAudioEncoder to contain 'qaac: AAC-LC TVBR 91', got: %s", aStr)
+	}
+
+	// Test custom audio formatting
+	s.AudioEncoder = "opus"
+	s.AudioPreset = "custom"
+	s.AudioCustom = "96k"
+	aStr2 := formatAudioEncoder(&s)
+	if !strings.Contains(aStr2, "Opus: カスタム (96k)") {
+		t.Errorf("Expected formatAudioEncoder to contain 'Opus: カスタム (96k)', got: %s", aStr2)
+	}
+}
+
+func TestTextInputModalState(t *testing.T) {
+	tis := NewTextInputState("カスタム品質入力", "CRF値を入力してください", "22", "22", InputContextCustomQualityValue)
+	if tis.Value != "22" {
+		t.Errorf("Expected initial value '22', got '%s'", tis.Value)
+	}
+
+	// Test typing a character
+	tis.HandleKey("5")
+	if tis.Value != "225" {
+		t.Errorf("Expected value '225', got '%s'", tis.Value)
+	}
+
+	// Test backspace
+	tis.HandleKey("backspace")
+	if tis.Value != "22" {
+		t.Errorf("Expected value '22' after backspace, got '%s'", tis.Value)
+	}
+
+	// Test enter
+	done, accepted := tis.HandleKey("enter")
+	if !done || !accepted {
+		t.Errorf("Expected done=true, accepted=true on enter")
+	}
+
+	// Test modal rendering
+	rendered := RenderTextInputModal(&tis, 80, 24)
+	if !strings.Contains(rendered, "カスタム品質入力") {
+		t.Errorf("Expected RenderTextInputModal to contain title, got: %s", rendered)
 	}
 }

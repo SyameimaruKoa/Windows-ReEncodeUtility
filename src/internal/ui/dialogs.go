@@ -84,3 +84,9 @@ func IsSendToShortcutCreated() bool {
 	_, err := os.Stat(shortcutPath)
 	return err == nil
 }
+
+// execLosslessCut launches LosslessCut for the target video.
+func execLosslessCut(losslessCutPath, targetFile string) error {
+	cmd := exec.Command(losslessCutPath, targetFile)
+	return cmd.Start()
+}
