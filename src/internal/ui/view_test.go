@@ -259,19 +259,25 @@ func TestCustomVideoAndAudioFormatting(t *testing.T) {
 		t.Errorf("Expected formatQuality to contain '8000k', got: %s", qStr2)
 	}
 
-	// Test audio formatting
-	aStr := formatAudioEncoder(&s)
-	if !strings.Contains(aStr, "qaac: AAC-LC TVBR 91") {
-		t.Errorf("Expected formatAudioEncoder to contain 'qaac: AAC-LC TVBR 91', got: %s", aStr)
+	// Test audio encoder name formatting
+	nameStr := formatAudioEncoderName(s.AudioEncoder)
+	if !strings.Contains(nameStr, "qaac") {
+		t.Errorf("Expected formatAudioEncoderName to contain 'qaac', got: %s", nameStr)
 	}
 
-	// Test custom audio formatting
+	// Test audio quality formatting
+	qAudStr := formatAudioQuality(&s)
+	if !strings.Contains(qAudStr, "TVBR 91") {
+		t.Errorf("Expected formatAudioQuality to contain 'TVBR 91', got: %s", qAudStr)
+	}
+
+	// Test custom audio quality formatting
 	s.AudioEncoder = "opus"
 	s.AudioPreset = "custom"
 	s.AudioCustom = "96k"
-	aStr2 := formatAudioEncoder(&s)
-	if !strings.Contains(aStr2, "Opus: カスタム (96k)") {
-		t.Errorf("Expected formatAudioEncoder to contain 'Opus: カスタム (96k)', got: %s", aStr2)
+	qAudStr2 := formatAudioQuality(&s)
+	if !strings.Contains(qAudStr2, "カスタム (96k)") {
+		t.Errorf("Expected formatAudioQuality to contain 'カスタム (96k)', got: %s", qAudStr2)
 	}
 }
 

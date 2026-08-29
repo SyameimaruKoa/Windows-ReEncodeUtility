@@ -30,7 +30,7 @@ func RenderGeneralView(s *core.GeneralSettings, activeField int, outerWidth, out
 		items = append(items, ScrollableItem{0, HeaderTitleStyle.Render(title)})
 	}
 
-	// Basic Settings fields (1-8)
+	// Basic Settings fields (1-9)
 	fields := []struct {
 		label string
 		value string
@@ -39,11 +39,12 @@ func RenderGeneralView(s *core.GeneralSettings, activeField int, outerWidth, out
 		{"HWデコード   ", formatHwDecoder(s.HwDecoder), 1},
 		{"HWエンコーダ ", formatHwEncoder(s.HwEncoder), 2},
 		{"映像コーデック", formatCodec(s.VideoCodec), 3},
-		{"品質設定     ", formatQuality(s), 4},
+		{"映像品質設定 ", formatQuality(s), 4},
 		{"速度プリセット", s.SpeedPreset, 5},
-		{"音声設定     ", formatAudioEncoder(s), 6},
-		{"インターレース", formatDeinterlace(s.Deinterlace), 7},
-		{"コンテナ形式 ", strings.ToUpper(s.OutputExt), 8},
+		{"音声エンコーダ", formatAudioEncoderName(s.AudioEncoder), 6},
+		{"音声品質設定 ", formatAudioQuality(s), 7},
+		{"インターレース", formatDeinterlace(s.Deinterlace), 8},
+		{"コンテナ形式 ", strings.ToUpper(s.OutputExt), 9},
 	}
 
 	for _, f := range fields {
@@ -55,44 +56,25 @@ func RenderGeneralView(s *core.GeneralSettings, activeField int, outerWidth, out
 		}
 	}
 
-	// Advanced settings toggle (Field 9)
+	// Advanced settings toggle (Field 10)
 	advToggle := "[▼ 詳細設定・リソース制御 を閉じる (Alt+D)]"
 	if !s.ShowAdvanced {
 		advToggle = "[▶ 詳細設定・リソース制御 を開く (Alt+D)]"
 	}
-	if activeField == 9 && focused {
-		items = append(items, ScrollableItem{9, ActiveItemStyle.Render(PadRightDisplay(advToggle, innerWidth))})
+	if activeField == 10 && focused {
+		items = append(items, ScrollableItem{10, ActiveItemStyle.Render(PadRightDisplay(advToggle, innerWidth))})
 	} else {
-		items = append(items, ScrollableItem{9, SelectedItemStyle.Render(advToggle)})
+		items = append(items, ScrollableItem{10, SelectedItemStyle.Render(advToggle)})
 	}
 
 	if s.ShowAdvanced {
-		isAV1 := strings.Contains(strings.ToLower(s.VideoCodec), "av1")
-
 		advFields := []struct {
 			label       string
 			value       string
 			idx         int
 			hasDropdown bool
 		}{
-			{"・CPU制限    ", formatCPULimit(s.CPULimit), 10, true},
-		}
-
-		if isAV1 {
-			advFields = append(advFields, struct {
-				label       string
-				value       string
-				idx         int
-				hasDropdown bool
-			}{"・AV1エンジン ", s.AV1Engine, 11, true})
-		}
-
-		advFields = append(advFields, []struct {
-			label       string
-			value       string
-			idx         int
-			hasDropdown bool
-		}{
+			{"・CPU制限    ", formatCPULimit(s.CPULimit), 11, true},
 			{"・同名ファイル", string(s.Overwrite), 12, true},
 			{"・2-Pass モード", formatTwoPass(s.TwoPass), 13, false},
 			{"・メタデータ  ", string(s.Metadata), 14, true},
@@ -100,7 +82,7 @@ func RenderGeneralView(s *core.GeneralSettings, activeField int, outerWidth, out
 			{"・追加 VF    ", s.AdditionalVF, 16, false},
 			{"・追加 引数   ", s.AdditionalArgs, 17, false},
 			{"・完了後電源  ", formatPower(s.AfterPower), 18, true},
-		}...)
+		}
 
 		for _, af := range advFields {
 			formatted := FormatDropdownField(af.label, af.value, fieldWidth, af.hasDropdown)
@@ -321,113 +303,122 @@ func formatQuality(s *core.GeneralSettings) string {
 	}
 }
 
-func formatAudioEncoder(s *core.GeneralSettings) string {
+func formatAudioEncoderName(enc string) string {
+	switch enc {
+	case "copy":
+		return "音声をコピー (-c:a copy)"
+	case "none":
+		return "音声なし (-an)"
+	case "internal_aac":
+		return "内蔵 AAC (FFmpeg)"
+	case "qaac":
+		return "外部 qaac (Apple AAC)"
+	case "nero":
+		return "外部 neroAacEnc (Nero AAC)"
+	case "fdkaac":
+		return "外部 fdkaac (Fraunhofer AAC)"
+	case "opus":
+		return "Opus (libopus)"
+	case "vorbis":
+		return "Vorbis (libvorbis)"
+	case "flac":
+		return "FLAC (可逆圧縮ロスレス)"
+	default:
+		return enc
+	}
+}
+
+func formatAudioQuality(s *core.GeneralSettings) string {
 	enc := s.AudioEncoder
 	preset := s.AudioPreset
 	custom := s.AudioCustom
 
+	if enc == "copy" || enc == "none" {
+		return "設定不要 (パススルー/無音)"
+	}
+
+	if preset == "custom" || (custom != "" && preset == "") {
+		return fmt.Sprintf("カスタム (%s)", custom)
+	}
+
 	switch enc {
-	case "copy":
-		return "音声をそのままコピー (-c:a copy)"
-	case "none":
-		return "音声なし (-an)"
 	case "internal_aac":
-		if preset == "custom" && custom != "" {
-			return fmt.Sprintf("内蔵 AAC: カスタム (%s)", custom)
-		}
 		if preset == "" {
 			preset = "192k"
 		}
-		return fmt.Sprintf("内蔵 AAC (%s)", preset)
+		return fmt.Sprintf("%s (標準・汎用)", preset)
+
 	case "qaac":
-		if preset == "custom" && custom != "" {
-			return fmt.Sprintf("qaac: カスタム (%s)", custom)
-		}
 		switch preset {
 		case "tvbr91", "192k", "":
-			return "qaac: AAC-LC TVBR 91 (~192k)"
+			return "AAC-LC TVBR 91 (~192k / 高音質)"
 		case "tvbr73", "160k":
-			return "qaac: AAC-LC TVBR 73 (~160k)"
+			return "AAC-LC TVBR 73 (~160k / 推奨)"
 		case "tvbr64", "128k":
-			return "qaac: AAC-LC TVBR 64 (~128k)"
+			return "AAC-LC TVBR 64 (~128k / 標準)"
 		case "he80":
-			return "qaac: HE-AAC CVBR 80k"
+			return "HE-AAC CVBR 80k"
 		case "he64":
-			return "qaac: HE-AAC CVBR 64k"
+			return "HE-AAC CVBR 64k"
 		case "he48":
-			return "qaac: HE-AAC CVBR 48k"
+			return "HE-AAC CVBR 48k"
 		default:
-			return fmt.Sprintf("qaac: %s", preset)
+			return preset
 		}
+
 	case "nero":
-		if preset == "custom" && custom != "" {
-			return fmt.Sprintf("Nero: カスタム (%s)", custom)
-		}
 		switch preset {
 		case "q065", "high":
-			return "Nero: AAC-LC (-q 0.65)"
+			return "高品質 (-q 0.65 / LC)"
 		case "q050", "standard", "":
-			return "Nero: AAC-LC (-q 0.50)"
+			return "標準品質 (-q 0.50 / LC)"
 		case "q035", "normal_he":
-			return "Nero: HE-AAC (-q 0.35)"
+			return "通常品質 (-q 0.35 / HE自動)"
 		case "q020", "low_he":
-			return "Nero: HE-AAC (-q 0.20)"
+			return "低品質 (-q 0.20 / HE自動)"
 		default:
-			return fmt.Sprintf("Nero: %s", preset)
+			return preset
 		}
+
 	case "fdkaac":
-		if preset == "custom" && custom != "" {
-			return fmt.Sprintf("fdkaac: カスタム (%s)", custom)
-		}
 		switch preset {
 		case "m5", "vbr5":
-			return "fdkaac: AAC-LC (VBR 5 最高品質)"
+			return "最高品質 (VBR 5 / LC)"
 		case "m4", "vbr4", "":
-			return "fdkaac: AAC-LC (VBR 4 高品質)"
+			return "高品質 (VBR 4 / LC)"
 		case "m3", "vbr3_he":
-			return "fdkaac: HE-AAC (VBR 3 標準)"
+			return "標準品質 (VBR 3 / HE自動)"
 		case "m2", "vbr2_he":
-			return "fdkaac: HE-AAC (VBR 2 低品質)"
+			return "低品質 (VBR 2 / HE自動)"
 		default:
-			return fmt.Sprintf("fdkaac: %s", preset)
+			return preset
 		}
+
 	case "opus":
-		if preset == "custom" && custom != "" {
-			return fmt.Sprintf("Opus: カスタム (%s)", custom)
-		}
 		if preset == "" {
 			preset = "128k"
 		}
-		return fmt.Sprintf("Opus (libopus %s)", preset)
+		return fmt.Sprintf("%s (高音質・省容量)", preset)
+
 	case "vorbis":
-		if preset == "custom" && custom != "" {
-			return fmt.Sprintf("Vorbis: カスタム (q:a %s)", custom)
-		}
 		if preset == "q6" || preset == "high" {
-			return "Vorbis: 高品質 (q:a 6)"
+			return "高品質 (q:a 6)"
 		}
-		return "Vorbis: 標準品質 (q:a 4)"
+		return "標準品質 (q:a 4)"
+
 	case "flac":
-		if preset == "custom" && custom != "" {
-			return fmt.Sprintf("FLAC: カスタム (レベル %s)", custom)
-		}
 		if preset == "comp12" || preset == "high" {
-			return "FLAC (圧縮レベル 12 高圧縮)"
+			return "高圧縮 (レベル 12)"
 		} else if preset == "comp5" || preset == "fast" {
-			return "FLAC (圧縮レベル 5 高速)"
+			return "高速 (レベル 5)"
 		}
-		return "FLAC (圧縮レベル 8 標準)"
+		return "標準 (レベル 8)"
+
 	default:
-		if strings.Contains(enc, "_") {
-			if preset == "custom" && custom != "" {
-				return fmt.Sprintf("%s: カスタム (%s)", enc, custom)
-			}
-			if preset == "" {
-				preset = "192k"
-			}
-			return fmt.Sprintf("%s (%s)", enc, preset)
+		if preset == "" {
+			preset = "192k"
 		}
-		return enc
+		return preset
 	}
 }
 

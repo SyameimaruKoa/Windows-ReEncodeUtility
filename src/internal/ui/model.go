@@ -352,7 +352,13 @@ func (m *MainModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.cancelFunc != nil {
 				m.cancelFunc()
 			}
-			m.addLog("WARN", "ユーザー操作によりエンコードが中断されました")
+			for _, it := range m.queueItems {
+				if it.Status == "Encoding" {
+					it.Status = "Failed"
+					it.ErrorMessage = "ユーザーによって中断されました"
+				}
+			}
+			m.addLog("WARN", "ユーザー操作によりエンコードが中断されました (設定を変更して再開可能)")
 			m.state = StateIdle
 		}
 		return m, nil
@@ -364,11 +370,6 @@ func (m *MainModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.retryFailedItems()
 			return m, m.waitForProgress()
 		}
-		if key == "tab" {
-			m.focusLeft = !m.focusLeft
-			m.state = StateIdle
-			return m, nil
-		}
 		if key == "ctrl+enter" {
 			m.startEncoding()
 			return m, m.waitForProgress()
@@ -378,12 +379,23 @@ func (m *MainModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.retryFailedItems()
 				return m, m.waitForProgress()
 			}
-			return m, tea.Quit
+			if m.activeField == 99 {
+				m.startEncoding()
+				return m, m.waitForProgress()
+			}
+			m.state = StateIdle
+			return m, nil
 		}
 		if key == "esc" || key == "q" {
 			return m, tea.Quit
 		}
-		return m, nil
+		// Any navigation key transitions back to Idle to allow instant re-editing of settings
+		if key == "tab" || key == "up" || key == "down" || key == "left" || key == "right" || key == " " {
+			m.state = StateIdle
+			// Fallthrough to idle navigation
+		} else {
+			return m, nil
+		}
 	}
 
 	// Idle navigation
@@ -496,7 +508,7 @@ func (m *MainModel) prevSettingField() {
 			if m.generalSet.ShowAdvanced {
 				m.activeField = 18
 			} else {
-				m.activeField = 9
+				m.activeField = 10
 			}
 		} else if m.mode == core.ModePlatform {
 			m.activeField = 2
@@ -510,31 +522,21 @@ func (m *MainModel) prevSettingField() {
 
 	if m.activeField > 0 {
 		m.activeField--
-		// Skip AV1 engine if not AV1
-		if m.activeField == 11 && !strings.Contains(strings.ToLower(m.generalSet.VideoCodec), "av1") {
-			m.activeField = 10
-		}
 	}
 }
 
 func (m *MainModel) nextSettingField() {
-	isAV1 := strings.Contains(strings.ToLower(m.generalSet.VideoCodec), "av1")
-
 	switch m.mode {
 	case core.ModeGeneral:
 		if !m.generalSet.ShowAdvanced {
-			if m.activeField < 9 {
+			if m.activeField < 10 {
 				m.activeField++
-			} else if m.activeField == 9 {
+			} else if m.activeField == 10 {
 				m.activeField = 99 // Jump to Start button
 			}
 		} else {
 			if m.activeField < 18 {
 				m.activeField++
-				// Skip AV1 engine if not AV1
-				if m.activeField == 11 && !isAV1 {
-					m.activeField = 12
-				}
 			} else if m.activeField == 18 {
 				m.activeField = 99 // Jump to Start button
 			}
@@ -589,15 +591,41 @@ func (m *MainModel) cycleGeneralField(dir int) {
 	case 3: // Video Codec
 		codecs := []string{"libx264", "libx265", "libsvtav1", "libvpx-vp9"}
 		m.generalSet.VideoCodec = cycleString(codecs, m.generalSet.VideoCodec, dir)
-	case 4: // Quality
+	case 4: // Video Quality
 		m.generalSet.QualityIndex = (m.generalSet.QualityIndex + dir + 4) % 4
 	case 5: // Speed Preset
 		speeds := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
 		m.generalSet.SpeedPreset = cycleString(speeds, m.generalSet.SpeedPreset, dir)
 	case 6: // Audio Encoder
-		audioEncoders := []string{"copy", "internal_aac", "qaac", "nero", "fdkaac", "opus", "vorbis", "flac", "none"}
+		audioEncoders := []string{"internal_aac", "qaac", "nero", "fdkaac", "opus", "vorbis", "flac", "copy", "none"}
 		m.generalSet.AudioEncoder = cycleString(audioEncoders, m.generalSet.AudioEncoder, dir)
-	case 7: // Deinterlace
+	case 7: // Audio Quality Preset
+		switch m.generalSet.AudioEncoder {
+		case "qaac":
+			presets := []string{"tvbr91", "tvbr73", "tvbr64", "he80", "he64", "he48"}
+			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
+		case "nero":
+			presets := []string{"q065", "q050", "q035", "q020"}
+			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
+		case "fdkaac":
+			presets := []string{"m5", "m4", "m3", "m2"}
+			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
+		case "opus":
+			presets := []string{"192k", "160k", "128k", "96k", "64k", "48k"}
+			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
+		case "vorbis":
+			presets := []string{"q6", "q4"}
+			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
+		case "flac":
+			presets := []string{"comp12", "comp8", "comp5"}
+			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
+		case "internal_aac":
+			fallthrough
+		default:
+			presets := []string{"320k", "256k", "192k", "128k", "96k", "64k"}
+			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
+		}
+	case 8: // Deinterlace
 		deints := []core.DeinterlaceMode{
 			core.DeinterlaceNone,
 			core.DeinterlaceAuto,
@@ -609,15 +637,14 @@ func (m *MainModel) cycleGeneralField(dir int) {
 			core.DeinterlaceFieldmatchNnediDecimate,
 		}
 		m.generalSet.Deinterlace = cycleDeint(deints, m.generalSet.Deinterlace, dir)
-	case 8: // Output Ext
+	case 9: // Output Ext
 		exts := []string{"mp4", "mkv", "mov", "webm", "ts"}
 		m.generalSet.OutputExt = cycleString(exts, m.generalSet.OutputExt, dir)
-	case 10: // CPU Restriction
+	case 10: // Advanced toggle
+		m.generalSet.ShowAdvanced = !m.generalSet.ShowAdvanced
+	case 11: // CPU Restriction
 		limits := []core.CPURestriction{core.CPURestrictionAll, core.CPURestrictionPCore, core.CPURestrictionECore, core.CPURestrictionEcoQoS}
 		m.generalSet.CPULimit = cycleCPULimit(limits, m.generalSet.CPULimit, dir)
-	case 11: // AV1 Engine
-		engines := []string{"svt-av1", "aom-av1", "rav1e"}
-		m.generalSet.AV1Engine = cycleString(engines, m.generalSet.AV1Engine, dir)
 	case 12: // Overwrite
 		acts := []core.OverwriteAction{core.OverwriteSkip, core.OverwriteForce, core.OverwriteAutoRename}
 		m.generalSet.Overwrite = cycleOverwrite(acts, m.generalSet.Overwrite, dir)
@@ -802,9 +829,9 @@ func (m *MainModel) startEncoding() {
 		return
 	}
 
-	// Reset completed / failed items to pending if re-running
+	// Reset items to pending if re-running
 	for _, it := range m.queueItems {
-		if it.Status == "Completed" || it.Status == "Failed" {
+		if it.Status != "Pending" {
 			it.Status = "Pending"
 			it.ErrorMessage = ""
 		}
@@ -1015,22 +1042,30 @@ func (m *MainModel) openDropdownDialog() {
 			}
 			m.setDropdownOptions(options, m.generalSet.SpeedPreset)
 
-		case 6: // Audio
-			m.dialogTitle = "音声コーデックの選択"
+		case 6: // Audio Encoder
+			m.dialogTitle = "音声エンコーダの選択"
 			options := []DropdownOption{
-				{"音声をそのままコピー (-c:a copy / 最速・無劣化)", "copy"},
-				{"内蔵 AAC (汎用・高品質)", "internal_aac"},
+				{"内蔵 AAC (汎用・標準)", "internal_aac"},
 				{"外部 qaac (AAC 自動HE/LC / Apple最高音質)", "qaac"},
 				{"外部 neroAacEnc (AAC 自動HE/LC)", "nero"},
 				{"外部 fdkaac (AAC 自動HE/LC)", "fdkaac"},
 				{"Opus (libopus / 高音質・省容量)", "opus"},
 				{"Vorbis (libvorbis)", "vorbis"},
 				{"FLAC (可逆圧縮ロスレス・完全無劣化)", "flac"},
+				{"音声をそのままコピー (-c:a copy / 最速・無劣化)", "copy"},
 				{"音声なし (-an / 映像のみ)", "none"},
 			}
 			m.setDropdownOptions(options, m.generalSet.AudioEncoder)
 
-		case 7: // Deinterlace
+		case 7: // Audio Quality
+			if m.generalSet.AudioEncoder == "copy" || m.generalSet.AudioEncoder == "none" {
+				m.state = StateIdle
+				m.addLog("INFO", "現在の音声エンコーダ設定では品質の指定は不要です")
+				return
+			}
+			m.openAudioQualitySubDialog()
+
+		case 8: // Deinterlace
 			m.dialogTitle = "インターレース解除設定の選択"
 			options := []DropdownOption{
 				{"行わない (スキップ / Progressive動画)", string(core.DeinterlaceNone)},
@@ -1042,7 +1077,7 @@ func (m *MainModel) openDropdownDialog() {
 			}
 			m.setDropdownOptions(options, string(m.generalSet.Deinterlace))
 
-		case 8: // Ext
+		case 9: // Ext
 			m.dialogTitle = "出力コンテナ形式の選択"
 			options := []DropdownOption{
 				{"mp4 (汎用性No.1)", "mp4"},
@@ -1053,7 +1088,11 @@ func (m *MainModel) openDropdownDialog() {
 			}
 			m.setDropdownOptions(options, m.generalSet.OutputExt)
 
-		case 10: // CPU Restriction
+		case 10: // Advanced Toggle
+			m.generalSet.ShowAdvanced = !m.generalSet.ShowAdvanced
+			m.state = StateIdle
+
+		case 11: // CPU Restriction
 			m.dialogTitle = "CPUリソース制限・優先度の選択"
 			options := []DropdownOption{
 				{"全コア使用 (標準)", string(core.CPURestrictionAll)},
@@ -1071,6 +1110,19 @@ func (m *MainModel) openDropdownDialog() {
 				{"リネーム (末尾に_1を付与して保存)", string(core.OverwriteAutoRename)},
 			}
 			m.setDropdownOptions(options, string(m.generalSet.Overwrite))
+
+		case 13: // TwoPass
+			m.generalSet.TwoPass = !m.generalSet.TwoPass
+			m.state = StateIdle
+
+		case 14: // Metadata
+			m.dialogTitle = "メタデータ保持設定の選択"
+			options := []DropdownOption{
+				{"ExifTool で完全保持・復元 (推奨)", string(core.MetadataExifTool)},
+				{"FFmpeg 標準コピー (-map_metadata 0)", string(core.MetadataFfmpeg)},
+				{"メタデータを破棄 (-map_metadata -1)", string(core.MetadataNone)},
+			}
+			m.setDropdownOptions(options, string(m.generalSet.Metadata))
 
 		case 15: // Cut
 			m.dialogTitle = "カット区間 (LosslessCut連携) の設定"
@@ -1426,18 +1478,36 @@ func (m *MainModel) applyDropdownChoice() {
 			m.generalSet.SpeedPreset = val
 		case 6:
 			m.generalSet.AudioEncoder = val
-			if val != "copy" && val != "none" {
-				m.openAudioQualitySubDialog()
-				return
+			// Set sensible default preset when encoder changes
+			switch val {
+			case "qaac":
+				m.generalSet.AudioPreset = "tvbr91"
+			case "nero":
+				m.generalSet.AudioPreset = "q050"
+			case "fdkaac":
+				m.generalSet.AudioPreset = "m4"
+			case "opus":
+				m.generalSet.AudioPreset = "128k"
+			case "vorbis":
+				m.generalSet.AudioPreset = "q4"
+			case "flac":
+				m.generalSet.AudioPreset = "comp8"
+			case "internal_aac":
+				m.generalSet.AudioPreset = "192k"
+			default:
+				m.generalSet.AudioPreset = ""
 			}
-		case 7:
-			m.generalSet.Deinterlace = core.DeinterlaceMode(val)
+			m.generalSet.AudioCustom = ""
 		case 8:
+			m.generalSet.Deinterlace = core.DeinterlaceMode(val)
+		case 9:
 			m.generalSet.OutputExt = val
-		case 10:
+		case 11:
 			m.generalSet.CPULimit = core.CPURestriction(val)
 		case 12:
 			m.generalSet.Overwrite = core.OverwriteAction(val)
+		case 14:
+			m.generalSet.Metadata = core.MetadataMode(val)
 		case 15:
 			switch val {
 			case "set_start":
