@@ -466,3 +466,47 @@ func TestInterruptAndModifySettingsFlow(t *testing.T) {
 		t.Fatalf("Expected StateEncoding after clicking Start button, got %d", m.state)
 	}
 }
+
+func TestRetryFailedItemsOnKeyR(t *testing.T) {
+	cfg := &config.AppConfig{}
+	cfg.Behavior.DefaultMode = "general"
+	m := NewMainModel(cfg, nil)
+	m.mode = core.ModeGeneral
+	m.queueItems = []*core.QueueItem{
+		{
+			ID:     1,
+			Path:   "C:\\test1.mp4",
+			Status: "Completed",
+		},
+		{
+			ID:     2,
+			Path:   "C:\\test2.mp4",
+			Status: "Failed",
+		},
+	}
+
+	// Set state to Complete
+	m.state = StateComplete
+
+	// Press 'R' to retry
+	m.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+
+	if m.state != StateEncoding {
+		t.Fatalf("Expected state=StateEncoding after pressing R on failed item, got %d", m.state)
+	}
+
+	if m.queueItems[0].Status != "Completed" {
+		t.Errorf("Expected item 0 to remain Completed, got %s", m.queueItems[0].Status)
+	}
+
+	if m.queueItems[1].Status != "Pending" {
+		t.Errorf("Expected item 1 to be reset to Pending, got %s", m.queueItems[1].Status)
+	}
+
+	// Verify channel is open and receiving updates without panic
+	m.Update(ProgressMsg{Percent: 50})
+	m.Update(QueueFinishedMsg{})
+	if m.state != StateComplete {
+		t.Fatalf("Expected state=StateComplete after finish, got %d", m.state)
+	}
+}

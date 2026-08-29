@@ -140,6 +140,11 @@ func (r *Runner) RunQueue(
 		default:
 		}
 
+		if item.Status == "Completed" {
+			succeeded++
+			continue
+		}
+
 		item.Status = "Encoding"
 		progressChan <- core.ProgressUpdate{
 			QueueIndex: i + 1,

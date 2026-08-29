@@ -379,6 +379,10 @@ func (m *MainModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.waitForProgress()
 		}
 		if key == "enter" {
+			if m.hasFailedItems() {
+				m.retryFailedItems()
+				return m, m.waitForProgress()
+			}
 			if m.activeField == 99 {
 				m.startEncoding()
 				return m, m.waitForProgress()
@@ -389,10 +393,13 @@ func (m *MainModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			// Transition to Idle and immediately handle the Enter action (e.g. open wizard/dropdown)
 			m.state = StateIdle
-			// Fallthrough to idle navigation to process the Enter key immediately
-		} else if key == "esc" || key == "q" {
+			return m, nil
+		}
+		if key == "esc" || key == "q" {
 			return m, tea.Quit
-		} else if key == "tab" || key == "up" || key == "down" || key == "left" || key == "right" || key == " " {
+		}
+		// Any navigation key transitions back to Idle to allow instant re-editing of settings
+		if key == "tab" || key == "up" || key == "down" || key == "left" || key == "right" || key == " " {
 			m.state = StateIdle
 			// Fallthrough to idle navigation
 		} else {
@@ -783,13 +790,26 @@ func (m *MainModel) hasFailedItems() bool {
 }
 
 func (m *MainModel) retryFailedItems() {
+	if len(m.queueItems) == 0 {
+		return
+	}
+	hasFailed := false
 	for _, it := range m.queueItems {
-		if it.Status == "Failed" {
+		if it.Status == "Failed" || it.Status == "Canceled" {
+			it.Status = "Pending"
+			it.ErrorMessage = ""
+			hasFailed = true
+		}
+	}
+	if !hasFailed {
+		// If nothing was marked failed, re-run all
+		for _, it := range m.queueItems {
 			it.Status = "Pending"
 			it.ErrorMessage = ""
 		}
 	}
-	m.startEncoding()
+
+	m.launchEncoding()
 }
 
 func (m *MainModel) startEncoding() {
@@ -797,7 +817,7 @@ func (m *MainModel) startEncoding() {
 		return
 	}
 
-	// Reset items to pending if re-running
+	// Reset all non-pending items to pending if re-running all
 	for _, it := range m.queueItems {
 		if it.Status != "Pending" {
 			it.Status = "Pending"
@@ -805,9 +825,14 @@ func (m *MainModel) startEncoding() {
 		}
 	}
 
+	m.launchEncoding()
+}
+
+func (m *MainModel) launchEncoding() {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 	m.state = StateEncoding
+	m.progressChan = make(chan core.ProgressUpdate, 200)
 
 	go m.runner.RunQueue(
 		ctx,
