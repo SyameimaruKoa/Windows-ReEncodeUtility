@@ -82,13 +82,14 @@ type MainModel struct {
 	progressChan chan core.ProgressUpdate
 	cancelFunc   context.CancelFunc
 
-	// Dialog state
+	// Dialog / Wizard state
 	dialogTitle     string
 	dialogChoices   []string
 	dialogValues    []string
 	dialogIndex     int
 	dropdownFieldID int
-	audioSubDialog  bool
+	videoWizardStep int // 0=none, 1=HW, 2=Codec, 3=Quality, 4=Speed
+	audioWizardStep int // 0=none, 1=Encoder, 2=Quality
 
 	// Text input state
 	textInput TextInputState
@@ -468,7 +469,7 @@ func (m *MainModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else if m.activeField == 0 {
 				// Switch mode
 				m.cycleMode(1)
-			} else if m.activeField == 9 && m.mode == core.ModeGeneral {
+			} else if m.activeField == 6 && m.mode == core.ModeGeneral {
 				m.generalSet.ShowAdvanced = !m.generalSet.ShowAdvanced
 			} else {
 				// Open expanded dropdown choice dialog for easy selection!
@@ -506,9 +507,9 @@ func (m *MainModel) prevSettingField() {
 		// Return from Start button to last active field
 		if m.mode == core.ModeGeneral {
 			if m.generalSet.ShowAdvanced {
-				m.activeField = 18
+				m.activeField = 14
 			} else {
-				m.activeField = 10
+				m.activeField = 6
 			}
 		} else if m.mode == core.ModePlatform {
 			m.activeField = 2
@@ -529,15 +530,15 @@ func (m *MainModel) nextSettingField() {
 	switch m.mode {
 	case core.ModeGeneral:
 		if !m.generalSet.ShowAdvanced {
-			if m.activeField < 10 {
+			if m.activeField < 6 {
 				m.activeField++
-			} else if m.activeField == 10 {
+			} else if m.activeField == 6 {
 				m.activeField = 99 // Jump to Start button
 			}
 		} else {
-			if m.activeField < 18 {
+			if m.activeField < 14 {
 				m.activeField++
-			} else if m.activeField == 18 {
+			} else if m.activeField == 14 {
 				m.activeField = 99 // Jump to Start button
 			}
 		}
@@ -582,50 +583,16 @@ func (m *MainModel) cycleGeneralField(dir int) {
 	switch m.activeField {
 	case 0:
 		m.cycleMode(dir)
-	case 1: // HW Decoder
-		decoders := []string{"none", "d3d11va", "cuda", "qsv", "dxva2", "vulkan"}
-		m.generalSet.HwDecoder = cycleString(decoders, m.generalSet.HwDecoder, dir)
-	case 2: // HW Encoder
+	case 1: // Video HW Encoder
 		encoders := []string{"CPU", "NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF"}
 		m.generalSet.HwEncoder = cycleString(encoders, m.generalSet.HwEncoder, dir)
-	case 3: // Video Codec
-		codecs := []string{"libx264", "libx265", "libsvtav1", "libvpx-vp9"}
-		m.generalSet.VideoCodec = cycleString(codecs, m.generalSet.VideoCodec, dir)
-	case 4: // Video Quality
-		m.generalSet.QualityIndex = (m.generalSet.QualityIndex + dir + 4) % 4
-	case 5: // Speed Preset
-		speeds := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
-		m.generalSet.SpeedPreset = cycleString(speeds, m.generalSet.SpeedPreset, dir)
-	case 6: // Audio Encoder
+	case 2: // Audio Encoder
 		audioEncoders := []string{"internal_aac", "qaac", "nero", "fdkaac", "opus", "vorbis", "flac", "copy", "none"}
 		m.generalSet.AudioEncoder = cycleString(audioEncoders, m.generalSet.AudioEncoder, dir)
-	case 7: // Audio Quality Preset
-		switch m.generalSet.AudioEncoder {
-		case "qaac":
-			presets := []string{"tvbr91", "tvbr73", "tvbr64", "he80", "he64", "he48"}
-			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
-		case "nero":
-			presets := []string{"q065", "q050", "q035", "q020"}
-			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
-		case "fdkaac":
-			presets := []string{"m5", "m4", "m3", "m2"}
-			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
-		case "opus":
-			presets := []string{"192k", "160k", "128k", "96k", "64k", "48k"}
-			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
-		case "vorbis":
-			presets := []string{"q6", "q4"}
-			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
-		case "flac":
-			presets := []string{"comp12", "comp8", "comp5"}
-			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
-		case "internal_aac":
-			fallthrough
-		default:
-			presets := []string{"320k", "256k", "192k", "128k", "96k", "64k"}
-			m.generalSet.AudioPreset = cycleString(presets, m.generalSet.AudioPreset, dir)
-		}
-	case 8: // Deinterlace
+	case 3: // HW Decoder
+		decoders := []string{"none", "d3d11va", "cuda", "qsv", "dxva2", "vulkan"}
+		m.generalSet.HwDecoder = cycleString(decoders, m.generalSet.HwDecoder, dir)
+	case 4: // Deinterlace
 		deints := []core.DeinterlaceMode{
 			core.DeinterlaceNone,
 			core.DeinterlaceAuto,
@@ -637,23 +604,23 @@ func (m *MainModel) cycleGeneralField(dir int) {
 			core.DeinterlaceFieldmatchNnediDecimate,
 		}
 		m.generalSet.Deinterlace = cycleDeint(deints, m.generalSet.Deinterlace, dir)
-	case 9: // Output Ext
+	case 5: // Output Ext
 		exts := []string{"mp4", "mkv", "mov", "webm", "ts"}
 		m.generalSet.OutputExt = cycleString(exts, m.generalSet.OutputExt, dir)
-	case 10: // Advanced toggle
+	case 6: // Advanced toggle
 		m.generalSet.ShowAdvanced = !m.generalSet.ShowAdvanced
-	case 11: // CPU Restriction
+	case 7: // CPU Restriction
 		limits := []core.CPURestriction{core.CPURestrictionAll, core.CPURestrictionPCore, core.CPURestrictionECore, core.CPURestrictionEcoQoS}
 		m.generalSet.CPULimit = cycleCPULimit(limits, m.generalSet.CPULimit, dir)
-	case 12: // Overwrite
+	case 8: // Overwrite
 		acts := []core.OverwriteAction{core.OverwriteSkip, core.OverwriteForce, core.OverwriteAutoRename}
 		m.generalSet.Overwrite = cycleOverwrite(acts, m.generalSet.Overwrite, dir)
-	case 13: // TwoPass
+	case 9: // TwoPass
 		m.generalSet.TwoPass = !m.generalSet.TwoPass
-	case 14: // Metadata
+	case 10: // Metadata
 		meta := []core.MetadataMode{core.MetadataExifTool, core.MetadataFfmpeg, core.MetadataNone}
 		m.generalSet.Metadata = cycleMeta(meta, m.generalSet.Metadata, dir)
-	case 18: // After Power
+	case 14: // After Power
 		powers := []core.PowerAction{core.PowerNone, core.PowerShutdown, core.PowerReboot, core.PowerSleep}
 		m.generalSet.AfterPower = cyclePower(powers, m.generalSet.AfterPower, dir)
 	}
@@ -855,17 +822,22 @@ func (m *MainModel) startEncoding() {
 
 // Open expanded dropdown choice list for the current active field
 func (m *MainModel) openDropdownDialog() {
-	m.state = StateDropdownDialog
 	m.dropdownFieldID = m.activeField
 	m.dialogChoices = nil
 	m.dialogValues = nil
 	m.dialogIndex = 0
-	m.audioSubDialog = false
 
 	switch m.mode {
 	case core.ModeGeneral:
 		switch m.activeField {
-		case 1: // HW Decoder
+		case 1: // 映像設定 (HW -> Codec -> Quality -> Speed を連続で聞く)
+			m.startVideoWizard()
+
+		case 2: // 音声設定 (Encoder -> Quality を連続で聞く)
+			m.startAudioWizard()
+
+		case 3: // HW Decoder
+			m.state = StateDropdownDialog
 			m.dialogTitle = "HWデコーダの選択"
 			options := []DropdownOption{
 				{"推奨・Windows標準 (d3d11va)", "d3d11va"},
@@ -877,195 +849,8 @@ func (m *MainModel) openDropdownDialog() {
 			}
 			m.setDropdownOptions(options, m.generalSet.HwDecoder)
 
-		case 2: // HW Encoder
-			m.dialogTitle = "HWエンコーダの選択"
-			options := []DropdownOption{
-				{"CPU (Software / 高画質・低速)", "CPU"},
-				{"NVIDIA (NVENC / 高速)", "NVIDIA"},
-				{"Intel (QSV / 高速)", "Intel"},
-				{"AMD (AMF / 高速)", "AMD"},
-				{"Vulkan", "Vulkan"},
-				{"D3D12VA", "D3D12VA"},
-				{"MediaFoundation (MF)", "MF"},
-			}
-			m.setDropdownOptions(options, m.generalSet.HwEncoder)
-
-		case 3: // Codec
-			m.dialogTitle = "映像コーデックの選択"
-			switch m.generalSet.HwEncoder {
-			case "NVIDIA":
-				options := []DropdownOption{
-					{"H.264 / AVC (h264_nvenc)", "h264_nvenc"},
-					{"H.265 / HEVC (hevc_nvenc)", "hevc_nvenc"},
-					{"AV1 (av1_nvenc)", "av1_nvenc"},
-				}
-				m.setDropdownOptions(options, m.generalSet.VideoCodec)
-			case "Intel":
-				options := []DropdownOption{
-					{"H.264 / AVC (h264_qsv)", "h264_qsv"},
-					{"H.265 / HEVC (hevc_qsv)", "hevc_qsv"},
-					{"AV1 (av1_qsv)", "av1_qsv"},
-					{"VP9 (vp9_qsv)", "vp9_qsv"},
-				}
-				m.setDropdownOptions(options, m.generalSet.VideoCodec)
-			case "AMD":
-				options := []DropdownOption{
-					{"H.264 / AVC (h264_amf)", "h264_amf"},
-					{"H.265 / HEVC (hevc_amf)", "hevc_amf"},
-					{"AV1 (av1_amf)", "av1_amf"},
-				}
-				m.setDropdownOptions(options, m.generalSet.VideoCodec)
-			default:
-				options := []DropdownOption{
-					{"H.264 / AVC (libx264 / 互換性最優先)", "libx264"},
-					{"H.265 / HEVC (libx265 / 高圧縮・高画質)", "libx265"},
-					{"AV1 (libsvtav1 / 高速・高効率)", "libsvtav1"},
-					{"AV1 (libaom-av1 / 最高品質・非常に低速)", "libaom-av1"},
-					{"AV1 (rav1e / 中速)", "rav1e"},
-					{"VP9 (libvpx-vp9 / Web・YouTube向け)", "libvpx-vp9"},
-				}
-				m.setDropdownOptions(options, m.generalSet.VideoCodec)
-			}
-
-		case 4: // Quality
-			hw := m.generalSet.HwEncoder
-			codec := strings.ToLower(m.generalSet.VideoCodec)
-
-			switch hw {
-			case "NVIDIA":
-				m.dialogTitle = "NVIDIA NVENC 品質設定の選択"
-				options := []DropdownOption{
-					{"高品質 (CQ:23 / 高画質保存)", "cq_23"},
-					{"中品質 (CQ:28 / 推奨バランス)", "cq_28"},
-					{"高速   (CQ:32 / 容量重視)", "cq_32"},
-					{"カスタム品質 (CQ値を直接数値入力)", "custom_cq"},
-					{"カスタムビットレート (例: 8000k, 12M)", "custom_bitrate"},
-				}
-				m.setDropdownOptions(options, "cq_28")
-
-			case "Intel":
-				if strings.Contains(codec, "vp9") {
-					m.dialogTitle = "Intel QSV VP9 品質設定の選択"
-					options := []DropdownOption{
-						{"高品質 (Q:25 / 高画質)", "q_25"},
-						{"中品質 (Q:30 / 標準)", "q_30"},
-						{"低品質 (Q:40 / 軽量)", "q_40"},
-						{"カスタム品質 (Q値を直接数値入力)", "custom_q"},
-						{"カスタムビットレート (例: 8000k)", "custom_bitrate"},
-					}
-					m.setDropdownOptions(options, "q_30")
-				} else {
-					m.dialogTitle = "Intel QSV 品質設定の選択"
-					options := []DropdownOption{
-						{"高品質 (GQ:20 / 高画質保存)", "gq_20"},
-						{"中品質 (GQ:25 / 推奨バランス)", "gq_25"},
-						{"低品質 (GQ:30 / 容量重視)", "gq_30"},
-						{"カスタム品質 (GQ値を直接数値入力)", "custom_gq"},
-						{"カスタムビットレート (例: 8000k, 12M)", "custom_bitrate"},
-					}
-					m.setDropdownOptions(options, "gq_25")
-				}
-
-			case "AMD":
-				m.dialogTitle = "AMD AMF 品質設定の選択"
-				options := []DropdownOption{
-					{"高品質 (QP:22 / 高画質保存)", "qp_22"},
-					{"中品質 (QP:28 / 推奨バランス)", "qp_28"},
-					{"低品質 (QP:35 / 容量重視)", "qp_35"},
-					{"カスタム品質 (QP値を直接数値入力)", "custom_qp"},
-					{"カスタムビットレート (例: 8000k, 12M)", "custom_bitrate"},
-				}
-				m.setDropdownOptions(options, "qp_28")
-
-			case "Vulkan", "D3D12VA", "MF":
-				m.dialogTitle = "ビットレート品質設定の選択"
-				options := []DropdownOption{
-					{"高品質 (8000 kbps)", "br_8000k"},
-					{"標準品質 (4000 kbps)", "br_4000k"},
-					{"カスタムビットレート (例: 6000k, 10M)", "custom_bitrate"},
-				}
-				m.setDropdownOptions(options, "br_4000k")
-
-			default: // CPU
-				if strings.Contains(codec, "svt") || strings.Contains(codec, "aom") {
-					m.dialogTitle = "AV1 品質設定 (CRF) の選択"
-					options := []DropdownOption{
-						{"高品質 (CRF 20 / 高精細)", "crf_20"},
-						{"中品質 (CRF 30 / 標準バランス)", "crf_30"},
-						{"カスタム品質 (CRF値を直接入力)", "custom_crf"},
-						{"カスタムビットレート (例: 4000k)", "custom_bitrate"},
-					}
-					m.setDropdownOptions(options, "crf_20")
-				} else if strings.Contains(codec, "rav1e") {
-					m.dialogTitle = "rav1e 品質設定 (QP) の選択"
-					options := []DropdownOption{
-						{"高品質 (QP:80 / 高画質)", "qp_80"},
-						{"中品質 (QP:120 / 標準バランス)", "qp_120"},
-						{"低品質 (QP:160 / 軽量)", "qp_160"},
-						{"カスタム品質 (QP 0~255)", "custom_qp"},
-					}
-					m.setDropdownOptions(options, "qp_120")
-				} else if strings.Contains(codec, "vp") {
-					m.dialogTitle = "VP9 品質設定 (CRF) の選択"
-					options := []DropdownOption{
-						{"高品質 (CRF 30 / 高画質)", "crf_30"},
-						{"中品質 (CRF 35 / 標準バランス)", "crf_35"},
-						{"カスタム品質 (CRF値を直接入力)", "custom_crf"},
-					}
-					m.setDropdownOptions(options, "crf_30")
-				} else {
-					m.dialogTitle = "品質設定 (CRF) の選択"
-					options := []DropdownOption{
-						{"最高画質 (CRF 18 / アーカイブ・保存向け)", "crf_18"},
-						{"高画質   (CRF 22 / 推奨バランス)", "crf_22"},
-						{"標準画質 (CRF 26 / 容量重視)", "crf_26"},
-						{"低画質   (CRF 30 / プレビュー・超軽量)", "crf_30_low"},
-						{"カスタム品質 (CRF 0~51 を直接入力)", "custom_crf"},
-						{"カスタムビットレート (例: 5000k, 8M)", "custom_bitrate"},
-					}
-					m.setDropdownOptions(options, "crf_22")
-				}
-			}
-
-		case 5: // Speed
-			m.dialogTitle = "エンコード速度プリセットの選択"
-			options := []DropdownOption{
-				{"ultrafast (最速 / プレビュー用)", "ultrafast"},
-				{"superfast", "superfast"},
-				{"veryfast", "veryfast"},
-				{"faster", "faster"},
-				{"fast", "fast"},
-				{"medium (標準バランス)", "medium"},
-				{"slow (高圧縮)", "slow"},
-				{"slower", "slower"},
-				{"veryslow (最高圧縮 / 時間重視)", "veryslow"},
-			}
-			m.setDropdownOptions(options, m.generalSet.SpeedPreset)
-
-		case 6: // Audio Encoder
-			m.dialogTitle = "音声エンコーダの選択"
-			options := []DropdownOption{
-				{"内蔵 AAC (汎用・標準)", "internal_aac"},
-				{"外部 qaac (AAC 自動HE/LC / Apple最高音質)", "qaac"},
-				{"外部 neroAacEnc (AAC 自動HE/LC)", "nero"},
-				{"外部 fdkaac (AAC 自動HE/LC)", "fdkaac"},
-				{"Opus (libopus / 高音質・省容量)", "opus"},
-				{"Vorbis (libvorbis)", "vorbis"},
-				{"FLAC (可逆圧縮ロスレス・完全無劣化)", "flac"},
-				{"音声をそのままコピー (-c:a copy / 最速・無劣化)", "copy"},
-				{"音声なし (-an / 映像のみ)", "none"},
-			}
-			m.setDropdownOptions(options, m.generalSet.AudioEncoder)
-
-		case 7: // Audio Quality
-			if m.generalSet.AudioEncoder == "copy" || m.generalSet.AudioEncoder == "none" {
-				m.state = StateIdle
-				m.addLog("INFO", "現在の音声エンコーダ設定では品質の指定は不要です")
-				return
-			}
-			m.openAudioQualitySubDialog()
-
-		case 8: // Deinterlace
+		case 4: // Deinterlace
+			m.state = StateDropdownDialog
 			m.dialogTitle = "インターレース解除設定の選択"
 			options := []DropdownOption{
 				{"行わない (スキップ / Progressive動画)", string(core.DeinterlaceNone)},
@@ -1077,7 +862,8 @@ func (m *MainModel) openDropdownDialog() {
 			}
 			m.setDropdownOptions(options, string(m.generalSet.Deinterlace))
 
-		case 9: // Ext
+		case 5: // Ext
+			m.state = StateDropdownDialog
 			m.dialogTitle = "出力コンテナ形式の選択"
 			options := []DropdownOption{
 				{"mp4 (汎用性No.1)", "mp4"},
@@ -1088,11 +874,12 @@ func (m *MainModel) openDropdownDialog() {
 			}
 			m.setDropdownOptions(options, m.generalSet.OutputExt)
 
-		case 10: // Advanced Toggle
+		case 6: // Advanced Toggle
 			m.generalSet.ShowAdvanced = !m.generalSet.ShowAdvanced
 			m.state = StateIdle
 
-		case 11: // CPU Restriction
+		case 7: // CPU Restriction
+			m.state = StateDropdownDialog
 			m.dialogTitle = "CPUリソース制限・優先度の選択"
 			options := []DropdownOption{
 				{"全コア使用 (標準)", string(core.CPURestrictionAll)},
@@ -1102,7 +889,8 @@ func (m *MainModel) openDropdownDialog() {
 			}
 			m.setDropdownOptions(options, string(m.generalSet.CPULimit))
 
-		case 12: // Overwrite
+		case 8: // Overwrite
+			m.state = StateDropdownDialog
 			m.dialogTitle = "同名ファイル存在時の動作"
 			options := []DropdownOption{
 				{"スキップ (処理を飛ばす)", string(core.OverwriteSkip)},
@@ -1111,11 +899,12 @@ func (m *MainModel) openDropdownDialog() {
 			}
 			m.setDropdownOptions(options, string(m.generalSet.Overwrite))
 
-		case 13: // TwoPass
+		case 9: // TwoPass
 			m.generalSet.TwoPass = !m.generalSet.TwoPass
 			m.state = StateIdle
 
-		case 14: // Metadata
+		case 10: // Metadata
+			m.state = StateDropdownDialog
 			m.dialogTitle = "メタデータ保持設定の選択"
 			options := []DropdownOption{
 				{"ExifTool で完全保持・復元 (推奨)", string(core.MetadataExifTool)},
@@ -1124,7 +913,8 @@ func (m *MainModel) openDropdownDialog() {
 			}
 			m.setDropdownOptions(options, string(m.generalSet.Metadata))
 
-		case 15: // Cut
+		case 11: // Cut
+			m.state = StateDropdownDialog
 			m.dialogTitle = "カット区間 (LosslessCut連携) の設定"
 			options := []DropdownOption{
 				{"開始時間を入力する", "set_start"},
@@ -1134,13 +924,14 @@ func (m *MainModel) openDropdownDialog() {
 			}
 			m.setDropdownOptions(options, "set_start")
 
-		case 16: // Additional VF
+		case 12: // Additional VF
 			m.openTextInputDialog("追加ビデオフィルター (-vf) の入力", "適用するビデオフィルター文字列を入力してください (例: scale=1280:-1,fps=30):", m.generalSet.AdditionalVF, "scale=1280:-1", InputContextAdditionalVF)
 
-		case 17: // Additional Args
+		case 13: // Additional Args
 			m.openTextInputDialog("追加 FFmpeg 引数の入力", "追加のコマンドライン引数を入力してください (例: -max_muxing_queue_size 1024):", m.generalSet.AdditionalArgs, "-max_muxing_queue_size 1024", InputContextAdditionalArgs)
 
-		case 18: // After Power
+		case 14: // After Power
+			m.state = StateDropdownDialog
 			m.dialogTitle = "全キュー完了後の電源動作"
 			options := []DropdownOption{
 				{"何もしない (そのまま待機)", string(core.PowerNone)},
@@ -1207,16 +998,309 @@ func (m *MainModel) openDropdownDialog() {
 	}
 }
 
+// Video Wizard implementation
+func (m *MainModel) startVideoWizard() {
+	m.videoWizardStep = 1
+	m.openVideoHWDialog()
+}
+
+func (m *MainModel) openVideoHWDialog() {
+	m.state = StateDropdownDialog
+	m.dialogChoices = nil
+	m.dialogValues = nil
+	m.dialogIndex = 0
+	m.dialogTitle = "[1/4] 映像ハードウェア (HW/SW) の選択"
+	options := []DropdownOption{
+		{"CPU (Software / 高画質・低速)", "CPU"},
+		{"NVIDIA (NVENC / 高速)", "NVIDIA"},
+		{"Intel (QSV / 高速)", "Intel"},
+		{"AMD (AMF / 高速)", "AMD"},
+		{"Vulkan", "Vulkan"},
+		{"D3D12VA", "D3D12VA"},
+		{"MediaFoundation (MF)", "MF"},
+	}
+	m.setDropdownOptions(options, m.generalSet.HwEncoder)
+}
+
+func (m *MainModel) openVideoCodecDialog() {
+	m.state = StateDropdownDialog
+	m.dialogChoices = nil
+	m.dialogValues = nil
+	m.dialogIndex = 0
+	m.dialogTitle = fmt.Sprintf("[2/4] %s コーデックの選択", m.generalSet.HwEncoder)
+	switch m.generalSet.HwEncoder {
+	case "NVIDIA":
+		options := []DropdownOption{
+			{"H.264 / AVC (h264_nvenc)", "h264_nvenc"},
+			{"H.265 / HEVC (hevc_nvenc)", "hevc_nvenc"},
+			{"AV1 (av1_nvenc)", "av1_nvenc"},
+		}
+		m.setDropdownOptions(options, m.generalSet.VideoCodec)
+	case "Intel":
+		options := []DropdownOption{
+			{"H.264 / AVC (h264_qsv)", "h264_qsv"},
+			{"H.265 / HEVC (hevc_qsv)", "hevc_qsv"},
+			{"AV1 (av1_qsv)", "av1_qsv"},
+			{"VP9 (vp9_qsv)", "vp9_qsv"},
+		}
+		m.setDropdownOptions(options, m.generalSet.VideoCodec)
+	case "AMD":
+		options := []DropdownOption{
+			{"H.264 / AVC (h264_amf)", "h264_amf"},
+			{"H.265 / HEVC (hevc_amf)", "hevc_amf"},
+			{"AV1 (av1_amf)", "av1_amf"},
+		}
+		m.setDropdownOptions(options, m.generalSet.VideoCodec)
+	case "Vulkan", "D3D12VA", "MF":
+		options := []DropdownOption{
+			{"H.264 / AVC", "h264"},
+			{"H.265 / HEVC", "hevc"},
+			{"AV1", "av1"},
+		}
+		m.setDropdownOptions(options, m.generalSet.VideoCodec)
+	default: // CPU
+		options := []DropdownOption{
+			{"H.264 / AVC (libx264 / 互換性最優先)", "libx264"},
+			{"H.265 / HEVC (libx265 / 高圧縮・高画質)", "libx265"},
+			{"AV1 (libsvtav1 / 高速・高効率)", "libsvtav1"},
+			{"AV1 (libaom-av1 / 最高品質・非常に低速)", "libaom-av1"},
+			{"AV1 (rav1e / 中速)", "rav1e"},
+			{"VP9 (libvpx-vp9 / Web・YouTube向け)", "libvpx-vp9"},
+		}
+		m.setDropdownOptions(options, m.generalSet.VideoCodec)
+	}
+}
+
+func (m *MainModel) openVideoQualityDialog() {
+	m.state = StateDropdownDialog
+	m.dialogChoices = nil
+	m.dialogValues = nil
+	m.dialogIndex = 0
+
+	hw := m.generalSet.HwEncoder
+	codec := strings.ToLower(m.generalSet.VideoCodec)
+
+	switch hw {
+	case "NVIDIA":
+		m.dialogTitle = "[3/4] NVENC 品質設定の選択"
+		options := []DropdownOption{
+			{"高品質 (CQ:23 / 高画質保存)", "cq_23"},
+			{"中品質 (CQ:28 / 推奨バランス)", "cq_28"},
+			{"高速   (CQ:32 / 容量重視)", "cq_32"},
+			{"カスタム品質 (CQ値を直接数値入力)", "custom_cq"},
+			{"カスタムビットレート (例: 8000k, 12M)", "custom_bitrate"},
+		}
+		m.setDropdownOptions(options, "cq_28")
+
+	case "Intel":
+		if strings.Contains(codec, "vp9") {
+			m.dialogTitle = "[3/4] QSV VP9 品質設定の選択"
+			options := []DropdownOption{
+				{"高品質 (Q:25 / 高画質)", "q_25"},
+				{"中品質 (Q:30 / 標準)", "q_30"},
+				{"低品質 (Q:40 / 軽量)", "q_40"},
+				{"カスタム品質 (Q値を直接数値入力)", "custom_q"},
+				{"カスタムビットレート (例: 8000k)", "custom_bitrate"},
+			}
+			m.setDropdownOptions(options, "q_30")
+		} else {
+			m.dialogTitle = "[3/4] QSV 品質設定の選択"
+			options := []DropdownOption{
+				{"高品質 (GQ:20 / 高画質保存)", "gq_20"},
+				{"中品質 (GQ:25 / 推奨バランス)", "gq_25"},
+				{"低品質 (GQ:30 / 容量重視)", "gq_30"},
+				{"カスタム品質 (GQ値を直接数値入力)", "custom_gq"},
+				{"カスタムビットレート (例: 8000k, 12M)", "custom_bitrate"},
+			}
+			m.setDropdownOptions(options, "gq_25")
+		}
+
+	case "AMD":
+		m.dialogTitle = "[3/4] AMF 品質設定の選択"
+		options := []DropdownOption{
+			{"高品質 (QP:22 / 高画質保存)", "qp_22"},
+			{"中品質 (QP:28 / 推奨バランス)", "qp_28"},
+			{"低品質 (QP:35 / 容量重視)", "qp_35"},
+			{"カスタム品質 (QP値を直接数値入力)", "custom_qp"},
+			{"カスタムビットレート (例: 8000k, 12M)", "custom_bitrate"},
+		}
+		m.setDropdownOptions(options, "qp_28")
+
+	case "Vulkan", "D3D12VA", "MF":
+		m.dialogTitle = "[3/4] ビットレート品質設定の選択"
+		options := []DropdownOption{
+			{"高品質 (8000 kbps)", "br_8000k"},
+			{"標準品質 (4000 kbps)", "br_4000k"},
+			{"カスタムビットレート (例: 6000k, 10M)", "custom_bitrate"},
+		}
+		m.setDropdownOptions(options, "br_4000k")
+
+	default: // CPU
+		if strings.Contains(codec, "svt") || strings.Contains(codec, "aom") {
+			m.dialogTitle = "[3/4] AV1 品質設定 (CRF) の選択"
+			options := []DropdownOption{
+				{"高品質 (CRF 20 / 高精細)", "crf_20"},
+				{"中品質 (CRF 30 / 標準バランス)", "crf_30"},
+				{"カスタム品質 (CRF値を直接入力)", "custom_crf"},
+				{"カスタムビットレート (例: 4000k)", "custom_bitrate"},
+			}
+			m.setDropdownOptions(options, "crf_20")
+		} else if strings.Contains(codec, "rav1e") {
+			m.dialogTitle = "[3/4] rav1e 品質設定 (QP) の選択"
+			options := []DropdownOption{
+				{"高品質 (QP:80 / 高画質)", "qp_80"},
+				{"中品質 (QP:120 / 標準バランス)", "qp_120"},
+				{"低品質 (QP:160 / 軽量)", "qp_160"},
+				{"カスタム品質 (QP 0~255)", "custom_qp"},
+			}
+			m.setDropdownOptions(options, "qp_120")
+		} else if strings.Contains(codec, "vp") {
+			m.dialogTitle = "[3/4] VP9 品質設定 (CRF) の選択"
+			options := []DropdownOption{
+				{"高品質 (CRF 30 / 高画質)", "crf_30"},
+				{"中品質 (CRF 35 / 標準バランス)", "crf_35"},
+				{"カスタム品質 (CRF値を直接入力)", "custom_crf"},
+			}
+			m.setDropdownOptions(options, "crf_30")
+		} else {
+			m.dialogTitle = "[3/4] 品質設定 (CRF) の選択"
+			options := []DropdownOption{
+				{"最高画質 (CRF 18 / アーカイブ・保存向け)", "crf_18"},
+				{"高画質   (CRF 22 / 推奨バランス)", "crf_22"},
+				{"標準画質 (CRF 26 / 容量重視)", "crf_26"},
+				{"低画質   (CRF 30 / プレビュー・超軽量)", "crf_30_low"},
+				{"カスタム品質 (CRF 0~51 を直接入力)", "custom_crf"},
+				{"カスタムビットレート (例: 5000k, 8M)", "custom_bitrate"},
+			}
+			m.setDropdownOptions(options, "crf_22")
+		}
+	}
+}
+
+func (m *MainModel) openVideoSpeedDialog() {
+	m.state = StateDropdownDialog
+	m.dialogChoices = nil
+	m.dialogValues = nil
+	m.dialogIndex = 0
+
+	hw := m.generalSet.HwEncoder
+	codec := strings.ToLower(m.generalSet.VideoCodec)
+
+	switch hw {
+	case "NVIDIA":
+		m.dialogTitle = "[4/4] NVENC プリセット (速度/画質) の選択"
+		options := []DropdownOption{
+			{"P1 (最速 / プレビュー)", "p1"},
+			{"P2", "p2"},
+			{"P3", "p3"},
+			{"P4 (標準 / 推奨バランス)", "p4"},
+			{"P5 (高画質)", "p5"},
+			{"P6 (超高画質)", "p6"},
+			{"P7 (最高画質 / 低速)", "p7"},
+		}
+		m.setDropdownOptions(options, m.generalSet.SpeedPreset)
+
+	case "Intel":
+		m.dialogTitle = "[4/4] QSV 速度プリセットの選択"
+		options := []DropdownOption{
+			{"veryslow (最高品質)", "veryslow"},
+			{"slower", "slower"},
+			{"slow", "slow"},
+			{"medium (標準バランス)", "medium"},
+			{"fast", "fast"},
+			{"faster", "faster"},
+			{"veryfast (最速)", "veryfast"},
+		}
+		m.setDropdownOptions(options, m.generalSet.SpeedPreset)
+
+	case "AMD":
+		m.dialogTitle = "[4/4] AMF 速度・品質プリセットの選択"
+		options := []DropdownOption{
+			{"Quality (高品質)", "quality"},
+			{"Balanced (標準バランス)", "balanced"},
+			{"Speed (速度優先)", "speed"},
+		}
+		m.setDropdownOptions(options, m.generalSet.SpeedPreset)
+
+	default: // CPU
+		if strings.Contains(codec, "vp") {
+			m.dialogTitle = "[4/4] VP9 cpu-used (速度) の選択"
+			options := []DropdownOption{
+				{"0 (最高品質 / 非常に遅い)", "0"},
+				{"1 (高品質)", "1"},
+				{"2", "2"},
+				{"3 (バランス型)", "3"},
+				{"4 (標準 / 推奨)", "4"},
+				{"5 (やや速い)", "5"},
+				{"6 (速い)", "6"},
+				{"7 (かなり速い)", "7"},
+				{"8 (最速 / 品質低下)", "8"},
+			}
+			m.setDropdownOptions(options, "4")
+		} else if strings.Contains(codec, "rav1e") {
+			m.dialogTitle = "[4/4] rav1e speed (速度) の選択"
+			options := []DropdownOption{
+				{"0 (最高品質 / 非常に遅い)", "0"},
+				{"2 (高品質寄り)", "2"},
+				{"4 (バランス型)", "4"},
+				{"6 (標準 / 推奨)", "6"},
+				{"8 (速い)", "8"},
+				{"10 (最速)", "10"},
+			}
+			m.setDropdownOptions(options, "6")
+		} else {
+			m.dialogTitle = "[4/4] エンコード速度プリセットの選択"
+			options := []DropdownOption{
+				{"ultrafast (最速 / プレビュー用)", "ultrafast"},
+				{"superfast", "superfast"},
+				{"veryfast", "veryfast"},
+				{"faster", "faster"},
+				{"fast", "fast"},
+				{"medium (標準バランス)", "medium"},
+				{"slow (高圧縮)", "slow"},
+				{"slower", "slower"},
+				{"veryslow (最高圧縮 / 時間重視)", "veryslow"},
+			}
+			m.setDropdownOptions(options, m.generalSet.SpeedPreset)
+		}
+	}
+}
+
+// Audio Wizard implementation
+func (m *MainModel) startAudioWizard() {
+	m.audioWizardStep = 1
+	m.openAudioEncoderDialog()
+}
+
+func (m *MainModel) openAudioEncoderDialog() {
+	m.state = StateDropdownDialog
+	m.dialogChoices = nil
+	m.dialogValues = nil
+	m.dialogIndex = 0
+	m.dialogTitle = "[1/2] 音声エンコーダの選択"
+	options := []DropdownOption{
+		{"内蔵 AAC (汎用・標準)", "internal_aac"},
+		{"外部 qaac (AAC 自動HE/LC / Apple最高音質)", "qaac"},
+		{"外部 neroAacEnc (AAC 自動HE/LC)", "nero"},
+		{"外部 fdkaac (AAC 自動HE/LC)", "fdkaac"},
+		{"Opus (libopus / 高音質・省容量)", "opus"},
+		{"Vorbis (libvorbis)", "vorbis"},
+		{"FLAC (可逆圧縮ロスレス・完全無劣化)", "flac"},
+		{"音声をそのままコピー (-c:a copy / 最速・無劣化)", "copy"},
+		{"音声なし (-an / 映像のみ)", "none"},
+	}
+	m.setDropdownOptions(options, m.generalSet.AudioEncoder)
+}
+
 func (m *MainModel) openAudioQualitySubDialog() {
 	m.state = StateDropdownDialog
-	m.audioSubDialog = true
 	m.dialogChoices = nil
 	m.dialogValues = nil
 	m.dialogIndex = 0
 
 	switch m.generalSet.AudioEncoder {
 	case "qaac":
-		m.dialogTitle = "qaac 音声品質の選択 (LC=TVBR / HE=CVBR)"
+		m.dialogTitle = "[2/2] qaac 音声品質の選択 (LC=TVBR / HE=CVBR)"
 		options := []DropdownOption{
 			{"AAC-LC TVBR 91 (~192kbps / 高音質)", "tvbr91"},
 			{"AAC-LC TVBR 73 (~160kbps / 推奨)", "tvbr73"},
@@ -1230,7 +1314,7 @@ func (m *MainModel) openAudioQualitySubDialog() {
 		m.setDropdownOptions(options, m.generalSet.AudioPreset)
 
 	case "nero":
-		m.dialogTitle = "Nero AAC 音声品質の選択 (≤-q0.40:HE / >-q0.40:LC 自動)"
+		m.dialogTitle = "[2/2] Nero AAC 音声品質の選択 (≤-q0.40:HE / >-q0.40:LC 自動)"
 		options := []DropdownOption{
 			{"高品質 (-q 0.65 / AAC-LC)", "q065"},
 			{"標準品質 (-q 0.50 / AAC-LC)", "q050"},
@@ -1241,7 +1325,7 @@ func (m *MainModel) openAudioQualitySubDialog() {
 		m.setDropdownOptions(options, m.generalSet.AudioPreset)
 
 	case "fdkaac":
-		m.dialogTitle = "fdkaac 音声品質の選択 (≤VBR3:HE / ≥VBR4:LC 自動)"
+		m.dialogTitle = "[2/2] fdkaac 音声品質の選択 (≤VBR3:HE / ≥VBR4:LC 自動)"
 		options := []DropdownOption{
 			{"最高品質 (VBR 5 / AAC-LC)", "m5"},
 			{"高品質   (VBR 4 / AAC-LC)", "m4"},
@@ -1252,7 +1336,7 @@ func (m *MainModel) openAudioQualitySubDialog() {
 		m.setDropdownOptions(options, m.generalSet.AudioPreset)
 
 	case "opus":
-		m.dialogTitle = "Opus ビットレートの選択"
+		m.dialogTitle = "[2/2] Opus ビットレートの選択"
 		options := []DropdownOption{
 			{"192 kbps (最高音質)", "192k"},
 			{"160 kbps (高音質)", "160k"},
@@ -1265,7 +1349,7 @@ func (m *MainModel) openAudioQualitySubDialog() {
 		m.setDropdownOptions(options, m.generalSet.AudioPreset)
 
 	case "vorbis":
-		m.dialogTitle = "Vorbis 品質 (-q:a) の選択"
+		m.dialogTitle = "[2/2] Vorbis 品質 (-q:a) の選択"
 		options := []DropdownOption{
 			{"高品質 (q:a 6)", "q6"},
 			{"標準品質 (q:a 4)", "q4"},
@@ -1274,7 +1358,7 @@ func (m *MainModel) openAudioQualitySubDialog() {
 		m.setDropdownOptions(options, m.generalSet.AudioPreset)
 
 	case "flac":
-		m.dialogTitle = "FLAC 圧縮レベルの選択"
+		m.dialogTitle = "[2/2] FLAC 圧縮レベルの選択"
 		options := []DropdownOption{
 			{"高圧縮 (圧縮レベル 12)", "comp12"},
 			{"標準   (圧縮レベル 8)", "comp8"},
@@ -1286,7 +1370,7 @@ func (m *MainModel) openAudioQualitySubDialog() {
 	case "internal_aac":
 		fallthrough
 	default:
-		m.dialogTitle = fmt.Sprintf("%s ビットレートの選択", m.generalSet.AudioEncoder)
+		m.dialogTitle = fmt.Sprintf("[2/2] %s ビットレートの選択", m.generalSet.AudioEncoder)
 		options := []DropdownOption{
 			{"320 kbps (最高音質)", "320k"},
 			{"256 kbps (高音質)", "256k"},
@@ -1326,6 +1410,11 @@ func (m *MainModel) applyTextInput() {
 			m.generalSet.CustomCRF = num
 		}
 		m.addLog("INFO", fmt.Sprintf("映像品質カスタム値を設定しました: %s", val))
+		if m.videoWizardStep == 3 {
+			m.videoWizardStep = 4
+			m.openVideoSpeedDialog()
+			return
+		}
 
 	case InputContextCustomBitrate:
 		if val != "" && !strings.HasSuffix(val, "k") && !strings.HasSuffix(val, "K") && !strings.HasSuffix(val, "M") && !strings.HasSuffix(val, "m") {
@@ -1337,10 +1426,21 @@ func (m *MainModel) applyTextInput() {
 		m.generalSet.CustomQualityValue = ""
 		m.generalSet.CustomCRF = 0
 		m.addLog("INFO", fmt.Sprintf("映像カスタムビットレートを設定しました: %s", val))
+		if m.videoWizardStep == 3 {
+			m.videoWizardStep = 4
+			m.openVideoSpeedDialog()
+			return
+		}
 
 	case InputContextCustomAudioVal:
 		m.generalSet.AudioCustom = val
 		m.addLog("INFO", fmt.Sprintf("音声カスタム品質値を設定しました: %s", val))
+		if m.audioWizardStep == 2 {
+			m.audioWizardStep = 0
+			m.state = StateIdle
+			m.addLog("INFO", "音声エンコード設定を更新しました")
+			return
+		}
 
 	case InputContextCutStart:
 		m.generalSet.CutStart = val
@@ -1392,6 +1492,7 @@ func (m *MainModel) applyTextInput() {
 			m.addLog("INFO", fmt.Sprintf("プラットフォーム目標容量を設定しました: %.1f MB", mb))
 		}
 	}
+	m.state = StateIdle
 }
 
 func (m *MainModel) applyDropdownChoice() {
@@ -1400,8 +1501,39 @@ func (m *MainModel) applyDropdownChoice() {
 	}
 	val := m.dialogValues[m.dialogIndex]
 
-	if m.audioSubDialog {
-		m.audioSubDialog = false
+	// 1. Audio Wizard Flow
+	if m.audioWizardStep == 1 {
+		m.generalSet.AudioEncoder = val
+		if val == "copy" || val == "none" {
+			m.generalSet.AudioPreset = ""
+			m.generalSet.AudioCustom = ""
+			m.audioWizardStep = 0
+			m.state = StateIdle
+			m.addLog("INFO", fmt.Sprintf("音声設定を更新しました: %s", val))
+			return
+		}
+		// Set default preset and advance to Step 2
+		switch val {
+		case "qaac":
+			m.generalSet.AudioPreset = "tvbr91"
+		case "nero":
+			m.generalSet.AudioPreset = "q050"
+		case "fdkaac":
+			m.generalSet.AudioPreset = "m4"
+		case "opus":
+			m.generalSet.AudioPreset = "128k"
+		case "vorbis":
+			m.generalSet.AudioPreset = "q4"
+		case "flac":
+			m.generalSet.AudioPreset = "comp8"
+		case "internal_aac":
+			m.generalSet.AudioPreset = "192k"
+		}
+		m.generalSet.AudioCustom = ""
+		m.audioWizardStep = 2
+		m.openAudioQualitySubDialog()
+		return
+	} else if m.audioWizardStep == 2 {
 		m.generalSet.AudioPreset = val
 		if val == "custom" || val == "custom_tvbr" || val == "custom_cvbr" {
 			prompt := "カスタム品質値を入力してください:"
@@ -1431,84 +1563,103 @@ func (m *MainModel) applyDropdownChoice() {
 			m.openTextInputDialog("音声カスタム品質入力", prompt, m.generalSet.AudioCustom, placeholder, InputContextCustomAudioVal)
 			return
 		}
+		m.audioWizardStep = 0
 		m.state = StateIdle
+		m.addLog("INFO", "音声エンコード設定を更新しました")
 		return
 	}
 
+	// 2. Video Wizard Flow
+	if m.videoWizardStep == 1 { // HW Encoder selected
+		m.generalSet.HwEncoder = val
+		// Set sensible default codec
+		switch val {
+		case "NVIDIA":
+			m.generalSet.VideoCodec = "h264_nvenc"
+			m.generalSet.SpeedPreset = "p4"
+		case "Intel":
+			m.generalSet.VideoCodec = "h264_qsv"
+			m.generalSet.SpeedPreset = "medium"
+		case "AMD":
+			m.generalSet.VideoCodec = "h264_amf"
+			m.generalSet.SpeedPreset = "balanced"
+		case "Vulkan", "D3D12VA", "MF":
+			m.generalSet.VideoCodec = "h264"
+			m.generalSet.SpeedPreset = "medium"
+		default: // CPU
+			m.generalSet.VideoCodec = "libx264"
+			m.generalSet.SpeedPreset = "medium"
+		}
+		m.videoWizardStep = 2
+		m.openVideoCodecDialog()
+		return
+	} else if m.videoWizardStep == 2 { // Codec selected
+		m.generalSet.VideoCodec = val
+		m.videoWizardStep = 3
+		m.openVideoQualityDialog()
+		return
+	} else if m.videoWizardStep == 3 { // Quality selected
+		m.generalSet.CustomQualityValue = ""
+		m.generalSet.CustomBitrate = ""
+		m.generalSet.CustomCRF = 0
+
+		switch val {
+		case "custom_cq":
+			m.openTextInputDialog("カスタム品質 (CQ) の入力", "CQ値 (例: 23, 28) を入力してください:", "", "28", InputContextCustomQualityValue)
+			return
+		case "custom_gq":
+			m.openTextInputDialog("カスタム品質 (GQ) の入力", "GQ値 (例: 20, 25) を入力してください:", "", "25", InputContextCustomQualityValue)
+			return
+		case "custom_q":
+			m.openTextInputDialog("カスタム品質 (Q) の入力", "Q値 (例: 25, 30) を入力してください:", "", "30", InputContextCustomQualityValue)
+			return
+		case "custom_qp":
+			m.openTextInputDialog("カスタム品質 (QP) の入力", "QP値 (例: 22, 28, 80) を入力してください:", "", "28", InputContextCustomQualityValue)
+			return
+		case "custom_crf":
+			m.openTextInputDialog("カスタム品質 (CRF) の入力", "CRF値 (例: 18, 22, 26) を入力してください:", "", "22", InputContextCustomQualityValue)
+			return
+		case "custom_bitrate":
+			m.openTextInputDialog("カスタムビットレートの入力", "ビットレート (例: 8000k, 12M) を入力してください:", "", "8000k", InputContextCustomBitrate)
+			return
+		case "cq_23", "gq_20", "qp_22", "qp_80", "crf_18", "crf_20", "br_8000k", "q_25":
+			m.generalSet.QualityIndex = 0
+		case "cq_28", "gq_25", "qp_28", "qp_120", "crf_22", "crf_35", "br_4000k", "q_30":
+			m.generalSet.QualityIndex = 1
+		case "cq_32", "gq_30", "qp_35", "qp_160", "crf_26", "q_40":
+			m.generalSet.QualityIndex = 2
+		case "crf_30_low", "crf_30":
+			m.generalSet.QualityIndex = 3
+		}
+
+		m.videoWizardStep = 4
+		m.openVideoSpeedDialog()
+		return
+	} else if m.videoWizardStep == 4 { // Speed preset selected
+		m.generalSet.SpeedPreset = val
+		m.videoWizardStep = 0
+		m.state = StateIdle
+		m.addLog("INFO", "映像エンコード設定を更新しました")
+		return
+	}
+
+	// 3. Other General Settings
 	switch m.mode {
 	case core.ModeGeneral:
 		switch m.dropdownFieldID {
-		case 1:
-			m.generalSet.HwDecoder = val
-		case 2:
-			m.generalSet.HwEncoder = val
 		case 3:
-			m.generalSet.VideoCodec = val
+			m.generalSet.HwDecoder = val
 		case 4:
-			m.generalSet.CustomQualityValue = ""
-			m.generalSet.CustomBitrate = ""
-			m.generalSet.CustomCRF = 0
-
-			switch val {
-			case "custom_cq":
-				m.openTextInputDialog("カスタム品質 (CQ) の入力", "CQ値 (例: 23, 28) を入力してください:", "", "28", InputContextCustomQualityValue)
-				return
-			case "custom_gq":
-				m.openTextInputDialog("カスタム品質 (GQ) の入力", "GQ値 (例: 20, 25) を入力してください:", "", "25", InputContextCustomQualityValue)
-			case "custom_q":
-				m.openTextInputDialog("カスタム品質 (Q) の入力", "Q値 (例: 25, 30) を入力してください:", "", "30", InputContextCustomQualityValue)
-			case "custom_qp":
-				m.openTextInputDialog("カスタム品質 (QP) の入力", "QP値 (例: 22, 28, 80) を入力してください:", "", "28", InputContextCustomQualityValue)
-			case "custom_crf":
-				m.openTextInputDialog("カスタム品質 (CRF) の入力", "CRF値 (例: 18, 22, 26) を入力してください:", "", "22", InputContextCustomQualityValue)
-				return
-			case "custom_bitrate":
-				m.openTextInputDialog("カスタムビットレートの入力", "ビットレート (例: 8000k, 12M) を入力してください:", "", "8000k", InputContextCustomBitrate)
-				return
-			case "cq_23", "gq_20", "qp_22", "qp_80", "crf_18", "crf_20", "br_8000k", "q_25":
-				m.generalSet.QualityIndex = 0
-			case "cq_28", "gq_25", "qp_28", "qp_120", "crf_22", "crf_35", "br_4000k", "q_30":
-				m.generalSet.QualityIndex = 1
-			case "cq_32", "gq_30", "qp_35", "qp_160", "crf_26", "q_40":
-				m.generalSet.QualityIndex = 2
-			case "crf_30_low", "crf_30":
-				m.generalSet.QualityIndex = 3
-			}
-		case 5:
-			m.generalSet.SpeedPreset = val
-		case 6:
-			m.generalSet.AudioEncoder = val
-			// Set sensible default preset when encoder changes
-			switch val {
-			case "qaac":
-				m.generalSet.AudioPreset = "tvbr91"
-			case "nero":
-				m.generalSet.AudioPreset = "q050"
-			case "fdkaac":
-				m.generalSet.AudioPreset = "m4"
-			case "opus":
-				m.generalSet.AudioPreset = "128k"
-			case "vorbis":
-				m.generalSet.AudioPreset = "q4"
-			case "flac":
-				m.generalSet.AudioPreset = "comp8"
-			case "internal_aac":
-				m.generalSet.AudioPreset = "192k"
-			default:
-				m.generalSet.AudioPreset = ""
-			}
-			m.generalSet.AudioCustom = ""
-		case 8:
 			m.generalSet.Deinterlace = core.DeinterlaceMode(val)
-		case 9:
+		case 5:
 			m.generalSet.OutputExt = val
-		case 11:
+		case 7:
 			m.generalSet.CPULimit = core.CPURestriction(val)
-		case 12:
+		case 8:
 			m.generalSet.Overwrite = core.OverwriteAction(val)
-		case 14:
+		case 10:
 			m.generalSet.Metadata = core.MetadataMode(val)
-		case 15:
+		case 11:
 			switch val {
 			case "set_start":
 				m.openTextInputDialog("カット開始時間の入力", "開始位置を入力してください (例: 00:01:15.000):", m.generalSet.CutStart, "00:00:00.000", InputContextCutStart)
@@ -1531,7 +1682,7 @@ func (m *MainModel) applyDropdownChoice() {
 				m.generalSet.CutEnd = ""
 				m.addLog("INFO", "カット区間をクリアしました")
 			}
-		case 18:
+		case 14:
 			m.generalSet.AfterPower = core.PowerAction(val)
 		}
 
@@ -1628,14 +1779,19 @@ func (m *MainModel) handleModalKey(key string) (tea.Model, tea.Cmd) {
 		if done {
 			if accepted {
 				m.applyTextInput()
+			} else {
+				m.videoWizardStep = 0
+				m.audioWizardStep = 0
+				m.state = StateIdle
 			}
-			m.state = StateIdle
 		}
 		return m, nil
 	}
 
 	switch key {
 	case "esc":
+		m.videoWizardStep = 0
+		m.audioWizardStep = 0
 		m.state = StateIdle
 		return m, nil
 

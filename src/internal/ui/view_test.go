@@ -130,12 +130,20 @@ func TestCycleNavigation(t *testing.T) {
 		t.Errorf("Expected ModeGeneral on +1 from Split, got %s", m.mode)
 	}
 
-	// Test HW Decoder backward cycling
+	// Test HW Decoder backward cycling (Field 3)
 	m.generalSet.HwDecoder = "none"
-	m.activeField = 1
+	m.activeField = 3
 	m.cycleGeneralField(-1)
 	if m.generalSet.HwDecoder == "none" {
 		t.Errorf("Expected HwDecoder to change on -1 from none")
+	}
+
+	// Test Video HW Encoder backward cycling (Field 1)
+	m.generalSet.HwEncoder = "CPU"
+	m.activeField = 1
+	m.cycleGeneralField(-1)
+	if m.generalSet.HwEncoder == "CPU" {
+		t.Errorf("Expected HwEncoder to change on -1 from CPU")
 	}
 }
 
@@ -225,9 +233,9 @@ func TestRenderGeneralViewScrolling(t *testing.T) {
 		t.Errorf("Expected RenderGeneralView with activeField 0 to contain title, got:\n%s", renderedTop)
 	}
 
-	renderedCut := RenderGeneralView(&s, 15, 70, smallHeight, true)
+	renderedCut := RenderGeneralView(&s, 11, 70, smallHeight, true)
 	if !strings.Contains(renderedCut, "カット区間") {
-		t.Errorf("Expected RenderGeneralView with activeField 15 to contain cut field, got:\n%s", renderedCut)
+		t.Errorf("Expected RenderGeneralView with activeField 11 to contain cut field, got:\n%s", renderedCut)
 	}
 }
 
@@ -257,6 +265,18 @@ func TestCustomVideoAndAudioFormatting(t *testing.T) {
 	qStr2 := formatQuality(&s)
 	if !strings.Contains(qStr2, "8000k") {
 		t.Errorf("Expected formatQuality to contain '8000k', got: %s", qStr2)
+	}
+
+	// Test combined video setting formatting
+	combinedVideo := formatCombinedVideoSetting(&s)
+	if !strings.Contains(combinedVideo, "[NVIDIA]") || !strings.Contains(combinedVideo, "8000k") {
+		t.Errorf("Expected formatCombinedVideoSetting to contain NVIDIA and 8000k, got: %s", combinedVideo)
+	}
+
+	// Test combined audio setting formatting
+	combinedAudio := formatCombinedAudioSetting(&s)
+	if !strings.Contains(combinedAudio, "qaac") || !strings.Contains(combinedAudio, "TVBR 91") {
+		t.Errorf("Expected formatCombinedAudioSetting to contain qaac and TVBR 91, got: %s", combinedAudio)
 	}
 
 	// Test audio encoder name formatting
@@ -309,5 +329,86 @@ func TestTextInputModalState(t *testing.T) {
 	rendered := RenderTextInputModal(&tis, 80, 24)
 	if !strings.Contains(rendered, "カスタム品質入力") {
 		t.Errorf("Expected RenderTextInputModal to contain title, got: %s", rendered)
+	}
+}
+
+func TestVideoAndAudioWizardFlow(t *testing.T) {
+	cfg := &config.AppConfig{}
+	cfg.Behavior.DefaultMode = "general"
+	m := NewMainModel(cfg, nil)
+	m.mode = core.ModeGeneral
+
+	// 1. Test Video Wizard Flow: HW -> Codec -> Quality -> Speed -> Finish
+	m.activeField = 1
+	m.openDropdownDialog()
+
+	if m.videoWizardStep != 1 || m.state != StateDropdownDialog {
+		t.Fatalf("Expected videoWizardStep=1 and StateDropdownDialog, got step=%d, state=%d", m.videoWizardStep, m.state)
+	}
+
+	// Select NVIDIA (value "NVIDIA")
+	m.dialogIndex = 1 // NVIDIA
+	m.applyDropdownChoice()
+
+	if m.videoWizardStep != 2 || m.generalSet.HwEncoder != "NVIDIA" {
+		t.Fatalf("Expected videoWizardStep=2 and HwEncoder=NVIDIA, got step=%d, enc=%s", m.videoWizardStep, m.generalSet.HwEncoder)
+	}
+
+	// Select H.264 (value "h264_nvenc")
+	m.dialogIndex = 0
+	m.applyDropdownChoice()
+
+	if m.videoWizardStep != 3 || m.generalSet.VideoCodec != "h264_nvenc" {
+		t.Fatalf("Expected videoWizardStep=3 and VideoCodec=h264_nvenc, got step=%d, codec=%s", m.videoWizardStep, m.generalSet.VideoCodec)
+	}
+
+	// Select Quality CQ:28 (value "cq_28")
+	m.dialogIndex = 1
+	m.applyDropdownChoice()
+
+	if m.videoWizardStep != 4 || m.generalSet.QualityIndex != 1 {
+		t.Fatalf("Expected videoWizardStep=4 and QualityIndex=1, got step=%d, qIdx=%d", m.videoWizardStep, m.generalSet.QualityIndex)
+	}
+
+	// Select Speed P4 (value "p4")
+	m.dialogIndex = 3
+	m.applyDropdownChoice()
+
+	if m.videoWizardStep != 0 || m.state != StateIdle || m.generalSet.SpeedPreset != "p4" {
+		t.Fatalf("Expected video wizard completed (step=0, StateIdle, SpeedPreset=p4), got step=%d, state=%d, speed=%s", m.videoWizardStep, m.state, m.generalSet.SpeedPreset)
+	}
+
+	// 2. Test Audio Wizard Flow: Encoder -> Quality -> Finish
+	m.activeField = 2
+	m.openDropdownDialog()
+
+	if m.audioWizardStep != 1 || m.state != StateDropdownDialog {
+		t.Fatalf("Expected audioWizardStep=1 and StateDropdownDialog, got step=%d, state=%d", m.audioWizardStep, m.state)
+	}
+
+	// Select qaac (value "qaac")
+	m.dialogIndex = 1
+	m.applyDropdownChoice()
+
+	if m.audioWizardStep != 2 || m.generalSet.AudioEncoder != "qaac" {
+		t.Fatalf("Expected audioWizardStep=2 and AudioEncoder=qaac, got step=%d, enc=%s", m.audioWizardStep, m.generalSet.AudioEncoder)
+	}
+
+	// Select TVBR 73 (value "tvbr73")
+	m.dialogIndex = 1
+	m.applyDropdownChoice()
+
+	if m.audioWizardStep != 0 || m.state != StateIdle || m.generalSet.AudioPreset != "tvbr73" {
+		t.Fatalf("Expected audio wizard completed (step=0, StateIdle, AudioPreset=tvbr73), got step=%d, state=%d, preset=%s", m.audioWizardStep, m.state, m.generalSet.AudioPreset)
+	}
+
+	// 3. Test Audio Copy Flow: copy terminates wizard immediately
+	m.activeField = 2
+	m.openDropdownDialog()
+	m.dialogIndex = 7 // copy
+	m.applyDropdownChoice()
+
+	if m.audioWizardStep != 0 || m.state != StateIdle || m.generalSet.AudioEncoder != "copy" {
+		t.Fatalf("Expected copy to finish audio wizard immediately, got step=%d, state=%d, enc=%s", m.audioWizardStep, m.state, m.generalSet.AudioEncoder)
 	}
 }

@@ -30,21 +30,17 @@ func RenderGeneralView(s *core.GeneralSettings, activeField int, outerWidth, out
 		items = append(items, ScrollableItem{0, HeaderTitleStyle.Render(title)})
 	}
 
-	// Basic Settings fields (1-9)
+	// Basic Settings fields (1-5)
 	fields := []struct {
 		label string
 		value string
 		idx   int
 	}{
-		{"HWデコード   ", formatHwDecoder(s.HwDecoder), 1},
-		{"HWエンコーダ ", formatHwEncoder(s.HwEncoder), 2},
-		{"映像コーデック", formatCodec(s.VideoCodec), 3},
-		{"映像品質設定 ", formatQuality(s), 4},
-		{"速度プリセット", s.SpeedPreset, 5},
-		{"音声エンコーダ", formatAudioEncoderName(s.AudioEncoder), 6},
-		{"音声品質設定 ", formatAudioQuality(s), 7},
-		{"インターレース", formatDeinterlace(s.Deinterlace), 8},
-		{"コンテナ形式 ", strings.ToUpper(s.OutputExt), 9},
+		{"映像設定     ", formatCombinedVideoSetting(s), 1},
+		{"音声設定     ", formatCombinedAudioSetting(s), 2},
+		{"HWデコード   ", formatHwDecoder(s.HwDecoder), 3},
+		{"インターレース", formatDeinterlace(s.Deinterlace), 4},
+		{"コンテナ形式 ", strings.ToUpper(s.OutputExt), 5},
 	}
 
 	for _, f := range fields {
@@ -56,15 +52,15 @@ func RenderGeneralView(s *core.GeneralSettings, activeField int, outerWidth, out
 		}
 	}
 
-	// Advanced settings toggle (Field 10)
+	// Advanced settings toggle (Field 6)
 	advToggle := "[▼ 詳細設定・リソース制御 を閉じる (Alt+D)]"
 	if !s.ShowAdvanced {
 		advToggle = "[▶ 詳細設定・リソース制御 を開く (Alt+D)]"
 	}
-	if activeField == 10 && focused {
-		items = append(items, ScrollableItem{10, ActiveItemStyle.Render(PadRightDisplay(advToggle, innerWidth))})
+	if activeField == 6 && focused {
+		items = append(items, ScrollableItem{6, ActiveItemStyle.Render(PadRightDisplay(advToggle, innerWidth))})
 	} else {
-		items = append(items, ScrollableItem{10, SelectedItemStyle.Render(advToggle)})
+		items = append(items, ScrollableItem{6, SelectedItemStyle.Render(advToggle)})
 	}
 
 	if s.ShowAdvanced {
@@ -74,14 +70,14 @@ func RenderGeneralView(s *core.GeneralSettings, activeField int, outerWidth, out
 			idx         int
 			hasDropdown bool
 		}{
-			{"・CPU制限    ", formatCPULimit(s.CPULimit), 11, true},
-			{"・同名ファイル", string(s.Overwrite), 12, true},
-			{"・2-Pass モード", formatTwoPass(s.TwoPass), 13, false},
-			{"・メタデータ  ", string(s.Metadata), 14, true},
-			{"・カット区間  ", fmt.Sprintf("開始 [%s] 終了 [%s] [LosslessCut]", s.CutStart, s.CutEnd), 15, false},
-			{"・追加 VF    ", s.AdditionalVF, 16, false},
-			{"・追加 引数   ", s.AdditionalArgs, 17, false},
-			{"・完了後電源  ", formatPower(s.AfterPower), 18, true},
+			{"・CPU制限    ", formatCPULimit(s.CPULimit), 7, true},
+			{"・同名ファイル", string(s.Overwrite), 8, true},
+			{"・2-Pass モード", formatTwoPass(s.TwoPass), 9, false},
+			{"・メタデータ  ", string(s.Metadata), 10, true},
+			{"・カット区間  ", fmt.Sprintf("開始 [%s] 終了 [%s] [LosslessCut]", s.CutStart, s.CutEnd), 11, false},
+			{"・追加 VF    ", s.AdditionalVF, 12, false},
+			{"・追加 引数   ", s.AdditionalArgs, 13, false},
+			{"・完了後電源  ", formatPower(s.AfterPower), 14, true},
 		}
 
 		for _, af := range advFields {
@@ -477,3 +473,28 @@ func formatPower(p core.PowerAction) string {
 		return string(p)
 	}
 }
+
+func formatCombinedVideoSetting(s *core.GeneralSettings) string {
+	hw := s.HwEncoder
+	codec := formatCodec(s.VideoCodec)
+	q := formatQuality(s)
+	speed := s.SpeedPreset
+	if speed == "" {
+		speed = "medium"
+	}
+	return fmt.Sprintf("[%s] %s | %s | %s", hw, codec, q, speed)
+}
+
+func formatCombinedAudioSetting(s *core.GeneralSettings) string {
+	enc := s.AudioEncoder
+	if enc == "copy" {
+		return "音声をそのままコピー (-c:a copy)"
+	}
+	if enc == "none" {
+		return "音声なし (-an)"
+	}
+	encName := formatAudioEncoderName(enc)
+	q := formatAudioQuality(s)
+	return fmt.Sprintf("[%s] %s", encName, q)
+}
+
