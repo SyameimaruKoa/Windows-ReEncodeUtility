@@ -6,6 +6,8 @@ import (
 
 	"windows-reencode-utility/src/internal/config"
 	"windows-reencode-utility/src/internal/core"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestProgressBarRendering(t *testing.T) {
@@ -410,5 +412,57 @@ func TestVideoAndAudioWizardFlow(t *testing.T) {
 
 	if m.audioWizardStep != 0 || m.state != StateIdle || m.generalSet.AudioEncoder != "copy" {
 		t.Fatalf("Expected copy to finish audio wizard immediately, got step=%d, state=%d, enc=%s", m.audioWizardStep, m.state, m.generalSet.AudioEncoder)
+	}
+}
+
+func TestInterruptAndModifySettingsFlow(t *testing.T) {
+	cfg := &config.AppConfig{}
+	cfg.Behavior.DefaultMode = "general"
+	m := NewMainModel(cfg, nil)
+	m.mode = core.ModeGeneral
+	m.queueItems = []*core.QueueItem{
+		{
+			ID:     1,
+			Path:   "C:\\test.mp4",
+			Status: "Pending",
+		},
+	}
+
+	// 1. Start encoding
+	m.state = StateEncoding
+
+	// 2. User presses ESC to interrupt
+	m.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.state != StateIdle {
+		t.Fatalf("Expected StateIdle after Esc, got %d", m.state)
+	}
+
+	// 3. Background process finishes and sends QueueFinishedMsg
+	m.Update(QueueFinishedMsg{})
+	if m.state != StateIdle {
+		t.Fatalf("Expected state to stay StateIdle after QueueFinishedMsg following an interrupt, got %d", m.state)
+	}
+
+	// 4. User moves to Video Setting (Field 1) and presses Enter
+	m.activeField = 1
+	m.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Must open wizard, NOT quit!
+	if m.state != StateDropdownDialog || m.videoWizardStep != 1 {
+		t.Fatalf("Expected StateDropdownDialog and videoWizardStep=1 on Enter, got state=%d, step=%d", m.state, m.videoWizardStep)
+	}
+
+	// Cancel wizard with Esc
+	m.handleModalKey("esc")
+	if m.state != StateIdle {
+		t.Fatalf("Expected StateIdle after modal Esc, got %d", m.state)
+	}
+
+	// 5. User moves to Start button (Field 99) and presses Enter to re-run
+	m.activeField = 99
+	m.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.state != StateEncoding {
+		t.Fatalf("Expected StateEncoding after clicking Start button, got %d", m.state)
 	}
 }

@@ -497,4 +497,3 @@ func formatCombinedAudioSetting(s *core.GeneralSettings) string {
 	q := formatAudioQuality(s)
 	return fmt.Sprintf("[%s] %s", encName, q)
 }
-

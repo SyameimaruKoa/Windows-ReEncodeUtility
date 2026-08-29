@@ -247,12 +247,15 @@ func (m *MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		if m.generalSet.AfterPower != core.PowerNone && m.generalSet.AfterPower != "" && !m.hasFailedItems() {
-			m.state = StateShutdownCountdown
-			m.countdownSec = 60
-			return m, m.tickCountdown()
+		// Only transition to Complete/Shutdown if we were actually encoding/paused
+		if m.state == StateEncoding || m.state == StatePaused {
+			if m.generalSet.AfterPower != core.PowerNone && m.generalSet.AfterPower != "" && !m.hasFailedItems() {
+				m.state = StateShutdownCountdown
+				m.countdownSec = 60
+				return m, m.tickCountdown()
+			}
+			m.state = StateComplete
 		}
-		m.state = StateComplete
 		return m, nil
 
 	case TickMsg:
@@ -376,22 +379,20 @@ func (m *MainModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.waitForProgress()
 		}
 		if key == "enter" {
-			if m.hasFailedItems() {
-				m.retryFailedItems()
-				return m, m.waitForProgress()
-			}
 			if m.activeField == 99 {
 				m.startEncoding()
 				return m, m.waitForProgress()
 			}
+			if m.hasFailedItems() && m.focusLeft {
+				m.retryFailedItems()
+				return m, m.waitForProgress()
+			}
+			// Transition to Idle and immediately handle the Enter action (e.g. open wizard/dropdown)
 			m.state = StateIdle
-			return m, nil
-		}
-		if key == "esc" || key == "q" {
+			// Fallthrough to idle navigation to process the Enter key immediately
+		} else if key == "esc" || key == "q" {
 			return m, tea.Quit
-		}
-		// Any navigation key transitions back to Idle to allow instant re-editing of settings
-		if key == "tab" || key == "up" || key == "down" || key == "left" || key == "right" || key == " " {
+		} else if key == "tab" || key == "up" || key == "down" || key == "left" || key == "right" || key == " " {
 			m.state = StateIdle
 			// Fallthrough to idle navigation
 		} else {
