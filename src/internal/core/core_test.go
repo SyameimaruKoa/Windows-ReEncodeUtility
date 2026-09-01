@@ -86,18 +86,17 @@ func TestBuildSegmentOutputName(t *testing.T) {
 }
 
 func TestHwCompat(t *testing.T) {
-	if !NeedsHwDownload("d3d11va", "CPU", false) {
-		t.Errorf("Expected NeedsHwDownload to be true for CPU encoder with d3d11va decoder")
-	}
 	if NeedsHwDownload("none", "CPU", false) {
 		t.Errorf("Expected NeedsHwDownload to be false for none decoder")
 	}
-
-	if NeedsExtraHwFrames("cuda", "NVIDIA") {
-		t.Errorf("Expected false for matched CUDA + NVIDIA")
+	if !NeedsHwDownload("vulkan", "CPU", false) {
+		t.Errorf("Expected NeedsHwDownload to be true for vulkan decoder")
 	}
-	if !NeedsExtraHwFrames("d3d11va", "NVIDIA") {
-		t.Errorf("Expected true for mixed d3d11va + NVIDIA")
+	if !NeedsHwDownload("cuda", "NVIDIA", true) {
+		t.Errorf("Expected NeedsHwDownload to be true for cuda with sw filters")
+	}
+	if NeedsHwDownload("cuda", "NVIDIA", false) {
+		t.Errorf("Expected NeedsHwDownload to be false for pure cuda without sw filters")
 	}
 }
 
@@ -161,5 +160,29 @@ func TestAudioPipelineArgs(t *testing.T) {
 	aacArgs := BuildInternalAudioArgs("internal_aac", "custom", "160k")
 	if len(aacArgs) < 4 || aacArgs[1] != "aac" || aacArgs[3] != "160k" {
 		t.Errorf("Expected internal aac args with 160k, got: %v", aacArgs)
+	}
+}
+
+func TestGetHwAccelArgsCompatibility(t *testing.T) {
+	// Matching pairs should use zero-copy format
+	cudaNv := GetHwAccelArgs("cuda", "NVIDIA")
+	if len(cudaNv) != 4 || cudaNv[1] != "cuda" || cudaNv[3] != "cuda" {
+		t.Errorf("Expected zero-copy cuda args, got: %v", cudaNv)
+	}
+
+	qsvIntel := GetHwAccelArgs("qsv", "Intel")
+	if len(qsvIntel) != 4 || qsvIntel[1] != "qsv" || qsvIntel[3] != "qsv" {
+		t.Errorf("Expected zero-copy qsv args, got: %v", qsvIntel)
+	}
+
+	// Mixed combinations should NOT force incompatible GPU format
+	d3d11Intel := GetHwAccelArgs("d3d11va", "Intel")
+	if len(d3d11Intel) != 2 || d3d11Intel[1] != "d3d11va" {
+		t.Errorf("Expected d3d11va without output format for Intel encoder, got: %v", d3d11Intel)
+	}
+
+	d3d11Nv := GetHwAccelArgs("d3d11va", "NVIDIA")
+	if len(d3d11Nv) != 2 || d3d11Nv[1] != "d3d11va" {
+		t.Errorf("Expected d3d11va without output format for NVIDIA encoder, got: %v", d3d11Nv)
 	}
 }

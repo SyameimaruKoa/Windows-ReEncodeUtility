@@ -382,6 +382,7 @@ func (r *Runner) encodeGeneral(
 			s.AudioPreset,
 			s.AudioCustom,
 			item.Path,
+			item.Info.DurationSec,
 			r.cfg.Behavior.TempDir,
 			string(s.CPULimit),
 			func(p float64, msg string) {
@@ -461,7 +462,9 @@ func (r *Runner) encodeGeneral(
 // encodeExternalAudioRestricted executes the audio pipeline strictly bound to CPU restrictions.
 func (r *Runner) encodeExternalAudioRestricted(
 	ctx context.Context,
-	ffmpegPath, encoderPath, encoderType, preset, customVal, inputVideo, tempDir, restriction string,
+	ffmpegPath, encoderPath, encoderType, preset, customVal, inputVideo string,
+	durationSec float64,
+	tempDir, restriction string,
 	onProgress core.AudioProgressCallback,
 ) (string, []string, []string, error) {
 	if tempDir == "" {
@@ -527,8 +530,21 @@ func (r *Runner) encodeExternalAudioRestricted(
 						}
 					}
 					if m := reNero.FindStringSubmatch(trimmed); len(m) >= 2 {
-						onProgress(50.0, fmt.Sprintf("[%s 音声変換中] %s", encoderType, trimmed))
-						continue
+						if secVal, errS := strconv.ParseFloat(m[1], 64); errS == nil {
+							pVal := float64(50)
+							if durationSec > 0 {
+								pVal = (secVal / durationSec) * 100.0
+								if pVal > 100.0 {
+									pVal = 100.0
+								}
+							}
+							scaled := basePct + (pVal * scalePct / 100.0)
+							if scaled > 99.0 {
+								scaled = 99.0
+							}
+							onProgress(scaled, fmt.Sprintf("[%s 音声変換中 %.1f%%] %s", encoderType, pVal, trimmed))
+							continue
+						}
 					}
 					if strings.Contains(trimmed, "%") {
 						onProgress(50.0, fmt.Sprintf("[%s 音声変換中] %s", encoderType, trimmed))
@@ -952,7 +968,7 @@ func (r *Runner) buildGeneralArgs(item *core.QueueItem, s core.GeneralSettings, 
 	}
 
 	// Hardware decoding arguments
-	hwArgs := core.GetHwAccelArgs(s.HwDecoder)
+	hwArgs := core.GetHwAccelArgs(s.HwDecoder, s.HwEncoder)
 	if len(hwArgs) > 0 {
 		args = append(args, hwArgs...)
 	}

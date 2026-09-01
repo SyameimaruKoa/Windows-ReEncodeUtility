@@ -94,7 +94,6 @@ func BuildExternalAudioArgs(encoder, preset, customVal, inputWav, outputM4a stri
 		}
 		args = append(args, "-if", inputWav, "-of", outputM4a)
 		return args
-
 	case "fdkaac":
 		// fdkaac [-p 5] -m <val> -o <out> <in>
 		args := []string{}

@@ -2,26 +2,27 @@ package core
 
 import "strings"
 
-// GetHwAccelArgs returns FFmpeg input arguments for hardware decoding.
-func GetHwAccelArgs(hwDecoder string) []string {
-	switch hwDecoder {
-	case "cuda":
-		return []string{"-hwaccel", "cuda", "-hwaccel_output_format", "cuda"}
-	case "qsv":
-		return []string{"-hwaccel", "qsv", "-hwaccel_output_format", "qsv"}
-	case "d3d11va":
-		return []string{"-hwaccel", "d3d11va", "-hwaccel_output_format", "d3d11"}
-	case "dxva2":
-		return []string{"-hwaccel", "dxva2", "-hwaccel_output_format", "dxva2"}
-	case "vulkan":
-		return []string{"-hwaccel", "vulkan", "-hwaccel_output_format", "vulkan"}
-	default:
+// GetHwAccelArgs returns FFmpeg input arguments for hardware decoding matching the target encoder.
+func GetHwAccelArgs(hwDecoder, hwEncoder string) []string {
+	if hwDecoder == "" || hwDecoder == "none" {
 		return []string{}
 	}
+
+	// Direct native zero-copy matches
+	if hwDecoder == "cuda" && hwEncoder == "NVIDIA" {
+		return []string{"-hwaccel", "cuda", "-hwaccel_output_format", "cuda"}
+	}
+	if hwDecoder == "qsv" && hwEncoder == "Intel" {
+		return []string{"-hwaccel", "qsv", "-hwaccel_output_format", "qsv"}
+	}
+
+	// For all other combinations (d3d11va, dxva2, vulkan, or mixed decoder/encoder frameworks),
+	// use standard -hwaccel <type> without forcing an incompatible GPU surface format.
+	// This decodes on GPU and cleanly passes NV12 system memory frames to ANY encoder (QSV/NVENC/AMF/CPU).
+	return []string{"-hwaccel", hwDecoder}
 }
 
 // NeedsHwDownload checks if hwdownload,format=nv12 is required.
-// Triggered when HW decode is used AND (SW filters exist OR CPU encoder is used OR Vulkan decode is used).
 func NeedsHwDownload(hwDecoder, hwEncoder string, hasSwFilters bool) bool {
 	if hwDecoder == "" || hwDecoder == "none" {
 		return false
@@ -29,29 +30,15 @@ func NeedsHwDownload(hwDecoder, hwEncoder string, hasSwFilters bool) bool {
 	if hwDecoder == "vulkan" {
 		return true
 	}
-	if hwEncoder == "CPU" || hwEncoder == "" {
-		return true
-	}
-	if hasSwFilters {
-		return true
+	if (hwDecoder == "cuda" && hwEncoder == "NVIDIA") || (hwDecoder == "qsv" && hwEncoder == "Intel") {
+		return hasSwFilters
 	}
 	return false
 }
 
-// NeedsExtraHwFrames checks if -extra_hw_frames 64 should be added.
-// Triggered when HW decode is enabled and the pipeline mixes different GPU frameworks.
+// NeedsExtraHwFrames checks if -extra_hw_frames should be added.
 func NeedsExtraHwFrames(hwDecoder, hwEncoder string) bool {
-	if hwDecoder == "" || hwDecoder == "none" {
-		return false
-	}
-	// Matching pairs
-	if hwDecoder == "cuda" && hwEncoder == "NVIDIA" {
-		return false
-	}
-	if hwDecoder == "qsv" && hwEncoder == "Intel" {
-		return false
-	}
-	return true
+	return false
 }
 
 // IsHardwareError checks stderr output for common hardware acceleration failures.
