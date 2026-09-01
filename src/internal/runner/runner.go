@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"math/bits"
 	"os"
@@ -138,11 +139,6 @@ func (r *Runner) RunQueue(
 			}
 			return
 		default:
-		}
-
-		if item.Status == "Completed" {
-			succeeded++
-			continue
 		}
 
 		item.Status = "Encoding"
@@ -304,6 +300,7 @@ type EncodeReport struct {
 	AvgSpeed     string
 	TotalFrames  int64
 	Commands     []string
+	AudioRawStderr []string
 	RawStderr    []string
 	Success      bool
 	ErrorMessage string
@@ -376,7 +373,7 @@ func (r *Runner) encodeGeneral(
 			encPath = r.cfg.Tools.FdkaacPath
 		}
 
-		m4a, cmdLogs, errAud := r.encodeExternalAudioRestricted(
+		m4a, cmdLogs, audioLogs, errAud := r.encodeExternalAudioRestricted(
 			ctx,
 			r.cfg.Tools.FfmpegPath,
 			encPath,
@@ -399,10 +396,16 @@ func (r *Runner) encodeGeneral(
 				}
 			},
 		)
+		report.Commands = append(report.Commands, cmdLogs...)
+		report.AudioRawStderr = audioLogs
 		if errAud != nil {
+			report.EndTime = time.Now()
+			report.Duration = report.EndTime.Sub(startTime)
+			report.Success = false
+			report.ErrorMessage = fmt.Sprintf("外部音声処理エラー: %v", errAud)
+			r.writeDetailedEncodeLog(report)
 			return "", fmt.Errorf("外部音声処理エラー: %w", errAud)
 		}
-		report.Commands = append(report.Commands, cmdLogs...)
 		tempAudioM4a = m4a
 		defer os.Remove(tempAudioM4a)
 
@@ -459,12 +462,62 @@ func (r *Runner) encodeExternalAudioRestricted(
 	ctx context.Context,
 	ffmpegPath, encoderPath, encoderType, preset, customVal, inputVideo, tempDir, restriction string,
 	onProgress core.AudioProgressCallback,
-) (string, []string, error) {
+) (string, []string, []string, error) {
 	if tempDir == "" {
 		tempDir = os.TempDir()
 	}
 
 	var cmdLogs []string
+	var audioLogs []string
+	var logMu sync.Mutex
+	addAudioLog := func(prefix, line string) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return
+		}
+		logMu.Lock()
+		audioLogs = append(audioLogs, fmt.Sprintf("[%s] %s", prefix, line))
+		logMu.Unlock()
+	}
+
+	scanReader := func(r io.Reader, prefix string, checkProgress bool) *sync.WaitGroup {
+		var wg sync.WaitGroup
+		if r == nil {
+			return &wg
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			scanner := bufio.NewScanner(r)
+			splitFunc := func(data []byte, atEOF bool) (advance int, token []byte, err error) {
+				if atEOF && len(data) == 0 {
+					return 0, nil, nil
+				}
+				for i, b := range data {
+					if b == '\n' || b == '\r' {
+						return i + 1, data[:i], nil
+					}
+				}
+				if atEOF {
+					return len(data), data, nil
+				}
+				return 0, nil, nil
+			}
+			scanner.Split(splitFunc)
+			for scanner.Scan() {
+				text := scanner.Text()
+				addAudioLog(prefix, text)
+				if checkProgress && onProgress != nil {
+					trimmed := strings.TrimSpace(text)
+					if strings.Contains(trimmed, "%") {
+						onProgress(50.0, fmt.Sprintf("[%s 音声変換中] %s", encoderType, trimmed))
+					}
+				}
+			}
+		}()
+		return &wg
+	}
+
 	wavFile := filepath.Join(tempDir, fmt.Sprintf("temp_audio_%d.wav", os.Getpid()))
 	m4aFile := filepath.Join(tempDir, fmt.Sprintf("temp_audio_%d.m4a", os.Getpid()))
 
@@ -478,11 +531,14 @@ func (r *Runner) encodeExternalAudioRestricted(
 
 	wavProc, err := StartProcessRestricted(ffmpegPath, wavArgs, nil, "", restriction, r.coreInfo)
 	if err != nil {
-		return "", nil, fmt.Errorf("一時WAV抽出プロセスの起動に失敗: %w", err)
+		return "", cmdLogs, audioLogs, fmt.Errorf("一時WAV抽出プロセスの起動に失敗: %w", err)
 	}
 	r.mu.Lock()
 	r.curProc = wavProc
 	r.mu.Unlock()
+
+	wavStderrWg := scanReader(wavProc.StderrReader, "Step 1: WAV抽出 stderr", false)
+	wavStdoutWg := scanReader(wavProc.StdoutReader, "Step 1: WAV抽出 stdout", false)
 
 	doneChan := make(chan struct{})
 	go func() {
@@ -495,6 +551,8 @@ func (r *Runner) encodeExternalAudioRestricted(
 
 	_, _ = wavProc.Wait()
 	close(doneChan)
+	wavStderrWg.Wait()
+	wavStdoutWg.Wait()
 	wavProc.Close()
 
 	r.mu.Lock()
@@ -502,7 +560,7 @@ func (r *Runner) encodeExternalAudioRestricted(
 	r.mu.Unlock()
 
 	if ctx.Err() != nil {
-		return "", nil, ctx.Err()
+		return "", cmdLogs, audioLogs, ctx.Err()
 	}
 	defer os.Remove(wavFile)
 
@@ -516,7 +574,7 @@ func (r *Runner) encodeExternalAudioRestricted(
 
 	audProc, err := StartProcessRestricted(encoderPath, audArgs, nil, "", restriction, r.coreInfo)
 	if err != nil {
-		return "", nil, fmt.Errorf("外部音声エンコーダプロセスの起動に失敗: %w", err)
+		return "", cmdLogs, audioLogs, fmt.Errorf("外部音声エンコーダプロセスの起動に失敗: %w", err)
 	}
 
 	r.mu.Lock()
@@ -532,40 +590,13 @@ func (r *Runner) encodeExternalAudioRestricted(
 		}
 	}()
 
-	// Monitor progress
-	go func() {
-		scanner := bufio.NewScanner(audProc.StderrReader)
-		splitFunc := func(data []byte, atEOF bool) (advance int, token []byte, err error) {
-			if atEOF && len(data) == 0 {
-				return 0, nil, nil
-			}
-			for i, b := range data {
-				if b == '\n' || b == '\r' {
-					return i + 1, data[:i], nil
-				}
-			}
-			if atEOF {
-				return len(data), data, nil
-			}
-			return 0, nil, nil
-		}
-		scanner.Split(splitFunc)
-
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" {
-				continue
-			}
-			if onProgress != nil {
-				if strings.Contains(line, "%") {
-					onProgress(50.0, fmt.Sprintf("[%s 音声変換中] %s", encoderType, line))
-				}
-			}
-		}
-	}()
+	audStderrWg := scanReader(audProc.StderrReader, fmt.Sprintf("Step 2: %s stderr", encoderType), true)
+	audStdoutWg := scanReader(audProc.StdoutReader, fmt.Sprintf("Step 2: %s stdout", encoderType), true)
 
 	_, _ = audProc.Wait()
 	close(audDoneChan)
+	audStderrWg.Wait()
+	audStdoutWg.Wait()
 	audProc.Close()
 
 	r.mu.Lock()
@@ -573,7 +604,7 @@ func (r *Runner) encodeExternalAudioRestricted(
 	r.mu.Unlock()
 
 	if ctx.Err() != nil {
-		return "", nil, ctx.Err()
+		return "", cmdLogs, audioLogs, ctx.Err()
 	}
 
 	if fi, errStat := os.Stat(m4aFile); errStat != nil || fi.Size() == 0 {
@@ -586,9 +617,14 @@ func (r *Runner) encodeExternalAudioRestricted(
 
 		fbProc, errFb := StartProcessRestricted(ffmpegPath, fbArgs, nil, "", restriction, r.coreInfo)
 		if errFb != nil {
-			return "", nil, fmt.Errorf("内蔵AACフォールバックの起動に失敗: %w", errFb)
+			return "", cmdLogs, audioLogs, fmt.Errorf("内蔵AACフォールバックの起動に失敗: %w", errFb)
 		}
+		fbStderrWg := scanReader(fbProc.StderrReader, "Step 3: 内蔵AACフォールバック stderr", false)
+		fbStdoutWg := scanReader(fbProc.StdoutReader, "Step 3: 内蔵AACフォールバック stdout", false)
+
 		_, _ = fbProc.Wait()
+		fbStderrWg.Wait()
+		fbStdoutWg.Wait()
 		fbProc.Close()
 	}
 
@@ -596,7 +632,7 @@ func (r *Runner) encodeExternalAudioRestricted(
 		onProgress(100.0, fmt.Sprintf("外部音声エンコード完了 (%s)", encoderType))
 	}
 
-	return m4aFile, cmdLogs, nil
+	return m4aFile, cmdLogs, audioLogs, nil
 }
 
 // encodePlatform handles execution of Platform upload mode.
@@ -1393,7 +1429,21 @@ func (r *Runner) writeDetailedEncodeLog(rep EncodeReport) {
 	}
 	b.WriteString("\n")
 
-	b.WriteString("【FFmpeg / 外部ツール 生の標準エラー出力ログ (Raw Console Stderr Log)】\n")
+	b.WriteString("【音声エンコード / 外部ツール ログ (Audio Process Log)】\n")
+	if len(rep.AudioRawStderr) > 0 {
+		for _, line := range rep.AudioRawStderr {
+			b.WriteString(fmt.Sprintf("  %s\n", line))
+		}
+	} else if rep.AudioEncoder == "copy" {
+		b.WriteString("  (音声ストリームは無劣化コピーされました: -c:a copy)\n")
+	} else if rep.AudioEncoder == "none" {
+		b.WriteString("  (音声ストリームは除外されました: -an)\n")
+	} else {
+		b.WriteString("  (内蔵FFmpegエンコーダにより映像と同時にエンコードされました)\n")
+	}
+	b.WriteString("\n")
+
+	b.WriteString("【FFmpeg 映像エンコード 生の標準エラー出力ログ (Raw Console Stderr Log)】\n")
 	if len(rep.RawStderr) > 0 {
 		for _, line := range rep.RawStderr {
 			b.WriteString(fmt.Sprintf("  [stderr] %s\n", line))

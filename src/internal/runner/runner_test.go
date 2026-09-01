@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"windows-reencode-utility/src/internal/config"
@@ -85,5 +86,54 @@ func TestRunnerExecuteGeneral(t *testing.T) {
 	logPath := filepath.Join(outDir, "test_sample_encode.log")
 	if !fileExists(logPath) {
 		t.Errorf("Encode log does not exist: %s", logPath)
+	}
+}
+
+func TestDetailedEncodeLogIncludesAudioSection(t *testing.T) {
+	tempDir := t.TempDir()
+	outPath := filepath.Join(tempDir, "sample.mp4")
+	_ = os.WriteFile(outPath, []byte("dummy video content"), 0644)
+
+	rep := EncodeReport{
+		Item: &core.QueueItem{
+			FileName: "sample.mp4",
+			Path:     "C:\\dummy\\sample.mp4",
+			Info: core.MediaInfo{
+				FileSizeMB: 100.0,
+			},
+		},
+		OutPath:      outPath,
+		ModeName:     "通常エンコード (General)",
+		AudioEncoder: "nero",
+		AudioRawStderr: []string{
+			"[Step 1: WAV抽出 stderr] ffmpeg audio extraction complete",
+			"[Step 2: nero stderr] neroAacEnc processing... 100%",
+		},
+		RawStderr: []string{
+			"ffmpeg video encoding complete frame=1000",
+		},
+		Success: true,
+	}
+
+	r := &Runner{}
+	r.writeDetailedEncodeLog(rep)
+
+	logPath := filepath.Join(tempDir, "sample_encode.log")
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("Failed to read generated encode log: %v", err)
+	}
+
+	logStr := string(content)
+	if !strings.Contains(logStr, "【音声エンコード / 外部ツール ログ (Audio Process Log)】") {
+		t.Errorf("Expected log to contain audio process section, got:\n%s", logStr)
+	}
+
+	if !strings.Contains(logStr, "neroAacEnc processing... 100%") {
+		t.Errorf("Expected log to contain neroAacEnc log line, got:\n%s", logStr)
+	}
+
+	if !strings.Contains(logStr, "【FFmpeg 映像エンコード 生の標準エラー出力ログ (Raw Console Stderr Log)】") {
+		t.Errorf("Expected log to contain video stderr section, got:\n%s", logStr)
 	}
 }
