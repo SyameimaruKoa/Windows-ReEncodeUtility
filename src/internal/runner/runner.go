@@ -9,6 +9,7 @@ import (
 	"math/bits"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -281,29 +282,29 @@ func (r *Runner) resolveDestinationFile(outDir, baseName, ext string, overwrite 
 
 // EncodeReport holds complete metadata for creating comprehensive log files.
 type EncodeReport struct {
-	StartTime    time.Time
-	EndTime      time.Time
-	Duration     time.Duration
-	Item         *core.QueueItem
-	OutPath      string
-	ModeName     string
-	HwDecoder    string
-	HwEncoder    string
-	VideoCodec   string
-	QualityStr   string
-	SpeedPreset  string
-	AudioEncoder string
-	Deinterlace  string
-	CPULimit     string
-	AffinityMask uintptr
-	AvgFPS       float64
-	AvgSpeed     string
-	TotalFrames  int64
-	Commands     []string
+	StartTime      time.Time
+	EndTime        time.Time
+	Duration       time.Duration
+	Item           *core.QueueItem
+	OutPath        string
+	ModeName       string
+	HwDecoder      string
+	HwEncoder      string
+	VideoCodec     string
+	QualityStr     string
+	SpeedPreset    string
+	AudioEncoder   string
+	Deinterlace    string
+	CPULimit       string
+	AffinityMask   uintptr
+	AvgFPS         float64
+	AvgSpeed       string
+	TotalFrames    int64
+	Commands       []string
 	AudioRawStderr []string
-	RawStderr    []string
-	Success      bool
-	ErrorMessage string
+	RawStderr      []string
+	Success        bool
+	ErrorMessage   string
 }
 
 // encodeGeneral handles execution of General mode encoding.
@@ -480,7 +481,10 @@ func (r *Runner) encodeExternalAudioRestricted(
 		logMu.Unlock()
 	}
 
-	scanReader := func(r io.Reader, prefix string, checkProgress bool) *sync.WaitGroup {
+	rePct := regexp.MustCompile(`\[?\s*([\d\.]+)%\s*\]?`)
+	reNero := regexp.MustCompile(`(?:Processed|encoded)\s+([\d\.]+)\s*(?:seconds|s)`)
+
+	scanReader := func(r io.Reader, prefix string, checkProgress bool, basePct, scalePct float64) *sync.WaitGroup {
 		var wg sync.WaitGroup
 		if r == nil {
 			return &wg
@@ -509,6 +513,23 @@ func (r *Runner) encodeExternalAudioRestricted(
 				addAudioLog(prefix, text)
 				if checkProgress && onProgress != nil {
 					trimmed := strings.TrimSpace(text)
+					if trimmed == "" {
+						continue
+					}
+					if m := rePct.FindStringSubmatch(trimmed); len(m) >= 2 {
+						if pVal, errP := strconv.ParseFloat(m[1], 64); errP == nil {
+							scaled := basePct + (pVal * scalePct / 100.0)
+							if scaled > 99.0 {
+								scaled = 99.0
+							}
+							onProgress(scaled, fmt.Sprintf("[%s 音声変換中 %.1f%%] %s", encoderType, pVal, trimmed))
+							continue
+						}
+					}
+					if m := reNero.FindStringSubmatch(trimmed); len(m) >= 2 {
+						onProgress(50.0, fmt.Sprintf("[%s 音声変換中] %s", encoderType, trimmed))
+						continue
+					}
 					if strings.Contains(trimmed, "%") {
 						onProgress(50.0, fmt.Sprintf("[%s 音声変換中] %s", encoderType, trimmed))
 					}
@@ -522,7 +543,7 @@ func (r *Runner) encodeExternalAudioRestricted(
 	m4aFile := filepath.Join(tempDir, fmt.Sprintf("temp_audio_%d.m4a", os.Getpid()))
 
 	if onProgress != nil {
-		onProgress(5.0, fmt.Sprintf("一時WAV音声を抽出中: %s", filepath.Base(inputVideo)))
+		onProgress(2.0, fmt.Sprintf("一時WAV音声を抽出中: %s", filepath.Base(inputVideo)))
 	}
 
 	// Step 1: Extract temporary WAV using StartProcessRestricted
@@ -537,8 +558,8 @@ func (r *Runner) encodeExternalAudioRestricted(
 	r.curProc = wavProc
 	r.mu.Unlock()
 
-	wavStderrWg := scanReader(wavProc.StderrReader, "Step 1: WAV抽出 stderr", false)
-	wavStdoutWg := scanReader(wavProc.StdoutReader, "Step 1: WAV抽出 stdout", false)
+	wavStderrWg := scanReader(wavProc.StderrReader, "Step 1: WAV抽出 stderr", true, 2.0, 13.0)
+	wavStdoutWg := scanReader(wavProc.StdoutReader, "Step 1: WAV抽出 stdout", false, 0, 0)
 
 	doneChan := make(chan struct{})
 	go func() {
@@ -590,8 +611,8 @@ func (r *Runner) encodeExternalAudioRestricted(
 		}
 	}()
 
-	audStderrWg := scanReader(audProc.StderrReader, fmt.Sprintf("Step 2: %s stderr", encoderType), true)
-	audStdoutWg := scanReader(audProc.StdoutReader, fmt.Sprintf("Step 2: %s stdout", encoderType), true)
+	audStderrWg := scanReader(audProc.StderrReader, fmt.Sprintf("Step 2: %s stderr", encoderType), true, 15.0, 80.0)
+	audStdoutWg := scanReader(audProc.StdoutReader, fmt.Sprintf("Step 2: %s stdout", encoderType), true, 15.0, 80.0)
 
 	_, _ = audProc.Wait()
 	close(audDoneChan)
@@ -619,8 +640,8 @@ func (r *Runner) encodeExternalAudioRestricted(
 		if errFb != nil {
 			return "", cmdLogs, audioLogs, fmt.Errorf("内蔵AACフォールバックの起動に失敗: %w", errFb)
 		}
-		fbStderrWg := scanReader(fbProc.StderrReader, "Step 3: 内蔵AACフォールバック stderr", false)
-		fbStdoutWg := scanReader(fbProc.StdoutReader, "Step 3: 内蔵AACフォールバック stdout", false)
+		fbStderrWg := scanReader(fbProc.StderrReader, "Step 3: 内蔵AACフォールバック stderr", true, 50.0, 45.0)
+		fbStdoutWg := scanReader(fbProc.StdoutReader, "Step 3: 内蔵AACフォールバック stdout", false, 0, 0)
 
 		_, _ = fbProc.Wait()
 		fbStderrWg.Wait()

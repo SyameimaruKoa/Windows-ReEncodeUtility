@@ -294,37 +294,45 @@ func (m *MainModel) tickCountdown() tea.Cmd {
 
 func (m *MainModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+	isCtrlEnter := (key == "ctrl+enter" || key == "alt+enter" || key == "ctrl+j" || key == "ctrl+m" || msg.Type == tea.KeyCtrlJ)
 
 	// Global Key Handlers
-	switch key {
-	case "ctrl+c":
+	switch {
+	case key == "ctrl+c":
 		m.runner.Cancel()
 		if m.cancelFunc != nil {
 			m.cancelFunc()
 		}
 		return m, tea.Quit
 
-	case "f1":
+	case isCtrlEnter:
+		if len(m.queueItems) > 0 {
+			m.startEncoding()
+			return m, m.waitForProgress()
+		}
+		return m, nil
+
+	case key == "f1":
 		m.openHelpDialog()
 		return m, nil
 
-	case "f2":
+	case key == "f2":
 		m.openContextMenuDialog()
 		return m, nil
 
-	case "f3":
+	case key == "f3":
 		m.logExpanded = !m.logExpanded
 		return m, nil
 
-	case "f4":
+	case key == "f4":
 		m.openLoadTemplateDialog()
 		return m, nil
 
-	case "f5":
+	case key == "f5":
 		m.openSaveTemplateDialog()
 		return m, nil
 
-	case "alt+d":
+	case key == "alt+d":
 		if m.mode == core.ModeGeneral {
 			m.generalSet.ShowAdvanced = !m.generalSet.ShowAdvanced
 		}
@@ -1958,13 +1966,13 @@ func (m *MainModel) View() string {
 	rightOuterW := targetW - leftOuterW
 
 	// Height calculations:
-	fixedLines := 14
+	fixedLines := 8
 	if m.logExpanded {
-		fixedLines = 20
+		fixedLines = 16
 	}
 	bodyOuterH := totalH - fixedLines
-	if bodyOuterH < 6 {
-		bodyOuterH = 6
+	if bodyOuterH < 4 {
+		bodyOuterH = 4
 	}
 
 	var selectedItem *core.QueueItem
@@ -2025,6 +2033,8 @@ func (m *MainModel) View() string {
 	}
 	b.WriteString(footerStyle.Render(PadRightDisplay(footerText, targetW-4)))
 
+	finalView := ClampHeight(b.String(), totalH)
+
 	// Modal Overlays
 	if m.state == StateTextInputDialog {
 		return RenderTextInputModal(&m.textInput, m.width, m.height)
@@ -2033,10 +2043,10 @@ func (m *MainModel) View() string {
 	if m.state == StateHelpDialog || m.state == StateContextMenuDialog ||
 		m.state == StateLoadTemplateDialog || m.state == StateSaveTemplateDialog ||
 		m.state == StateShutdownCountdown || m.state == StateDropdownDialog {
-		return m.renderModalOverlay(b.String())
+		return m.renderModalOverlay(finalView)
 	}
 
-	return b.String()
+	return finalView
 }
 
 func (m *MainModel) renderModalOverlay(baseContent string) string {

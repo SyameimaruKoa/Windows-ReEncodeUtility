@@ -127,12 +127,12 @@ func TestAudioPipelineArgs(t *testing.T) {
 
 	// 2. nero args test
 	neroArgs := BuildExternalAudioArgs("nero", "q050", "", "in.wav", "out.m4a")
-	if len(neroArgs) < 6 || neroArgs[4] != "-q" || neroArgs[5] != "0.50" {
+	if len(neroArgs) < 6 || neroArgs[0] != "-q" || neroArgs[1] != "0.50" {
 		t.Errorf("Expected nero args with -q 0.50, got: %v", neroArgs)
 	}
 
 	neroHeArgs := BuildExternalAudioArgs("nero", "q035", "", "in.wav", "out.m4a")
-	if len(neroHeArgs) < 7 || neroHeArgs[4] != "-he" || neroHeArgs[5] != "-q" || neroHeArgs[6] != "0.35" {
+	if len(neroHeArgs) < 7 || neroHeArgs[0] != "-he" || neroHeArgs[1] != "-q" || neroHeArgs[2] != "0.35" {
 		t.Errorf("Expected nero args with -he -q 0.35, got: %v", neroHeArgs)
 	}
 

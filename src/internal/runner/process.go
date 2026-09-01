@@ -103,16 +103,8 @@ func StartProcessRestricted(appPath string, args []string, env []string, dir str
 		}
 	}
 
-	cmdArgs := make([]string, len(args))
-	copy(cmdArgs, args)
-	if len(cmdArgs) > 0 && resolvedApp != "" {
-		cmdArgs[0] = resolvedApp
-	}
-
-	var cmdLine string
-	if len(cmdArgs) > 0 {
-		cmdLine = windows.ComposeCommandLine(cmdArgs)
-	}
+	cmdArgs := append([]string{resolvedApp}, args...)
+	cmdLine := windows.ComposeCommandLine(cmdArgs)
 
 	cmdLinePtr, err := syscall.UTF16PtrFromString(cmdLine)
 	if err != nil {

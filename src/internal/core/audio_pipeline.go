@@ -64,8 +64,8 @@ func BuildExternalAudioArgs(encoder, preset, customVal, inputWav, outputM4a stri
 		return args
 
 	case "nero":
-		// neroAacEnc -if <in> -of <out> [-he] -q <val>
-		args := []string{"-if", inputWav, "-of", outputM4a}
+		// neroAacEnc [-he] -q <val> -if <in> -of <out>
+		var args []string
 		switch preset {
 		case "q065", "high":
 			args = append(args, "-q", "0.65")
@@ -92,6 +92,7 @@ func BuildExternalAudioArgs(encoder, preset, customVal, inputWav, outputM4a stri
 		default:
 			args = append(args, "-q", "0.50")
 		}
+		args = append(args, "-if", inputWav, "-of", outputM4a)
 		return args
 
 	case "fdkaac":

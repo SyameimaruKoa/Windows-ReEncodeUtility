@@ -510,3 +510,52 @@ func TestRetryFailedItemsOnKeyR(t *testing.T) {
 		t.Fatalf("Expected state=StateComplete after finish, got %d", m.state)
 	}
 }
+
+func TestCtrlEnterStartsEncoding(t *testing.T) {
+	cfg := &config.AppConfig{}
+	cfg.Behavior.DefaultMode = "general"
+	m := NewMainModel(cfg, nil)
+	m.mode = core.ModeGeneral
+	m.queueItems = []*core.QueueItem{
+		{
+			ID:     1,
+			Path:   "C:\\test.mp4",
+			Status: "Pending",
+		},
+	}
+
+	// 1. Test Ctrl+Enter key
+	m.activeField = 3 // Not on start button
+	m.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlJ})
+
+	if m.state != StateEncoding {
+		t.Fatalf("Expected StateEncoding after Ctrl+J (Ctrl+Enter), got %d", m.state)
+	}
+}
+
+func TestF3ExpandedLogLayout(t *testing.T) {
+	cfg := &config.AppConfig{}
+	cfg.Behavior.DefaultMode = "general"
+	m := NewMainModel(cfg, nil)
+	m.mode = core.ModeGeneral
+	m.width = 100
+	m.height = 30
+	m.queueItems = []*core.QueueItem{
+		{
+			ID:     1,
+			Path:   "C:\\test.mp4",
+			Status: "Pending",
+		},
+	}
+
+	// Toggle F3
+	m.handleKeyPress(tea.KeyMsg{Type: tea.KeyF3})
+	if !m.logExpanded {
+		t.Fatalf("Expected logExpanded=true after F3")
+	}
+
+	viewStr := m.View()
+	if !strings.Contains(viewStr, "エンコード開始") {
+		t.Errorf("Expected View output with F3 expanded to still contain start button, got:\n%s", viewStr)
+	}
+}

@@ -68,8 +68,8 @@ func RenderSplitView(s *core.SplitSettings, selItem *core.QueueItem, activeField
 	if contentWidth < 10 {
 		contentWidth = 10
 	}
-	if contentHeight < 10 {
-		contentHeight = 10
+	if contentHeight < 4 {
+		contentHeight = 4
 	}
 
 	renderedContent := RenderScrollableLines(items, activeField, contentHeight)
