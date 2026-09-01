@@ -559,3 +559,23 @@ func TestF3ExpandedLogLayout(t *testing.T) {
 		t.Errorf("Expected View output with F3 expanded to still contain start button, got:\n%s", viewStr)
 	}
 }
+
+func TestEnterQuitsOnSuccessfulCompletion(t *testing.T) {
+	cfg := &config.AppConfig{}
+	cfg.Behavior.DefaultMode = "general"
+	m := NewMainModel(cfg, nil)
+	m.mode = core.ModeGeneral
+	m.queueItems = []*core.QueueItem{
+		{
+			ID:     1,
+			Path:   "C:\\test.mp4",
+			Status: "Completed",
+		},
+	}
+	m.state = StateComplete
+
+	_, cmd := m.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("Expected tea.Quit command on Enter when all items completed successfully, got nil")
+	}
+}

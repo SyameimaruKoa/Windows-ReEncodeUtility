@@ -382,22 +382,22 @@ func (m *MainModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.retryFailedItems()
 			return m, m.waitForProgress()
 		}
-		if key == "ctrl+enter" {
+		if isCtrlEnter {
 			m.startEncoding()
 			return m, m.waitForProgress()
 		}
 		if key == "enter" {
-			if m.activeField == 99 {
-				m.startEncoding()
-				return m, m.waitForProgress()
+			if m.hasFailedItems() {
+				if m.activeField == 99 || m.focusLeft {
+					m.retryFailedItems()
+					return m, m.waitForProgress()
+				}
+				m.state = StateIdle
+				// Fallthrough to idle navigation to allow setting change
+			} else {
+				// All completed successfully -> Quit cleanly on Enter
+				return m, tea.Quit
 			}
-			if m.hasFailedItems() && m.focusLeft {
-				m.retryFailedItems()
-				return m, m.waitForProgress()
-			}
-			// Transition to Idle and immediately handle the Enter action (e.g. open wizard/dropdown)
-			m.state = StateIdle
-			// Fallthrough to idle navigation to process the Enter key immediately
 		} else if key == "esc" || key == "q" {
 			return m, tea.Quit
 		} else if key == "tab" || key == "up" || key == "down" || key == "left" || key == "right" || key == " " {
