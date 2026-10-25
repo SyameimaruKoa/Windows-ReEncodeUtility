@@ -70,7 +70,8 @@ function Resolve-DeinterlaceFilter {
                 return 'bwdif'
             }
         }
-        $escapedWeights = $weightsFile -replace '\', '/' -replace ':', '\:'
+        # 正規表現の -replace を使わず、パス文字列をFFmpegフィルター用にエスケープする
+        $escapedWeights = $weightsFile.Replace('\', '/').Replace(':', '\:')
         
         if ($filter -eq 'nnedi') {
             return "nnedi=weights='$escapedWeights'"
@@ -721,10 +722,17 @@ function Show-Menu {
 
     while ($true) {
         if (-not $firstDraw) {
-            try {
-                $Host.UI.RawUI.CursorPosition = $startPos
+            if ($NoClear) {
+                # スキャン結果を消さない指定では、従来どおりメニュー領域を再描画する
+                try {
+                    $Host.UI.RawUI.CursorPosition = $startPos
+                }
+                catch {
+                    Clear-Host
+                }
             }
-            catch {
+            else {
+                # 全角文字や折り返しでカーソル位置がずれ、文字が重複することを防ぐ
                 Clear-Host
             }
         }
