@@ -220,6 +220,8 @@ QSVエンコード時は `-async_depth 24` を優先し、FFmpegがエラー終�
 
 初回からFFmpegの既定値で開始したい場合は、起動時に `-QsvDefaultDepth` を付けます。選択メニューに項目は追加されません。
 
+エンコード開始時と完了時には、画面とログファイルへ `QSV非同期モード` として「高速化 (24)」「FFmpeg既定値」「手動指定」のどれを使用したか表示します。Depth 24で失敗した場合は、フォールバック開始とその結果も記録します。
+
 ```powershell
 .\re-encode-AIOptimus.ps1 -QsvDefaultDepth "C:\Videos\input.mp4"
 .\start.bat -QsvDefaultDepth "C:\Videos\input.mp4"
