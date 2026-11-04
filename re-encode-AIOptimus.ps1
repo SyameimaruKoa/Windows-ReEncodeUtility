@@ -8,6 +8,8 @@
     エンコード設定は get-ffmpegOptions.ps1 で行うぞ。
 .PARAMETER QsvDefaultDepth
     QSVのasync_depthをFFmpeg既定値（未指定）で実行する。メニュー選択項目は追加しない。
+.PARAMETER ShowHelp
+    -h または -help で詳しい使い方を表示する。パス未指定でも表示する。
 .PARAMETER Path
     処理対象の動画ファイルまたはフォルダのパスじゃ。複数指定も可能じゃぞ。
 .NOTES
@@ -17,12 +19,14 @@
 [CmdletBinding()]
 param (
     [switch]$QsvDefaultDepth,
-    [Parameter(Mandatory = $true, ValueFromPipeline = $true, ValueFromRemainingArguments = $true, HelpMessage = "処理対象のファイルまたはフォルダのパスを入力せい。")]
+    [Alias('h', 'help')]
+    [switch]$ShowHelp,
+    [Parameter(ValueFromPipeline = $true, ValueFromRemainingArguments = $true, HelpMessage = "処理対象のファイルまたはフォルダのパスを入力せい。")]
     [string[]]$Path
 )
 
 #region ヘルプ表示
-if ($args -contains "-h" -or $args -contains "--help") {
+if ($ShowHelp -or $args -contains "-h" -or $args -contains "--help" -or -not $Path -or $Path.Count -eq 0) {
     Get-Help $MyInvocation.MyCommand.Path -Detailed
     exit
 }
