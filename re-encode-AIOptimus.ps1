@@ -2912,6 +2912,8 @@ function Invoke-EncodeFile {
         $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $currentVideoOptions -VideoFilter $Config.AdditionalVF
         $effectiveHwAccelOption = $filterPipeline.HwAccelOption
         $ffmpegArgsList = @("-hide_banner", "-y")
+        $isHevcQvbrEncode = ($Config.PlatformMode -and $Config.HWEncoder -eq "Intel" -and $Config.CodecName -eq "H.265" -and $Config.QualityMode -eq "CRF+Maxrate")
+        if ($isHevcQvbrEncode) { $ffmpegArgsList += @("-loglevel", "verbose") }
         if ($isDashInput) {
             # DASH入力はタイムスタンプ欠落/逆行が発生しやすいためPTS生成を有効化
             $ffmpegArgsList += @("-fflags", "+genpts")
@@ -2967,6 +2969,22 @@ function Invoke-EncodeFile {
             $retryArgs = Remove-HwAccelFromArgs $finalArgString
             Write-Log "========= ffmpeg エンコード リトライ (HWアクセルなし) =========" -NoTimestamp
             $result = Invoke-QsvEncodeWithDepthFallback -Arguments $retryArgs -DurationSeconds $inputDuration
+        }
+
+        if ($isHevcQvbrEncode) {
+            $rcDetails = [regex]::Matches($result.StdErr, '(?im)Using the (.+?) ratecontrol method')
+            if ($rcDetails.Count -gt 0) {
+                $rcLabel = $rcDetails[$rcDetails.Count - 1].Groups[1].Value.Trim()
+                if ($rcLabel -match '\(QVBR\)') {
+                    Write-Log "QSV実際のレート制御: $rcLabel"
+                }
+                else {
+                    Write-Log "QSV実際のレート制御: $rcLabel (QVBRを要求しましたが異なる方式が選択されました)" -Level "WARN"
+                }
+            }
+            else {
+                Write-Log "QSV実際のレート制御を取得できませんでした。ffmpeg詳細ログを確認してください。" -Level "WARN"
+            }
         }
 
         if ($result.ExitCode -ne 0) {
