@@ -214,6 +214,18 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 .\start.bat -h
 ```
 
+### QSV非同期処理数（メニュー項目なし）
+
+QSVエンコード時は `-async_depth 24` を優先し、FFmpegがエラー終了した場合のみ `-async_depth` を指定せずに再試行します（FFmpeg既定値は4）。エンコードが正常終了していても遅い場合の自動最適化は行いません。Bフレーム設定は変更せず、DTS警告だけでは再試行しません。
+
+初回からFFmpegの既定値で開始したい場合は、起動時に `-QsvDefaultDepth` を付けます。選択メニューに項目は追加されません。
+
+```powershell
+.\re-encode-AIOptimus.ps1 -QsvDefaultDepth "C:\Videos\input.mp4"
+.\start.bat -QsvDefaultDepth "C:\Videos\input.mp4"
+```
+
+FFmpegの追加引数などで `-async_depth` が明示指定されている場合は、その値を優先します。この機能はQSVエンコーダーだけが対象で、その他のエンコーダーには適用しません。
 ### インタラクティブメニュー詳細
 
 #### 【メイン】モード選択
