@@ -993,7 +993,7 @@ function Test-HwAccelRelatedFailure {
     #>
     param([string]$StdErr)
     if (-not $StdErr) { return $false }
-    return ($StdErr -match 'Failed setup for format|hwaccel initialisation returned error|Error reinitializing filters|Device does not support.*VK_|hw_device_ctx.*failed|Cannot map.*surface|hwframe.*error')
+    return ($StdErr -match 'Failed setup for format|hwaccel initialisation returned error|Error reinitializing filters|Device does not support.*VK_|hw_device_ctx.*failed|Cannot map.*surface|hwframe.*error|Error parsing filterchain.*(?:scale_qsv|vpp_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=|Error initializing filter.*(?:scale_qsv|vpp_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)')
 }
 
 function Remove-HwAccelFromArgs {
@@ -1009,7 +1009,7 @@ function Remove-HwAccelFromArgs {
     $result = $result -replace '\s*-hwaccel\s+\S+', ''
     $result = $result -replace '\s*-extra_hw_frames\s+\d+', ''
     # GPUフィルターをCPU版へ置換し、転送フィルターを除去してから再試行
-    $result = [regex]::Replace($result, '(scale_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=(?:w|width)=(-?\d+):(?:h|height)=([^,\s`"]+)', {
+    $result = [regex]::Replace($result, '(scale_qsv|vpp_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=(?:w|width)=(-?\d+):(?:h|height)=([^,\s`"]+)', {
         param($match)
         return "scale=$($match.Groups[2].Value):$($match.Groups[3].Value)"
     })
