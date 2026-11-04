@@ -1020,6 +1020,15 @@ function Remove-HwAccelFromArgs {
     return ($result -replace '\s{2,}', ' ').Trim()
 }
 
+function Convert-D3D11ScaleToCpuScale {
+    param([string]$ArgString)
+    $pattern = '(-vf\s+")scale_d3d11=width=(?<width>\d+):height=(?<height>[^:,"]+):format=[a-zA-Z0-9_]+(?:,hwdownload,format=nv12)?'
+    return [regex]::Replace($ArgString, $pattern, {
+        param($match)
+        return "$($match.Groups[1].Value)hwdownload,format=nv12,scale=$($match.Groups['width'].Value):$($match.Groups['height'].Value)"
+    })
+}
+
 function Get-EffectiveHwAccelOption {
     <#
     .SYNOPSIS
@@ -2546,6 +2555,11 @@ function Invoke-SplitEncodeFile {
             $finalArgString = $ffmpegArgsList -join ' '
 
             $result = Invoke-FfmpegEncode -Arguments $finalArgString -DurationSeconds $segDuration
+            if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -match '-hwaccel\s+d3d11va\b' -and $finalArgString -match '-vf\s+"scale_d3d11=' -and (Test-HwAccelRelatedFailure $result.StdErr)) {
+                Write-Log "D3D11VAのGPUリサイズに失敗。GPUデコードを維持し、CPUリサイズで再試行します。(セグメント: $outputFileName)" -Level "WARN"
+                $d3d11FallbackArgs = Convert-D3D11ScaleToCpuScale $finalArgString
+                $result = Invoke-FfmpegEncode -Arguments $d3d11FallbackArgs -DurationSeconds $segDuration
+            }
 
             # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
             if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -and (Test-HwAccelRelatedFailure $result.StdErr)) {
@@ -2778,7 +2792,13 @@ function Invoke-EncodeFile {
             $pass1ArgsList += @("-an", "-f", "null", "NUL")
 
             Write-Log "========= 2pass: 1st pass 実行 =========" -NoTimestamp
-            $pass1Result = Invoke-FfmpegEncode -Arguments ($pass1ArgsList -join ' ') -DurationSeconds $inputDuration
+            $pass1ArgString = $pass1ArgsList -join ' '
+            $pass1Result = Invoke-FfmpegEncode -Arguments $pass1ArgString -DurationSeconds $inputDuration
+            if ($pass1Result.ExitCode -ne 0 -and $pass1Pipeline.HwAccelOption -match '-hwaccel\s+d3d11va\b' -and $pass1ArgString -match '-vf\s+"scale_d3d11=' -and (Test-HwAccelRelatedFailure $pass1Result.StdErr)) {
+                Write-Log "D3D11VAのGPUリサイズに失敗。GPUデコードを維持し、CPUリサイズで1st passを再試行します。" -Level "WARN"
+                $d3d11FallbackArgs = Convert-D3D11ScaleToCpuScale $pass1ArgString
+                $pass1Result = Invoke-FfmpegEncode -Arguments $d3d11FallbackArgs -DurationSeconds $inputDuration
+            }
             if ($pass1Result.ExitCode -ne 0) {
                 # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
                 if ($HwAccelOption -and (Test-HwAccelRelatedFailure $pass1Result.StdErr)) {
@@ -2843,6 +2863,12 @@ function Invoke-EncodeFile {
 
         Write-Log "========= ffmpeg エンコード実行 =========" -NoTimestamp
         $result = Invoke-FfmpegEncode -Arguments $finalArgString -DurationSeconds $inputDuration
+        if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -match '-hwaccel\s+d3d11va\b' -and $finalArgString -match '-vf\s+"scale_d3d11=' -and (Test-HwAccelRelatedFailure $result.StdErr)) {
+            Write-Log "D3D11VAのGPUリサイズに失敗。GPUデコードを維持し、CPUリサイズで再試行します。" -Level "WARN"
+            $d3d11FallbackArgs = Convert-D3D11ScaleToCpuScale $finalArgString
+            Write-Log "========= ffmpeg エンコード リトライ (D3D11VAデコード維持) =========" -NoTimestamp
+            $result = Invoke-FfmpegEncode -Arguments $d3d11FallbackArgs -DurationSeconds $inputDuration
+        }
 
         # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
         if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -and (Test-HwAccelRelatedFailure $result.StdErr)) {
