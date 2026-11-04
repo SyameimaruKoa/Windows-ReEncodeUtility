@@ -1008,11 +1008,15 @@ function Remove-HwAccelFromArgs {
     $result = $result -replace '\s*-hwaccel_output_format\s+\S+', ''
     $result = $result -replace '\s*-hwaccel\s+\S+', ''
     $result = $result -replace '\s*-extra_hw_frames\s+\d+', ''
-    # -vfからhwdownloadを除去
-    # Case 1: hwdownload,format=nv12 のみ → -vf自体を除去
+    # GPUフィルターをCPU版へ置換し、転送フィルターを除去してから再試行
+    $result = [regex]::Replace($result, '(scale_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=w=(-?\d+):h=(-?\d+)', {
+        param($match)
+        return "scale=$($match.Groups[2].Value):$($match.Groups[3].Value)"
+    })
+    $result = $result -replace 'hwdownload,format=nv12,', ''
+    $result = $result -replace ',hwdownload,format=nv12', ''
     $result = $result -replace '\s*-vf\s+"hwdownload,format=nv12"', ''
-    # Case 2: hwdownload,format=nv12,<他のフィルタ> → hwdownload部分のみ除去
-    $result = $result -replace '(-vf\s+")hwdownload,format=nv12,', '$1'
+    $result = $result -replace '\s*-vf\s+""', ''
     return ($result -replace '\s{2,}', ' ').Trim()
 }
 
@@ -2137,6 +2141,7 @@ function Start-MainProcess {
         @{ Label = "使用しない (CPUデコード)"; Accel = "" },
         @{ Label = "NVIDIA (cuda)"; Accel = "cuda" },
         @{ Label = "Intel (qsv)"; Accel = "qsv" },
+        @{ Label = "AMD (amf)"; Accel = "amf" },
         @{ Label = "推奨・Windows標準 (d3d11va)"; Accel = "d3d11va" },
         @{ Label = "Windows汎用 (dxva2)"; Accel = "dxva2" },
         @{ Label = "Vulkan (vulkan)"; Accel = "vulkan" }
@@ -2181,11 +2186,11 @@ function Start-MainProcess {
         }
         # DXVA2 の場合は dxva2 を指定
         if ($selectedHwAccel -eq "dxva2") {
-            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'dxva2'
+            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'dxva2_vld'
         }
         # AMD/AMF は d3d11 出力を使うのが一般的
         if ($selectedHwAccel -eq "amf") {
-            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'd3d11'
+            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'amf'
         }
         # Vulkan 使用時は出力フォーマットvulkanでGPUメモリ上に保持する
         if ($selectedHwAccel -eq "vulkan") {
@@ -2488,6 +2493,8 @@ function Invoke-SplitEncodeFile {
 
             # --- 映像エンコードと結合 ---
             $effectiveHwAccelOption = Get-EffectiveHwAccelOption -HwAccelOption $HwAccelOption -VideoOptions $Config.EncoderSettings.Video
+            $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $Config.EncoderSettings.Video -VideoFilter $Config.AdditionalVF
+            $effectiveHwAccelOption = $filterPipeline.HwAccelOption
             $ffmpegArgsList = @("-hide_banner", "-y")
             if ($effectiveHwAccelOption) { $ffmpegArgsList += $effectiveHwAccelOption.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) }
             
@@ -2503,14 +2510,7 @@ function Invoke-SplitEncodeFile {
             $splitOptions = [System.StringSplitOptions]::RemoveEmptyEntries
             $ffmpegArgsList += $Config.EncoderSettings.Video.Split(' ', $splitOptions)
 
-            # --- HWデコード (d3d11/cuda/vulkan) 使用時のフィルター互換性処理 ---
-            $needsHwDownload = $effectiveHwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan|qsv|dxva2)'
-            $isVulkanDecode = $effectiveHwAccelOption -match '-hwaccel\s+vulkan'
-            $isHwEncoder = $Config.EncoderSettings.Video -match '-c:v\s+\S+_(amf|nvenc|qsv|mf|d3d12va)'
-            if ($needsHwDownload -and ($isVulkanDecode -or -not $isHwEncoder)) {
-                $ffmpegArgsList += @("-vf", "`"hwdownload,format=nv12`"")
-                Write-Log "HWデコード互換: hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
-            }
+            if ($filterPipeline.Filter) { $ffmpegArgsList += @("-vf", ('"{0}"' -f $filterPipeline.Filter)) }
 
             if ($tempAudioOutFile) {
                 $ffmpegArgsList += @("-map", "0:v:0", "-map", "$($audioInputIndex):a:0", "-c:a", "copy")
@@ -2527,6 +2527,7 @@ function Invoke-SplitEncodeFile {
                 }
             }
 
+            $ffmpegArgsList = Add-PreservedFrameRateOption -Arguments $ffmpegArgsList -VideoOptions $Config.EncoderSettings.Video -ExtraArguments "" -VideoFilter $filterPipeline.Filter
             $ffmpegArgsList += "`"$outputFilePath`""
             $finalArgString = $ffmpegArgsList -join ' '
 
