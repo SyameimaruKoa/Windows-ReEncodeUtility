@@ -1057,6 +1057,102 @@ function Set-HwAccelOutputFormat {
 }
 #endregion
 
+
+function Test-FfmpegVideoFilter {
+    param([string]$Name)
+    if ($null -eq $script:AvailableVideoFilters) {
+        $script:AvailableVideoFilters = @{}
+        foreach ($line in @(& $global:Settings.FfmpegPath -hide_banner -filters 2>$null)) {
+            if ($line -match '^\s*[TSC\.]{3}\s+([a-zA-Z0-9_]+)\s') {
+                $script:AvailableVideoFilters[$Matches[1]] = $true
+            }
+        }
+    }
+    return [bool]$script:AvailableVideoFilters[$Name]
+}
+
+function Test-HwFrameEncoderCompatibility {
+    param([string]$FrameFormat, [string]$VideoOptions)
+    if ($VideoOptions -notmatch '-c:v\s+([a-zA-Z0-9_]+)') { return $false }
+    $encoder = $Matches[1]
+    switch ($FrameFormat) {
+        "qsv"          { return ($encoder -match '_qsv$') }
+        "cuda"         { return ($encoder -match '_nvenc$') }
+        "amf"          { return ($encoder -match '_amf$') }
+        "d3d11"        { return ($encoder -match '_(amf|nvenc|mf)$') }
+        "vulkan"       { return ($encoder -match '_vulkan$') }
+        "vaapi"        { return ($encoder -match '_vaapi$') }
+        "videotoolbox" { return ($encoder -match '_videotoolbox$') }
+        default        { return $false }
+    }
+}
+
+function Resolve-VideoFilterPipeline {
+    param([string]$HwAccelOption, [string]$VideoOptions, [string]$VideoFilter)
+    $result = @{ HwAccelOption = $HwAccelOption; Filter = $VideoFilter }
+    if (-not $HwAccelOption -or $HwAccelOption -notmatch '-hwaccel_output_format\s+(\S+)') { return $result }
+    $frameFormat = $Matches[1]
+    $scaleMatch = [regex]::Match([string]$VideoFilter, '^\s*scale=(?<w>\d+):(?<h>-2|-1|\d+)(?:,(?<tail>.*))?\s*$')
+    $gpuFilter = ""
+    $tail = ""
+    if ($scaleMatch.Success) {
+        $width = $scaleMatch.Groups['w'].Value
+        $height = $scaleMatch.Groups['h'].Value
+        $tail = $scaleMatch.Groups['tail'].Value
+        $filterName = switch ($frameFormat) {
+            "qsv"          { "scale_qsv" }
+            "cuda"         { "scale_cuda" }
+            "amf"          { "vpp_amf" }
+            "d3d11"        { "scale_d3d11" }
+            "vulkan"       { "scale_vulkan" }
+            "vaapi"        { "scale_vaapi" }
+            "videotoolbox" { "scale_vt" }
+            default        { if ($frameFormat -in @("dxva2", "dxva2_vld")) { "scale_d3d11" } else { "" } }
+        }
+        if ($filterName -and (Test-FfmpegVideoFilter -Name $filterName)) {
+            if ($frameFormat -in @("dxva2", "dxva2_vld")) {
+                $result.HwAccelOption = $HwAccelOption -replace '-hwaccel\s+dxva2', '-hwaccel d3d11va'
+                $result.HwAccelOption = $result.HwAccelOption -replace '-hwaccel_output_format\s+\S+', '-hwaccel_output_format d3d11'
+                $frameFormat = "d3d11"
+                Write-Log "GPUリサイズのためDXVA2からD3D11VAへ切り替え" -Level "DEBUG"
+            }
+            $gpuFilter = $filterName + "=w=" + $width + ":h=" + $height
+            Write-Log "GPUリサイズ: $gpuFilter ($frameFormat)" -Level "DEBUG"
+        }
+        else {
+            Write-Log "GPUリサイズ未対応: $frameFormat。CPUのscaleを使用" -Level "WARN"
+        }
+    }
+
+    $needsCpuFrames = -not (Test-HwFrameEncoderCompatibility -FrameFormat $frameFormat -VideoOptions $VideoOptions)
+    if ($gpuFilter) {
+        $result.Filter = $gpuFilter
+        if ($tail -or $needsCpuFrames) {
+            $result.Filter += ",hwdownload,format=nv12"
+            if ($tail) { $result.Filter += ",$tail" }
+        }
+    }
+    elseif ($VideoFilter -and $VideoFilter -notmatch '^(scale_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)\b') {
+        if ($VideoFilter -notmatch '^hwdownload\b') {
+            $result.Filter = "hwdownload,format=nv12,$VideoFilter"
+            Write-Log "GPU非対応の映像フィルター: CPUへ転送 ($VideoFilter)" -Level "DEBUG"
+        }
+    }
+    elseif ($needsCpuFrames -and $VideoFilter -notmatch 'hwdownload') {
+        $result.Filter = if ($VideoFilter) { "$VideoFilter,hwdownload,format=nv12" } else { "hwdownload,format=nv12" }
+    }
+    return $result
+}
+
+function Add-PreservedFrameRateOption {
+    param([string[]]$Arguments, [string]$VideoOptions, [string]$ExtraArguments, [string]$VideoFilter)
+    $rateOptions = "$VideoOptions $ExtraArguments"
+    if ($rateOptions -notmatch '(?:^|\s)-(?:r(?:\:v(?:\:0)?)?|vsync|fps_mode(?:\:v(?:\:0)?)?)\s+' -and $VideoFilter -notmatch '(?:^|,)fps=') {
+        return @($Arguments + @("-fps_mode:v", "passthrough"))
+    }
+    return $Arguments
+}
+
 #region ハードウェア検出・コーデックフィルタ
 
 function Get-FilteredHwChoices {
