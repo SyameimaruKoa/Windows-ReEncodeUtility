@@ -6,6 +6,8 @@
     対話形式での詳細な設定、テンプレートの利用、高品質な中間ファイルの作成、
     さらにチャプターや字幕に基づいた分割保存が可能じゃ。
     エンコード設定は get-ffmpegOptions.ps1 で行うぞ。
+.PARAMETER QsvDefaultDepth
+    QSVのasync_depthをFFmpeg既定値（未指定）で実行する。メニュー選択項目は追加しない。
 .PARAMETER Path
     処理対象の動画ファイルまたはフォルダのパスじゃ。複数指定も可能じゃぞ。
 .NOTES
@@ -14,6 +16,7 @@
 #>
 [CmdletBinding()]
 param (
+    [switch]$QsvDefaultDepth,
     [Parameter(Mandatory = $true, ValueFromPipeline = $true, ValueFromRemainingArguments = $true, HelpMessage = "処理対象のファイルまたはフォルダのパスを入力せい。")]
     [string[]]$Path
 )
@@ -1029,6 +1032,26 @@ function Convert-D3D11ScaleToCpuScale {
     })
 }
 
+function Invoke-QsvEncodeWithDepthFallback {
+    param(
+        [string]$Arguments,
+        [double]$DurationSeconds = 0
+    )
+
+    $isQsvEncode = $Arguments -match '(?i)(?:^|\s)-c:v(?:\:0)?\s+\S+_qsv\b'
+    $hasExplicitDepth = $Arguments -match '(?i)(?:^|\s)-async_depth(?:\:\S+)?\s+\S+'
+    if ($script:QsvDefaultDepth -or -not $isQsvEncode -or $hasExplicitDepth) {
+        return (Invoke-FfmpegEncode -Arguments $Arguments -DurationSeconds $DurationSeconds)
+    }
+
+    $optimizedArgs = [regex]::Replace($Arguments, '(?i)(-c:v(?:\:0)?\s+\S+_qsv\b)', '$1 -async_depth 24')
+    $result = Invoke-FfmpegEncode -Arguments $optimizedArgs -DurationSeconds $DurationSeconds
+    if ($result.ExitCode -ne 0) {
+        Write-Log 'QSV async_depth 24で失敗。FFmpeg既定値（async_depth未指定）で再試行します。' -Level 'WARN'
+        $result = Invoke-FfmpegEncode -Arguments $Arguments -DurationSeconds $DurationSeconds
+    }
+    return $result
+}
 function Get-EffectiveHwAccelOption {
     <#
     .SYNOPSIS
@@ -2560,11 +2583,11 @@ function Invoke-SplitEncodeFile {
             $ffmpegArgsList += "`"$outputFilePath`""
             $finalArgString = $ffmpegArgsList -join ' '
 
-            $result = Invoke-FfmpegEncode -Arguments $finalArgString -DurationSeconds $segDuration
+            $result = Invoke-QsvEncodeWithDepthFallback -Arguments $finalArgString -DurationSeconds $segDuration
             if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -match '-hwaccel\s+d3d11va\b' -and $finalArgString -match '-vf\s+"scale_d3d11=' -and (Test-HwAccelRelatedFailure $result.StdErr)) {
                 Write-Log "D3D11VAのGPUリサイズに失敗。GPUデコードを維持し、CPUリサイズで再試行します。(セグメント: $outputFileName)" -Level "WARN"
                 $d3d11FallbackArgs = Convert-D3D11ScaleToCpuScale $finalArgString
-                $result = Invoke-FfmpegEncode -Arguments $d3d11FallbackArgs -DurationSeconds $segDuration
+                $result = Invoke-QsvEncodeWithDepthFallback -Arguments $d3d11FallbackArgs -DurationSeconds $segDuration
             }
 
             # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
@@ -2572,7 +2595,7 @@ function Invoke-SplitEncodeFile {
                 Write-Log "HWアクセル関連エラーを検出。HWアクセルなしでリトライします。(セグメント: $outputFileName)" -Level "WARN"
                 $HwAccelOption = ""
                 $retryArgs = Remove-HwAccelFromArgs $finalArgString
-                $result = Invoke-FfmpegEncode -Arguments $retryArgs -DurationSeconds $segDuration
+                $result = Invoke-QsvEncodeWithDepthFallback -Arguments $retryArgs -DurationSeconds $segDuration
             }
 
             if ($result.ExitCode -ne 0) {
@@ -2799,11 +2822,11 @@ function Invoke-EncodeFile {
 
             Write-Log "========= 2pass: 1st pass 実行 =========" -NoTimestamp
             $pass1ArgString = $pass1ArgsList -join ' '
-            $pass1Result = Invoke-FfmpegEncode -Arguments $pass1ArgString -DurationSeconds $inputDuration
+            $pass1Result = Invoke-QsvEncodeWithDepthFallback -Arguments $pass1ArgString -DurationSeconds $inputDuration
             if ($pass1Result.ExitCode -ne 0 -and $pass1Pipeline.HwAccelOption -match '-hwaccel\s+d3d11va\b' -and $pass1ArgString -match '-vf\s+"scale_d3d11=' -and (Test-HwAccelRelatedFailure $pass1Result.StdErr)) {
                 Write-Log "D3D11VAのGPUリサイズに失敗。GPUデコードを維持し、CPUリサイズで1st passを再試行します。" -Level "WARN"
                 $d3d11FallbackArgs = Convert-D3D11ScaleToCpuScale $pass1ArgString
-                $pass1Result = Invoke-FfmpegEncode -Arguments $d3d11FallbackArgs -DurationSeconds $inputDuration
+                $pass1Result = Invoke-QsvEncodeWithDepthFallback -Arguments $d3d11FallbackArgs -DurationSeconds $inputDuration
             }
             if ($pass1Result.ExitCode -ne 0) {
                 # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
@@ -2812,7 +2835,7 @@ function Invoke-EncodeFile {
                     $HwAccelOption = ""
                     $retryArgs = Remove-HwAccelFromArgs ($pass1ArgsList -join ' ')
                     Write-Log "========= 2pass: 1st pass リトライ (HWアクセルなし) =========" -NoTimestamp
-                    $pass1Result = Invoke-FfmpegEncode -Arguments $retryArgs -DurationSeconds $inputDuration
+                    $pass1Result = Invoke-QsvEncodeWithDepthFallback -Arguments $retryArgs -DurationSeconds $inputDuration
                 }
                 if ($pass1Result.ExitCode -ne 0) {
                     Write-Log "2pass 1st pass 失敗 (終了コード: $($pass1Result.ExitCode))" -Level "ERROR"
@@ -2868,12 +2891,12 @@ function Invoke-EncodeFile {
         $finalArgString = $ffmpegArgsList -join ' '
 
         Write-Log "========= ffmpeg エンコード実行 =========" -NoTimestamp
-        $result = Invoke-FfmpegEncode -Arguments $finalArgString -DurationSeconds $inputDuration
+        $result = Invoke-QsvEncodeWithDepthFallback -Arguments $finalArgString -DurationSeconds $inputDuration
         if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -match '-hwaccel\s+d3d11va\b' -and $finalArgString -match '-vf\s+"scale_d3d11=' -and (Test-HwAccelRelatedFailure $result.StdErr)) {
             Write-Log "D3D11VAのGPUリサイズに失敗。GPUデコードを維持し、CPUリサイズで再試行します。" -Level "WARN"
             $d3d11FallbackArgs = Convert-D3D11ScaleToCpuScale $finalArgString
             Write-Log "========= ffmpeg エンコード リトライ (D3D11VAデコード維持) =========" -NoTimestamp
-            $result = Invoke-FfmpegEncode -Arguments $d3d11FallbackArgs -DurationSeconds $inputDuration
+            $result = Invoke-QsvEncodeWithDepthFallback -Arguments $d3d11FallbackArgs -DurationSeconds $inputDuration
         }
 
         # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
@@ -2882,7 +2905,7 @@ function Invoke-EncodeFile {
             $HwAccelOption = ""
             $retryArgs = Remove-HwAccelFromArgs $finalArgString
             Write-Log "========= ffmpeg エンコード リトライ (HWアクセルなし) =========" -NoTimestamp
-            $result = Invoke-FfmpegEncode -Arguments $retryArgs -DurationSeconds $inputDuration
+            $result = Invoke-QsvEncodeWithDepthFallback -Arguments $retryArgs -DurationSeconds $inputDuration
         }
 
         if ($result.ExitCode -ne 0) {
