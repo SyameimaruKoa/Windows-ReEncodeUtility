@@ -2747,29 +2747,18 @@ function Invoke-EncodeFile {
         if ($Config.PlatformMode -and $Config.TwoPassMode) {
             $passLogBase = Join-Path ([System.IO.Path]::GetTempPath()) ("ff2pass-" + [System.IO.Path]::GetRandomFileName())
             $pass1VideoOptions = "$currentVideoOptions -pass 1 -passlogfile $passLogBase"
+            $pass1Pipeline = Resolve-VideoFilterPipeline -HwAccelOption $HwAccelOption -VideoOptions $pass1VideoOptions -VideoFilter $Config.AdditionalVF
             $pass1ArgsList = @("-hide_banner", "-y")
             if ($isDashInput) {
                 $pass1ArgsList += @("-fflags", "+genpts")
             }
-            if ($HwAccelOption) { $pass1ArgsList += $HwAccelOption.Split(' ', $splitOptions) }
+            if ($pass1Pipeline.HwAccelOption) { $pass1ArgsList += $pass1Pipeline.HwAccelOption.Split(' ', $splitOptions) }
             $pass1ArgsList += $cutInfo.Split(' ', $splitOptions)
             $pass1ArgsList += @("-i", "`"$InputFile`"")
             if ($cutInfo) { $pass1ArgsList += @("-ss", "0") }
             $pass1ArgsList += $pass1VideoOptions.Split(' ', $splitOptions)
 
-            $pass1NeedsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan|qsv|dxva2)'
-            $pass1IsVulkanDecode = $HwAccelOption -match '-hwaccel\s+vulkan'
-            $pass1IsHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv|mf|d3d12va)'
-            $pass1ResolvedVF = $Config.AdditionalVF
-            if ($pass1NeedsHwDownload) {
-                if ($pass1ResolvedVF) {
-                    $pass1ResolvedVF = "hwdownload,format=nv12,$pass1ResolvedVF"
-                }
-                elseif ($pass1IsVulkanDecode -or -not $pass1IsHwEncoder) {
-                    $pass1ResolvedVF = "hwdownload,format=nv12"
-                }
-            }
-            if ($pass1ResolvedVF) { $pass1ArgsList += @("-vf", "`"$pass1ResolvedVF`"") }
+            if ($pass1Pipeline.Filter) { $pass1ArgsList += @("-vf", ('"{0}"' -f $pass1Pipeline.Filter)) }
             if ($Config.AdditionalArgs) { $pass1ArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
             $pass1ArgsList += @("-an", "-f", "null", "NUL")
 
@@ -2795,6 +2784,8 @@ function Invoke-EncodeFile {
         }
 
         # --- エンコード実行 ---
+        $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $currentVideoOptions -VideoFilter $Config.AdditionalVF
+        $effectiveHwAccelOption = $filterPipeline.HwAccelOption
         $ffmpegArgsList = @("-hide_banner", "-y")
         if ($isDashInput) {
             # DASH入力はタイムスタンプ欠落/逆行が発生しやすいためPTS生成を有効化
@@ -2809,29 +2800,7 @@ function Invoke-EncodeFile {
         if ($cutInfo) { $ffmpegArgsList += @("-ss", "0") }
         $ffmpegArgsList += $currentVideoOptions.Split(' ', $splitOptions)
 
-        # --- HWデコード (d3d11/cuda/vulkan) 使用時のフィルター互換性処理 ---
-        # d3d11/cuda/vulkan出力フォーマット使用時、ソフトウェアフィルターやCPUエンコーダーのために
-        # hwdownload,format=nv12 を自動挿入してGPU→CPU転送を行う
-        $needsHwDownload = $effectiveHwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan|qsv|dxva2)'
-        $isVulkanDecode = $effectiveHwAccelOption -match '-hwaccel\s+vulkan'
-        $isHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv|mf|d3d12va)'
-        $resolvedVF = $Config.AdditionalVF
-
-        if ($needsHwDownload) {
-            if ($resolvedVF) {
-                # ソフトウェアフィルターがある場合: hwdownload を先頭に挿入
-                $resolvedVF = "hwdownload,format=nv12,$resolvedVF"
-                Write-Log "HWデコード互換: フィルターに hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
-            }
-            elseif ($isVulkanDecode -or -not $isHwEncoder) {
-                # フィルター無し + (Vulkanデコード または CPUエンコーダー) の場合: hwdownload フィルターを追加
-                $resolvedVF = "hwdownload,format=nv12"
-                Write-Log "HWデコード互換: hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
-            }
-            # HWエンコーダー + フィルター無しの場合はゼロコピーパスのため何もしない
-        }
-
-        if ($resolvedVF) { $ffmpegArgsList += @("-vf", "`"$resolvedVF`"") }
+        if ($filterPipeline.Filter) { $ffmpegArgsList += @("-vf", ('"{0}"' -f $filterPipeline.Filter)) }
         if ($Config.AdditionalArgs) { $ffmpegArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
 
         $inputCount = 1; $audioInputIndex = 0; $metadataInputIndex = 0
@@ -2853,6 +2822,7 @@ function Invoke-EncodeFile {
         }
         
         if ($useFfmpegMetadata) { $ffmpegArgsList += @("-map_metadata", "$metadataInputIndex") }
+        $ffmpegArgsList = Add-PreservedFrameRateOption -Arguments $ffmpegArgsList -VideoOptions $currentVideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $filterPipeline.Filter
         $ffmpegArgsList += "`"$outputFile`""
         $finalArgString = $ffmpegArgsList -join ' '
 
