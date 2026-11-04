@@ -3000,7 +3000,7 @@ function Invoke-EncodeFile {
                 Write-Log "出力フレームレート: CFR (明示されたFPS設定を優先)"
             }
             elseif ($platformSourceFrameRate) {
-                Write-Log "出力フレームレート: CFR ($platformSourceFrameRate fps / 元動画の基準値)"
+                Write-Log "出力フレームレート: CFR ($platformSourceFrameRate fps / PTS分布から自動選択)"
             }
             else {
                 Write-Log "出力フレームレート: CFR (FFmpegがFPSを自動判定)" -Level "WARN"
