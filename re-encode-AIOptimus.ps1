@@ -2972,18 +2972,25 @@ function Invoke-EncodeFile {
         }
 
         if ($isHevcQvbrEncode) {
-            $rcDetails = [regex]::Matches($result.StdErr, '(?im)Using the (.+?) ratecontrol method')
-            if ($rcDetails.Count -gt 0) {
-                $rcLabel = $rcDetails[$rcDetails.Count - 1].Groups[1].Value.Trim()
-                if ($rcLabel -match '\(QVBR\)') {
-                    Write-Log "QSV実際のレート制御: $rcLabel"
+            $actualModes = [regex]::Matches($result.StdErr, '(?im)RateControlMethod:\s*([A-Z0-9_]+)')
+            if ($actualModes.Count -gt 0) {
+                $actualMode = $actualModes[$actualModes.Count - 1].Groups[1].Value
+                if ($actualMode -eq "QVBR") {
+                    Write-Log "QSV実際のレート制御: $actualMode"
                 }
                 else {
-                    Write-Log "QSV実際のレート制御: $rcLabel (QVBRを要求しましたが異なる方式が選択されました)" -Level "WARN"
+                    Write-Log "QSV実際のレート制御: $actualMode (要求したQVBRと異なります)" -Level "WARN"
                 }
             }
             else {
-                Write-Log "QSV実際のレート制御を取得できませんでした。ffmpeg詳細ログを確認してください。" -Level "WARN"
+                $requestedModes = [regex]::Matches($result.StdErr, '(?im)Using the (.+?) ratecontrol method')
+                if ($requestedModes.Count -gt 0) {
+                    $requestedMode = $requestedModes[$requestedModes.Count - 1].Groups[1].Value.Trim()
+                    Write-Log "FFmpegが選択したレート制御: $requestedMode (QSV実稼働モードは未確認)" -Level "WARN"
+                }
+                else {
+                    Write-Log "QSVレート制御をログから確認できませんでした。FFmpeg詳細ログを確認してください。" -Level "WARN"
+                }
             }
         }
 
