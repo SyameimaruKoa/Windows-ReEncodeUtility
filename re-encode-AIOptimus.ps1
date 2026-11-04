@@ -1009,7 +1009,7 @@ function Remove-HwAccelFromArgs {
     $result = $result -replace '\s*-hwaccel\s+\S+', ''
     $result = $result -replace '\s*-extra_hw_frames\s+\d+', ''
     # GPUフィルターをCPU版へ置換し、転送フィルターを除去してから再試行
-    $result = [regex]::Replace($result, '(scale_qsv|vpp_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=(?:w|width)=(-?\d+):(?:h|height)=([^,\s`"]+)', {
+    $result = [regex]::Replace($result, '(scale_qsv|vpp_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=(?:w|width)=(-?\d+):(?:h|height)=([^:,\s`"]+)(?::format=[a-zA-Z0-9_]+)?', {
         param($match)
         return "scale=$($match.Groups[2].Value):$($match.Groups[3].Value)"
     })
@@ -1122,27 +1122,23 @@ function Resolve-VideoFilterPipeline {
             "vulkan"       { "scale_vulkan" }
             "vaapi"        { "scale_vaapi" }
             "videotoolbox" { "scale_vt" }
-            default        { if ($frameFormat -in @("dxva2", "dxva2_vld")) { "scale_d3d11" } else { "" } }
+            default        { "" }
         }
         if ($frameFormat -eq 'qsv' -and -not (Test-FfmpegVideoFilter -Name 'scale_qsv') -and (Test-FfmpegVideoFilter -Name 'vpp_qsv')) {
             $filterName = 'vpp_qsv'
             Write-Log 'QSVスケーラー: scale_qsvが未搭載のためvpp_qsvを使用' -Level 'DEBUG'
         }
-        if ($frameFormat -in @('dxva2', 'dxva2_vld') -and $global:HardwareInfo -and $global:HardwareInfo.ScanCompleted -and $global:HardwareInfo.AvailableHwAccels -notcontains 'd3d11va') {
-            $filterName = ''
-        }
         if ($filterName -and (Test-FfmpegVideoFilter -Name $filterName)) {
-            if ($frameFormat -in @("dxva2", "dxva2_vld")) {
-                $result.HwAccelOption = $HwAccelOption -replace '-hwaccel\s+dxva2', '-hwaccel d3d11va'
-                $result.HwAccelOption = $result.HwAccelOption -replace '-hwaccel_output_format\s+\S+', '-hwaccel_output_format d3d11'
-                $frameFormat = "d3d11"
-                Write-Log "GPUリサイズのためDXVA2からD3D11VAへ切り替え" -Level "DEBUG"
-            }
-            $gpuFilter = if ($filterName -eq "scale_d3d11") { "${filterName}=width=$width"+":height=$height" } else { "${filterName}=w=$width"+":h=$height" }
+            $gpuFilter = if ($filterName -eq "scale_d3d11") { "${filterName}=width=$width"+":height=$height"+":format=nv12" } else { "${filterName}=w=$width"+":h=$height" }
             Write-Log "GPUリサイズ: $gpuFilter ($frameFormat)" -Level "DEBUG"
         }
         else {
-            Write-Log "GPUリサイズ未対応: $frameFormat。CPUのscaleを使用" -Level "WARN"
+            if ($frameFormat -in @("dxva2", "dxva2_vld")) {
+                Write-Log "DXVA2デコードを維持し、CPUのscaleへ転送します" -Level "DEBUG"
+            }
+            else {
+                Write-Log "GPUリサイズ未対応: $frameFormat。CPUのscaleを使用" -Level "WARN"
+            }
         }
     }
 
