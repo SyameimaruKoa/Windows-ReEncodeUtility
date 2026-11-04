@@ -1043,16 +1043,45 @@ function Invoke-QsvEncodeWithDepthFallback {
     )
 
     $isQsvEncode = $Arguments -match '(?i)(?:^|\s)-c:v(?:\:0)?\s+\S+_qsv\b'
-    $hasExplicitDepth = $Arguments -match '(?i)(?:^|\s)-async_depth(?:\:\S+)?\s+\S+'
-    if ($script:QsvDefaultDepth -or -not $isQsvEncode -or $hasExplicitDepth) {
+    if (-not $isQsvEncode) {
         return (Invoke-FfmpegEncode -Arguments $Arguments -DurationSeconds $DurationSeconds)
     }
 
+    $depthMatch = [regex]::Match($Arguments, '(?i)(?:^|\s)-async_depth(?:\:\S+)?\s+(\S+)')
+    if ($depthMatch.Success -or $script:QsvDefaultDepth) {
+        if ($depthMatch.Success) {
+            $mode = "手動指定 (async_depth=$($depthMatch.Groups[1].Value))"
+        }
+        else {
+            $mode = 'FFmpeg既定値 (async_depth未指定)'
+        }
+        Write-Log "QSV非同期モード: $mode / エンコード開始"
+        $result = Invoke-FfmpegEncode -Arguments $Arguments -DurationSeconds $DurationSeconds
+        if ($result.ExitCode -eq 0) {
+            Write-Log "QSV非同期モード: $mode / 正常完了"
+        }
+        else {
+            Write-Log "QSV非同期モード: $mode / 失敗 (終了コード: $($result.ExitCode))" -Level 'WARN'
+        }
+        return $result
+    }
+
+    Write-Log 'QSV非同期モード: 高速化 (async_depth=24) / エンコード開始'
     $optimizedArgs = [regex]::Replace($Arguments, '(?i)(-c:v(?:\:0)?\s+\S+_qsv\b)', '$1 -async_depth 24')
     $result = Invoke-FfmpegEncode -Arguments $optimizedArgs -DurationSeconds $DurationSeconds
-    if ($result.ExitCode -ne 0) {
-        Write-Log 'QSV async_depth 24で失敗。FFmpeg既定値（async_depth未指定）で再試行します。' -Level 'WARN'
-        $result = Invoke-FfmpegEncode -Arguments $Arguments -DurationSeconds $DurationSeconds
+    if ($result.ExitCode -eq 0) {
+        Write-Log 'QSV非同期モード: 高速化 (async_depth=24) / 正常完了'
+        return $result
+    }
+
+    Write-Log "QSV非同期モード: 高速化 (async_depth=24) / 失敗 (終了コード: $($result.ExitCode))。FFmpeg既定値 (async_depth未指定) で再試行します。" -Level 'WARN'
+    Write-Log 'QSV非同期モード: フォールバック (FFmpeg既定値、async_depth未指定) / エンコード開始'
+    $result = Invoke-FfmpegEncode -Arguments $Arguments -DurationSeconds $DurationSeconds
+    if ($result.ExitCode -eq 0) {
+        Write-Log 'QSV非同期モード: フォールバック (FFmpeg既定値、async_depth未指定) / 正常完了'
+    }
+    else {
+        Write-Log "QSV非同期モード: フォールバック (FFmpeg既定値、async_depth未指定) / 失敗 (終了コード: $($result.ExitCode))" -Level 'WARN'
     }
     return $result
 }
