@@ -1236,6 +1236,8 @@ function Resolve-VideoFilterPipeline {
 function Get-PlatformSourceFrameRate {
     param([string]$FilePath)
 
+    $nominalRate = ""
+    $nominalValue = 0.0
     try {
         $jsonStr = & $global:Settings.FfprobePath -v error -select_streams v:0 -show_entries stream=r_frame_rate,avg_frame_rate -of json "$FilePath" 2>$null | Out-String
         $json = $jsonStr | ConvertFrom-Json
@@ -1246,17 +1248,103 @@ function Get-PlatformSourceFrameRate {
                 if ($rate -match '^(\d+)/(\d+)$') {
                     $numerator = [double]$Matches[1]
                     $denominator = [double]$Matches[2]
-                    if ($denominator -gt 0 -and $numerator / $denominator -ge 1 -and $numerator / $denominator -le 240) {
-                        return $rate
+                    if ($denominator -gt 0) {
+                        $value = $numerator / $denominator
+                        if ($value -ge 1 -and $value -le 240) {
+                            $nominalRate = $rate
+                            $nominalValue = $value
+                            break
+                        }
                     }
                 }
             }
         }
     }
     catch {}
-    return ""
-}
 
+    try {
+        # 表示時刻(PTS)の実測分布を利用する。最大瞬間FPSだけでは決めない。
+        $timestamps = New-Object 'System.Collections.Generic.List[double]'
+        $packetTimes = @(& $global:Settings.FfprobePath -v error -select_streams v:0 -show_packets -show_entries packet=pts_time -of csv=p=0 "$FilePath" 2>$null)
+        foreach ($packetTime in $packetTimes) {
+            $timestamp = 0.0
+            if ([double]::TryParse([string]$packetTime, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$timestamp)) {
+                $timestamps.Add($timestamp)
+            }
+        }
+        if ($timestamps.Count -lt 40) { return $nominalRate }
+        $timestamps.Sort()
+
+        $instantFps = New-Object 'System.Collections.Generic.List[double]'
+        for ($i = 1; $i -lt $timestamps.Count; $i++) {
+            $delta = $timestamps[$i] - $timestamps[$i - 1]
+            if ($delta -ge (1.0 / 480.0) -and $delta -le 1.0) {
+                $instantFps.Add(1.0 / $delta)
+            }
+        }
+        if ($instantFps.Count -lt 30) { return $nominalRate }
+        $instantFps.Sort()
+
+        $median = $instantFps[[int][math]::Floor(($instantFps.Count - 1) / 2.0)]
+        $outliers = 0
+        for ($i = $instantFps.Count - 1; $i -ge 0; $i--) {
+            if ($instantFps[$i] -le $median * 1.75) { break }
+            $outliers++
+        }
+        $regularCount = $instantFps.Count
+        if ($outliers -gt 0 -and ($outliers / [double]$instantFps.Count) -le 0.10) {
+            $regularCount -= $outliers
+        }
+        else {
+            $outliers = 0
+        }
+        # 上位99%を使い、通常の高FPS区間はなるべく残し、単発の高FPS外れ値だけを除く。
+        $upperIndex = [int][math]::Ceiling(($regularCount - 1) * 0.99)
+        $targetFps = $instantFps[$upperIndex]
+        $rateText = ""
+
+        if ($nominalValue -gt 0 -and [math]::Abs($nominalValue - $targetFps) / $targetFps -le 0.02) {
+            $rateText = $nominalRate
+        }
+        else {
+            $commonRates = @(
+                @{ Rate = "24000/1001"; Value = 24000.0 / 1001.0 },
+                @{ Rate = "24"; Value = 24.0 },
+                @{ Rate = "25"; Value = 25.0 },
+                @{ Rate = "30000/1001"; Value = 30000.0 / 1001.0 },
+                @{ Rate = "30"; Value = 30.0 },
+                @{ Rate = "48"; Value = 48.0 },
+                @{ Rate = "50"; Value = 50.0 },
+                @{ Rate = "60000/1001"; Value = 60000.0 / 1001.0 },
+                @{ Rate = "60"; Value = 60.0 },
+                @{ Rate = "90"; Value = 90.0 },
+                @{ Rate = "120000/1001"; Value = 120000.0 / 1001.0 },
+                @{ Rate = "120"; Value = 120.0 },
+                @{ Rate = "144"; Value = 144.0 },
+                @{ Rate = "165"; Value = 165.0 },
+                @{ Rate = "240"; Value = 240.0 }
+            )
+            $bestError = 0.02
+            foreach ($candidate in $commonRates) {
+                $errorRatio = [math]::Abs($candidate.Value - $targetFps) / $targetFps
+                if ($errorRatio -lt $bestError) {
+                    $rateText = $candidate.Rate
+                    $bestError = $errorRatio
+                }
+            }
+            if (-not $rateText) {
+                $rateText = $targetFps.ToString("0.###", [System.Globalization.CultureInfo]::InvariantCulture)
+            }
+        }
+        $outlierPct = [math]::Round($outliers * 100.0 / $instantFps.Count, 2)
+        Write-Log "CFRフレーム間隔解析: $($instantFps.Count)区間 / 中央値 $([math]::Round($median, 2))fps / 上位99% $([math]::Round($targetFps, 2))fps / 除外外れ値 $outlierPct% / 出力 $rateText fps"
+        return $rateText
+    }
+    catch {
+        Write-Log "CFRフレーム間隔の解析に失敗したため、動画の基準FPSを使用します: $_" -Level "WARN"
+    }
+    return $nominalRate
+}
 function Add-PreservedFrameRateOption {
     param(
         [string[]]$Arguments,
