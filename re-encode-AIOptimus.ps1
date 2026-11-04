@@ -1621,7 +1621,7 @@ function Invoke-PlatformUploadSetup {
     # --- 1. プラットフォーム選択 ---
     $platformChoices = @(
         "Twitter        (上限: 512MB, H.264固定, 720p)",
-        "Discord        (上限: 10MB, コーデック選択可)",
+        "Discord        (上限: 20MB, コーデック選択可)",
         "catbox.moe     (上限: 200MB, コーデック選択可)",
         "uguu.se       (上限: 64MB, コーデック選択可)",
         "GitHub         (上限: 100MB, コーデック選択可)",
@@ -1633,7 +1633,7 @@ function Invoke-PlatformUploadSetup {
 
     $platformConfig = switch ($platformIndex) {
         0 { @{ Name = "Twitter"; MaxFileSizeMB = 512; MaxResolution = "720p"; ForcedCodec = "H.264"; AllowedCodecs = @("H.264"); Extension = "mp4"; NoMaxrate = $false } }
-        1 { @{ Name = "Discord"; MaxFileSizeMB = 10; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
+        1 { @{ Name = "Discord"; MaxFileSizeMB = 20; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
         2 { @{ Name = "catbox.moe"; MaxFileSizeMB = 200; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
         3 { @{ Name = "uguu.se"; MaxFileSizeMB = 64; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
         4 { @{ Name = "GitHub"; MaxFileSizeMB = 100; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
