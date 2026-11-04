@@ -1137,12 +1137,18 @@ function Resolve-VideoFilterPipeline {
             $filterName = 'vpp_qsv'
             Write-Log 'QSVスケーラー: scale_qsvが未搭載のためvpp_qsvを使用' -Level 'DEBUG'
         }
+        if ($frameFormat -eq 'd3d11' -and $VideoOptions -match '-c:v\s+\S+_qsv\b') {
+            $filterName = ''
+        }
         if ($filterName -and (Test-FfmpegVideoFilter -Name $filterName)) {
             $gpuFilter = if ($filterName -eq "scale_d3d11") { "${filterName}=width=$width"+":height=$height"+":format=nv12" } else { "${filterName}=w=$width"+":h=$height" }
             Write-Log "GPUリサイズ: $gpuFilter ($frameFormat)" -Level "DEBUG"
         }
         else {
-            if ($frameFormat -in @("dxva2", "dxva2_vld")) {
+            if ($frameFormat -eq "d3d11" -and $VideoOptions -match '-c:v\s+\S+_qsv\b') {
+                Write-Log "D3D11VAデコードとQSVエンコードを維持し、検証済みのCPUリサイズを使用します" -Level "DEBUG"
+            }
+            elseif ($frameFormat -in @("dxva2", "dxva2_vld")) {
                 Write-Log "DXVA2デコードを維持し、CPUのscaleへ転送します" -Level "DEBUG"
             }
             else {
