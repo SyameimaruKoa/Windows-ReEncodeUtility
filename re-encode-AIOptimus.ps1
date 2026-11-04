@@ -6,6 +6,10 @@
     対話形式での詳細な設定、テンプレートの利用、高品質な中間ファイルの作成、
     さらにチャプターや字幕に基づいた分割保存が可能じゃ。
     エンコード設定は get-ffmpegOptions.ps1 で行うぞ。
+.PARAMETER QsvDefaultDepth
+    QSVのasync_depthをFFmpeg既定値（未指定）で実行する。メニュー選択項目は追加しない。
+.PARAMETER ShowHelp
+    -h または -help で詳しい使い方を表示する。パス未指定でも表示する。
 .PARAMETER Path
     処理対象の動画ファイルまたはフォルダのパスじゃ。複数指定も可能じゃぞ。
 .NOTES
@@ -14,12 +18,15 @@
 #>
 [CmdletBinding()]
 param (
-    [Parameter(Mandatory = $true, ValueFromPipeline = $true, ValueFromRemainingArguments = $true, HelpMessage = "処理対象のファイルまたはフォルダのパスを入力せい。")]
+    [switch]$QsvDefaultDepth,
+    [Alias('h', 'help')]
+    [switch]$ShowHelp,
+    [Parameter(ValueFromPipeline = $true, ValueFromRemainingArguments = $true, HelpMessage = "処理対象のファイルまたはフォルダのパスを入力せい。")]
     [string[]]$Path
 )
 
 #region ヘルプ表示
-if ($args -contains "-h" -or $args -contains "--help") {
+if ($ShowHelp -or $args -contains "-h" -or $args -contains "--help" -or -not $Path -or $Path.Count -eq 0) {
     Get-Help $MyInvocation.MyCommand.Path -Detailed
     exit
 }
@@ -993,7 +1000,7 @@ function Test-HwAccelRelatedFailure {
     #>
     param([string]$StdErr)
     if (-not $StdErr) { return $false }
-    return ($StdErr -match 'Failed setup for format|hwaccel initialisation returned error|Error reinitializing filters|Device does not support.*VK_|hw_device_ctx.*failed|Cannot map.*surface|hwframe.*error')
+    return ($StdErr -match 'Failed setup for format|hwaccel initialisation returned error|Error reinitializing filters|Device does not support.*VK_|hw_device_ctx.*failed|Cannot map.*surface|hwframe.*error|Error parsing filterchain.*(?:scale_qsv|vpp_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=|Error initializing filter.*(?:scale_qsv|vpp_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)')
 }
 
 function Remove-HwAccelFromArgs {
@@ -1008,14 +1015,76 @@ function Remove-HwAccelFromArgs {
     $result = $result -replace '\s*-hwaccel_output_format\s+\S+', ''
     $result = $result -replace '\s*-hwaccel\s+\S+', ''
     $result = $result -replace '\s*-extra_hw_frames\s+\d+', ''
-    # -vfからhwdownloadを除去
-    # Case 1: hwdownload,format=nv12 のみ → -vf自体を除去
+    # GPUフィルターをCPU版へ置換し、転送フィルターを除去してから再試行
+    $result = [regex]::Replace($result, '(scale_qsv|vpp_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=(?:w|width)=(-?\d+):(?:h|height)=([^:,\s`"]+)(?::format=[a-zA-Z0-9_]+)?', {
+        param($match)
+        return "scale=$($match.Groups[2].Value):$($match.Groups[3].Value)"
+    })
+    $result = $result -replace 'hwdownload,format=nv12,', ''
+    $result = $result -replace ',hwdownload,format=nv12', ''
     $result = $result -replace '\s*-vf\s+"hwdownload,format=nv12"', ''
-    # Case 2: hwdownload,format=nv12,<他のフィルタ> → hwdownload部分のみ除去
-    $result = $result -replace '(-vf\s+")hwdownload,format=nv12,', '$1'
+    $result = $result -replace '\s*-vf\s+""', ''
     return ($result -replace '\s{2,}', ' ').Trim()
 }
 
+function Convert-D3D11ScaleToCpuScale {
+    param([string]$ArgString)
+    $pattern = '(-vf\s+")scale_d3d11=width=(?<width>\d+):height=(?<height>[^:,"]+):format=[a-zA-Z0-9_]+(?:,hwdownload,format=nv12)?'
+    return [regex]::Replace($ArgString, $pattern, {
+        param($match)
+        return "$($match.Groups[1].Value)hwdownload,format=nv12,scale=$($match.Groups['width'].Value):$($match.Groups['height'].Value)"
+    })
+}
+
+function Invoke-QsvEncodeWithDepthFallback {
+    param(
+        [string]$Arguments,
+        [double]$DurationSeconds = 0
+    )
+
+    $isQsvEncode = $Arguments -match '(?i)(?:^|\s)-c:v(?:\:0)?\s+\S+_qsv\b'
+    if (-not $isQsvEncode) {
+        return (Invoke-FfmpegEncode -Arguments $Arguments -DurationSeconds $DurationSeconds)
+    }
+
+    $depthMatch = [regex]::Match($Arguments, '(?i)(?:^|\s)-async_depth(?:\:\S+)?\s+(\S+)')
+    if ($depthMatch.Success -or $script:QsvDefaultDepth) {
+        if ($depthMatch.Success) {
+            $mode = "手動指定 (async_depth=$($depthMatch.Groups[1].Value))"
+        }
+        else {
+            $mode = 'FFmpeg既定値 (async_depth未指定)'
+        }
+        Write-Log "QSV非同期モード: $mode / エンコード開始"
+        $result = Invoke-FfmpegEncode -Arguments $Arguments -DurationSeconds $DurationSeconds
+        if ($result.ExitCode -eq 0) {
+            Write-Log "QSV非同期モード: $mode / 正常完了"
+        }
+        else {
+            Write-Log "QSV非同期モード: $mode / 失敗 (終了コード: $($result.ExitCode))" -Level 'WARN'
+        }
+        return $result
+    }
+
+    Write-Log 'QSV非同期モード: 高速化 (async_depth=24) / エンコード開始'
+    $optimizedArgs = [regex]::Replace($Arguments, '(?i)(-c:v(?:\:0)?\s+\S+_qsv\b)', '$1 -async_depth 24')
+    $result = Invoke-FfmpegEncode -Arguments $optimizedArgs -DurationSeconds $DurationSeconds
+    if ($result.ExitCode -eq 0) {
+        Write-Log 'QSV非同期モード: 高速化 (async_depth=24) / 正常完了'
+        return $result
+    }
+
+    Write-Log "QSV非同期モード: 高速化 (async_depth=24) / 失敗 (終了コード: $($result.ExitCode))。FFmpeg既定値 (async_depth未指定) で再試行します。" -Level 'WARN'
+    Write-Log 'QSV非同期モード: フォールバック (FFmpeg既定値、async_depth未指定) / エンコード開始'
+    $result = Invoke-FfmpegEncode -Arguments $Arguments -DurationSeconds $DurationSeconds
+    if ($result.ExitCode -eq 0) {
+        Write-Log 'QSV非同期モード: フォールバック (FFmpeg既定値、async_depth未指定) / 正常完了'
+    }
+    else {
+        Write-Log "QSV非同期モード: フォールバック (FFmpeg既定値、async_depth未指定) / 失敗 (終了コード: $($result.ExitCode))" -Level 'WARN'
+    }
+    return $result
+}
 function Get-EffectiveHwAccelOption {
     <#
     .SYNOPSIS
@@ -1032,11 +1101,13 @@ function Get-EffectiveHwAccelOption {
     if ($result -notmatch '-extra_hw_frames\b') {
         $isCudaDecode = $result -match '-hwaccel\s+cuda\b'
         $isQsvDecode = $result -match '-hwaccel\s+qsv\b'
+        $isAmfDecode = $result -match '-hwaccel\s+amf\b'
         $isNvencEncode = $VideoOptions -match '-c:v\s+\S+_nvenc\b'
         $isQsvEncode = $VideoOptions -match '-c:v\s+\S+_qsv\b'
+        $isAmfEncode = $VideoOptions -match '-c:v\s+\S+_amf\b'
 
         # 同じGPU系の入出力なら、初回から extra_hw_frames を付けず、必要時のみ再試行に回す
-        $shouldSkipExtraFrames = ($isCudaDecode -and $isNvencEncode) -or ($isQsvDecode -and $isQsvEncode)
+        $shouldSkipExtraFrames = ($isCudaDecode -and $isNvencEncode) -or ($isQsvDecode -and $isQsvEncode) -or ($isAmfDecode -and $isAmfEncode)
         if (-not $shouldSkipExtraFrames) {
             $result += " -extra_hw_frames 64"
         }
@@ -1056,6 +1127,120 @@ function Set-HwAccelOutputFormat {
     return ($res -replace '\s{2,}', ' ').Trim()
 }
 #endregion
+
+
+function Test-FfmpegVideoFilter {
+    param([string]$Name)
+    if ($null -eq $script:AvailableVideoFilters) {
+        $script:AvailableVideoFilters = @{}
+    }
+    if (-not $script:AvailableVideoFilters.ContainsKey($Name)) {
+        $helpLines = @(& $global:Settings.FfmpegPath -hide_banner -h "filter=$Name" 2>$null)
+        $header = '^Filter\s+' + [regex]::Escape($Name) + '\s*$'
+        $available = $false
+        foreach ($line in $helpLines) {
+            if ($line -match $header) {
+                $available = $true
+                break
+            }
+        }
+        $script:AvailableVideoFilters[$Name] = $available
+        Write-Log "FFmpegフィルター: $Name (利用可: $available)" -Level "DEBUG"
+    }
+    return [bool]$script:AvailableVideoFilters[$Name]
+}
+function Test-HwFrameEncoderCompatibility {
+    param([string]$FrameFormat, [string]$VideoOptions)
+    if ($VideoOptions -notmatch '-c:v\s+([a-zA-Z0-9_]+)') { return $false }
+    $encoder = $Matches[1]
+    switch ($FrameFormat) {
+        "qsv"          { return ($encoder -match '_qsv$') }
+        "cuda"         { return ($encoder -match '_nvenc$') }
+        "amf"          { return ($encoder -match '_amf$') }
+        "d3d11"        { return ($encoder -match '_(amf|nvenc|mf)$') }
+        "vulkan"       { return ($encoder -match '_vulkan$') }
+        "vaapi"        { return ($encoder -match '_vaapi$') }
+        "videotoolbox" { return ($encoder -match '_videotoolbox$') }
+        default        { return $false }
+    }
+}
+
+function Resolve-VideoFilterPipeline {
+    param([string]$HwAccelOption, [string]$VideoOptions, [string]$VideoFilter)
+    $result = @{ HwAccelOption = $HwAccelOption; Filter = $VideoFilter }
+    if (-not $HwAccelOption -or $HwAccelOption -notmatch '-hwaccel_output_format\s+(\S+)') { return $result }
+    $frameFormat = $Matches[1]
+    $scaleMatch = [regex]::Match([string]$VideoFilter, '^\s*scale=(?<w>\d+):(?<h>-2|-1|\d+)(?:,(?<tail>.*))?\s*$')
+    $gpuFilter = ""
+    $tail = ""
+    if ($scaleMatch.Success) {
+        $width = $scaleMatch.Groups['w'].Value
+        $height = $scaleMatch.Groups['h'].Value
+        $tail = $scaleMatch.Groups['tail'].Value
+        if ($height -eq "-2") { $height = "trunc(ih*$width/iw/2)*2" }
+        elseif ($height -eq "-1") { $height = "trunc(ih*$width/iw)" }
+        $filterName = switch ($frameFormat) {
+            "qsv"          { "scale_qsv" }
+            "cuda"         { "scale_cuda" }
+            "amf"          { "vpp_amf" }
+            "d3d11"        { "scale_d3d11" }
+            "vulkan"       { "scale_vulkan" }
+            "vaapi"        { "scale_vaapi" }
+            "videotoolbox" { "scale_vt" }
+            default        { "" }
+        }
+        if ($frameFormat -eq 'qsv' -and -not (Test-FfmpegVideoFilter -Name 'scale_qsv') -and (Test-FfmpegVideoFilter -Name 'vpp_qsv')) {
+            $filterName = 'vpp_qsv'
+            Write-Log 'QSVスケーラー: scale_qsvが未搭載のためvpp_qsvを使用' -Level 'DEBUG'
+        }
+        if ($frameFormat -eq 'd3d11' -and $VideoOptions -match '-c:v\s+\S+_qsv\b') {
+            $filterName = ''
+        }
+        if ($filterName -and (Test-FfmpegVideoFilter -Name $filterName)) {
+            $gpuFilter = if ($filterName -eq "scale_d3d11") { "${filterName}=width=$width"+":height=$height"+":format=nv12" } else { "${filterName}=w=$width"+":h=$height" }
+            Write-Log "GPUリサイズ: $gpuFilter ($frameFormat)" -Level "DEBUG"
+        }
+        else {
+            if ($frameFormat -eq "d3d11" -and $VideoOptions -match '-c:v\s+\S+_qsv\b') {
+                Write-Log "D3D11VAデコードとQSVエンコードを維持し、検証済みのCPUリサイズを使用します" -Level "DEBUG"
+            }
+            elseif ($frameFormat -in @("dxva2", "dxva2_vld")) {
+                Write-Log "DXVA2デコードを維持し、CPUのscaleへ転送します" -Level "DEBUG"
+            }
+            else {
+                Write-Log "GPUリサイズ未対応: $frameFormat。CPUのscaleを使用" -Level "WARN"
+            }
+        }
+    }
+
+    $needsCpuFrames = -not (Test-HwFrameEncoderCompatibility -FrameFormat $frameFormat -VideoOptions $VideoOptions)
+    if ($gpuFilter) {
+        $result.Filter = $gpuFilter
+        if ($tail -or $needsCpuFrames) {
+            $result.Filter += ",hwdownload,format=nv12"
+            if ($tail) { $result.Filter += ",$tail" }
+        }
+    }
+    elseif ($VideoFilter -and $VideoFilter -notmatch '^(scale_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)\b') {
+        if ($VideoFilter -notmatch '^hwdownload\b') {
+            $result.Filter = "hwdownload,format=nv12,$VideoFilter"
+            Write-Log "GPU非対応の映像フィルター: CPUへ転送 ($VideoFilter)" -Level "DEBUG"
+        }
+    }
+    elseif ($needsCpuFrames -and $VideoFilter -notmatch 'hwdownload') {
+        $result.Filter = if ($VideoFilter) { "$VideoFilter,hwdownload,format=nv12" } else { "hwdownload,format=nv12" }
+    }
+    return $result
+}
+
+function Add-PreservedFrameRateOption {
+    param([string[]]$Arguments, [string]$VideoOptions, [string]$ExtraArguments, [string]$VideoFilter)
+    $rateOptions = "$VideoOptions $ExtraArguments"
+    if ($rateOptions -notmatch '(?:^|\s)-(?:r(?:\:v(?:\:0)?)?|vsync|fps_mode(?:\:v(?:\:0)?)?)\s+' -and $VideoFilter -notmatch '(?:^|,)fps=') {
+        return @($Arguments + @("-fps_mode:v", "passthrough"))
+    }
+    return $Arguments
+}
 
 #region ハードウェア検出・コーデックフィルタ
 
@@ -1503,7 +1688,7 @@ function Invoke-PlatformUploadSetup {
     # --- 1. プラットフォーム選択 ---
     $platformChoices = @(
         "Twitter        (上限: 512MB, H.264固定, 720p)",
-        "Discord        (上限: 10MB, コーデック選択可)",
+        "Discord        (上限: 20MB, コーデック選択可)",
         "catbox.moe     (上限: 200MB, コーデック選択可)",
         "uguu.se       (上限: 64MB, コーデック選択可)",
         "GitHub         (上限: 100MB, コーデック選択可)",
@@ -1515,7 +1700,7 @@ function Invoke-PlatformUploadSetup {
 
     $platformConfig = switch ($platformIndex) {
         0 { @{ Name = "Twitter"; MaxFileSizeMB = 512; MaxResolution = "720p"; ForcedCodec = "H.264"; AllowedCodecs = @("H.264"); Extension = "mp4"; NoMaxrate = $false } }
-        1 { @{ Name = "Discord"; MaxFileSizeMB = 10; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
+        1 { @{ Name = "Discord"; MaxFileSizeMB = 20; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
         2 { @{ Name = "catbox.moe"; MaxFileSizeMB = 200; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
         3 { @{ Name = "uguu.se"; MaxFileSizeMB = 64; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
         4 { @{ Name = "GitHub"; MaxFileSizeMB = 100; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
@@ -2041,6 +2226,7 @@ function Start-MainProcess {
         @{ Label = "使用しない (CPUデコード)"; Accel = "" },
         @{ Label = "NVIDIA (cuda)"; Accel = "cuda" },
         @{ Label = "Intel (qsv)"; Accel = "qsv" },
+        @{ Label = "AMD (amf)"; Accel = "amf" },
         @{ Label = "推奨・Windows標準 (d3d11va)"; Accel = "d3d11va" },
         @{ Label = "Windows汎用 (dxva2)"; Accel = "dxva2" },
         @{ Label = "Vulkan (vulkan)"; Accel = "vulkan" }
@@ -2085,11 +2271,11 @@ function Start-MainProcess {
         }
         # DXVA2 の場合は dxva2 を指定
         if ($selectedHwAccel -eq "dxva2") {
-            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'dxva2'
+            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'dxva2_vld'
         }
         # AMD/AMF は d3d11 出力を使うのが一般的
         if ($selectedHwAccel -eq "amf") {
-            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'd3d11'
+            $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'amf'
         }
         # Vulkan 使用時は出力フォーマットvulkanでGPUメモリ上に保持する
         if ($selectedHwAccel -eq "vulkan") {
@@ -2392,6 +2578,8 @@ function Invoke-SplitEncodeFile {
 
             # --- 映像エンコードと結合 ---
             $effectiveHwAccelOption = Get-EffectiveHwAccelOption -HwAccelOption $HwAccelOption -VideoOptions $Config.EncoderSettings.Video
+            $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $Config.EncoderSettings.Video -VideoFilter $Config.AdditionalVF
+            $effectiveHwAccelOption = $filterPipeline.HwAccelOption
             $ffmpegArgsList = @("-hide_banner", "-y")
             if ($effectiveHwAccelOption) { $ffmpegArgsList += $effectiveHwAccelOption.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) }
             
@@ -2407,14 +2595,7 @@ function Invoke-SplitEncodeFile {
             $splitOptions = [System.StringSplitOptions]::RemoveEmptyEntries
             $ffmpegArgsList += $Config.EncoderSettings.Video.Split(' ', $splitOptions)
 
-            # --- HWデコード (d3d11/cuda/vulkan) 使用時のフィルター互換性処理 ---
-            $needsHwDownload = $effectiveHwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan|qsv|dxva2)'
-            $isVulkanDecode = $effectiveHwAccelOption -match '-hwaccel\s+vulkan'
-            $isHwEncoder = $Config.EncoderSettings.Video -match '-c:v\s+\S+_(amf|nvenc|qsv|mf|d3d12va)'
-            if ($needsHwDownload -and ($isVulkanDecode -or -not $isHwEncoder)) {
-                $ffmpegArgsList += @("-vf", "`"hwdownload,format=nv12`"")
-                Write-Log "HWデコード互換: hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
-            }
+            if ($filterPipeline.Filter) { $ffmpegArgsList += @("-vf", ('"{0}"' -f $filterPipeline.Filter)) }
 
             if ($tempAudioOutFile) {
                 $ffmpegArgsList += @("-map", "0:v:0", "-map", "$($audioInputIndex):a:0", "-c:a", "copy")
@@ -2431,17 +2612,23 @@ function Invoke-SplitEncodeFile {
                 }
             }
 
+            $ffmpegArgsList = Add-PreservedFrameRateOption -Arguments $ffmpegArgsList -VideoOptions $Config.EncoderSettings.Video -ExtraArguments "" -VideoFilter $filterPipeline.Filter
             $ffmpegArgsList += "`"$outputFilePath`""
             $finalArgString = $ffmpegArgsList -join ' '
 
-            $result = Invoke-FfmpegEncode -Arguments $finalArgString -DurationSeconds $segDuration
+            $result = Invoke-QsvEncodeWithDepthFallback -Arguments $finalArgString -DurationSeconds $segDuration
+            if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -match '-hwaccel\s+d3d11va\b' -and $finalArgString -match '-vf\s+"scale_d3d11=' -and (Test-HwAccelRelatedFailure $result.StdErr)) {
+                Write-Log "D3D11VAのGPUリサイズに失敗。GPUデコードを維持し、CPUリサイズで再試行します。(セグメント: $outputFileName)" -Level "WARN"
+                $d3d11FallbackArgs = Convert-D3D11ScaleToCpuScale $finalArgString
+                $result = Invoke-QsvEncodeWithDepthFallback -Arguments $d3d11FallbackArgs -DurationSeconds $segDuration
+            }
 
             # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
             if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -and (Test-HwAccelRelatedFailure $result.StdErr)) {
                 Write-Log "HWアクセル関連エラーを検出。HWアクセルなしでリトライします。(セグメント: $outputFileName)" -Level "WARN"
                 $HwAccelOption = ""
                 $retryArgs = Remove-HwAccelFromArgs $finalArgString
-                $result = Invoke-FfmpegEncode -Arguments $retryArgs -DurationSeconds $segDuration
+                $result = Invoke-QsvEncodeWithDepthFallback -Arguments $retryArgs -DurationSeconds $segDuration
             }
 
             if ($result.ExitCode -ne 0) {
@@ -2650,34 +2837,30 @@ function Invoke-EncodeFile {
         if ($Config.PlatformMode -and $Config.TwoPassMode) {
             $passLogBase = Join-Path ([System.IO.Path]::GetTempPath()) ("ff2pass-" + [System.IO.Path]::GetRandomFileName())
             $pass1VideoOptions = "$currentVideoOptions -pass 1 -passlogfile $passLogBase"
+            $pass1Pipeline = Resolve-VideoFilterPipeline -HwAccelOption $HwAccelOption -VideoOptions $pass1VideoOptions -VideoFilter $Config.AdditionalVF
             $pass1ArgsList = @("-hide_banner", "-y")
             if ($isDashInput) {
                 $pass1ArgsList += @("-fflags", "+genpts")
             }
-            if ($HwAccelOption) { $pass1ArgsList += $HwAccelOption.Split(' ', $splitOptions) }
+            if ($pass1Pipeline.HwAccelOption) { $pass1ArgsList += $pass1Pipeline.HwAccelOption.Split(' ', $splitOptions) }
             $pass1ArgsList += $cutInfo.Split(' ', $splitOptions)
             $pass1ArgsList += @("-i", "`"$InputFile`"")
             if ($cutInfo) { $pass1ArgsList += @("-ss", "0") }
             $pass1ArgsList += $pass1VideoOptions.Split(' ', $splitOptions)
 
-            $pass1NeedsHwDownload = $HwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan|qsv|dxva2)'
-            $pass1IsVulkanDecode = $HwAccelOption -match '-hwaccel\s+vulkan'
-            $pass1IsHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv|mf|d3d12va)'
-            $pass1ResolvedVF = $Config.AdditionalVF
-            if ($pass1NeedsHwDownload) {
-                if ($pass1ResolvedVF) {
-                    $pass1ResolvedVF = "hwdownload,format=nv12,$pass1ResolvedVF"
-                }
-                elseif ($pass1IsVulkanDecode -or -not $pass1IsHwEncoder) {
-                    $pass1ResolvedVF = "hwdownload,format=nv12"
-                }
-            }
-            if ($pass1ResolvedVF) { $pass1ArgsList += @("-vf", "`"$pass1ResolvedVF`"") }
+            if ($pass1Pipeline.Filter) { $pass1ArgsList += @("-vf", ('"{0}"' -f $pass1Pipeline.Filter)) }
             if ($Config.AdditionalArgs) { $pass1ArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
+            $pass1ArgsList = Add-PreservedFrameRateOption -Arguments $pass1ArgsList -VideoOptions $pass1VideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $pass1Pipeline.Filter
             $pass1ArgsList += @("-an", "-f", "null", "NUL")
 
             Write-Log "========= 2pass: 1st pass 実行 =========" -NoTimestamp
-            $pass1Result = Invoke-FfmpegEncode -Arguments ($pass1ArgsList -join ' ') -DurationSeconds $inputDuration
+            $pass1ArgString = $pass1ArgsList -join ' '
+            $pass1Result = Invoke-QsvEncodeWithDepthFallback -Arguments $pass1ArgString -DurationSeconds $inputDuration
+            if ($pass1Result.ExitCode -ne 0 -and $pass1Pipeline.HwAccelOption -match '-hwaccel\s+d3d11va\b' -and $pass1ArgString -match '-vf\s+"scale_d3d11=' -and (Test-HwAccelRelatedFailure $pass1Result.StdErr)) {
+                Write-Log "D3D11VAのGPUリサイズに失敗。GPUデコードを維持し、CPUリサイズで1st passを再試行します。" -Level "WARN"
+                $d3d11FallbackArgs = Convert-D3D11ScaleToCpuScale $pass1ArgString
+                $pass1Result = Invoke-QsvEncodeWithDepthFallback -Arguments $d3d11FallbackArgs -DurationSeconds $inputDuration
+            }
             if ($pass1Result.ExitCode -ne 0) {
                 # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
                 if ($HwAccelOption -and (Test-HwAccelRelatedFailure $pass1Result.StdErr)) {
@@ -2685,7 +2868,7 @@ function Invoke-EncodeFile {
                     $HwAccelOption = ""
                     $retryArgs = Remove-HwAccelFromArgs ($pass1ArgsList -join ' ')
                     Write-Log "========= 2pass: 1st pass リトライ (HWアクセルなし) =========" -NoTimestamp
-                    $pass1Result = Invoke-FfmpegEncode -Arguments $retryArgs -DurationSeconds $inputDuration
+                    $pass1Result = Invoke-QsvEncodeWithDepthFallback -Arguments $retryArgs -DurationSeconds $inputDuration
                 }
                 if ($pass1Result.ExitCode -ne 0) {
                     Write-Log "2pass 1st pass 失敗 (終了コード: $($pass1Result.ExitCode))" -Level "ERROR"
@@ -2698,6 +2881,8 @@ function Invoke-EncodeFile {
         }
 
         # --- エンコード実行 ---
+        $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $currentVideoOptions -VideoFilter $Config.AdditionalVF
+        $effectiveHwAccelOption = $filterPipeline.HwAccelOption
         $ffmpegArgsList = @("-hide_banner", "-y")
         if ($isDashInput) {
             # DASH入力はタイムスタンプ欠落/逆行が発生しやすいためPTS生成を有効化
@@ -2712,29 +2897,7 @@ function Invoke-EncodeFile {
         if ($cutInfo) { $ffmpegArgsList += @("-ss", "0") }
         $ffmpegArgsList += $currentVideoOptions.Split(' ', $splitOptions)
 
-        # --- HWデコード (d3d11/cuda/vulkan) 使用時のフィルター互換性処理 ---
-        # d3d11/cuda/vulkan出力フォーマット使用時、ソフトウェアフィルターやCPUエンコーダーのために
-        # hwdownload,format=nv12 を自動挿入してGPU→CPU転送を行う
-        $needsHwDownload = $effectiveHwAccelOption -match '-hwaccel_output_format\s+(d3d11|cuda|vulkan|qsv|dxva2)'
-        $isVulkanDecode = $effectiveHwAccelOption -match '-hwaccel\s+vulkan'
-        $isHwEncoder = $currentVideoOptions -match '-c:v\s+\S+_(amf|nvenc|qsv|mf|d3d12va)'
-        $resolvedVF = $Config.AdditionalVF
-
-        if ($needsHwDownload) {
-            if ($resolvedVF) {
-                # ソフトウェアフィルターがある場合: hwdownload を先頭に挿入
-                $resolvedVF = "hwdownload,format=nv12,$resolvedVF"
-                Write-Log "HWデコード互換: フィルターに hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
-            }
-            elseif ($isVulkanDecode -or -not $isHwEncoder) {
-                # フィルター無し + (Vulkanデコード または CPUエンコーダー) の場合: hwdownload フィルターを追加
-                $resolvedVF = "hwdownload,format=nv12"
-                Write-Log "HWデコード互換: hwdownload,format=nv12 を自動挿入" -Level "DEBUG"
-            }
-            # HWエンコーダー + フィルター無しの場合はゼロコピーパスのため何もしない
-        }
-
-        if ($resolvedVF) { $ffmpegArgsList += @("-vf", "`"$resolvedVF`"") }
+        if ($filterPipeline.Filter) { $ffmpegArgsList += @("-vf", ('"{0}"' -f $filterPipeline.Filter)) }
         if ($Config.AdditionalArgs) { $ffmpegArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
 
         $inputCount = 1; $audioInputIndex = 0; $metadataInputIndex = 0
@@ -2756,11 +2919,18 @@ function Invoke-EncodeFile {
         }
         
         if ($useFfmpegMetadata) { $ffmpegArgsList += @("-map_metadata", "$metadataInputIndex") }
+        $ffmpegArgsList = Add-PreservedFrameRateOption -Arguments $ffmpegArgsList -VideoOptions $currentVideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $filterPipeline.Filter
         $ffmpegArgsList += "`"$outputFile`""
         $finalArgString = $ffmpegArgsList -join ' '
 
         Write-Log "========= ffmpeg エンコード実行 =========" -NoTimestamp
-        $result = Invoke-FfmpegEncode -Arguments $finalArgString -DurationSeconds $inputDuration
+        $result = Invoke-QsvEncodeWithDepthFallback -Arguments $finalArgString -DurationSeconds $inputDuration
+        if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -match '-hwaccel\s+d3d11va\b' -and $finalArgString -match '-vf\s+"scale_d3d11=' -and (Test-HwAccelRelatedFailure $result.StdErr)) {
+            Write-Log "D3D11VAのGPUリサイズに失敗。GPUデコードを維持し、CPUリサイズで再試行します。" -Level "WARN"
+            $d3d11FallbackArgs = Convert-D3D11ScaleToCpuScale $finalArgString
+            Write-Log "========= ffmpeg エンコード リトライ (D3D11VAデコード維持) =========" -NoTimestamp
+            $result = Invoke-QsvEncodeWithDepthFallback -Arguments $d3d11FallbackArgs -DurationSeconds $inputDuration
+        }
 
         # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
         if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -and (Test-HwAccelRelatedFailure $result.StdErr)) {
@@ -2768,7 +2938,7 @@ function Invoke-EncodeFile {
             $HwAccelOption = ""
             $retryArgs = Remove-HwAccelFromArgs $finalArgString
             Write-Log "========= ffmpeg エンコード リトライ (HWアクセルなし) =========" -NoTimestamp
-            $result = Invoke-FfmpegEncode -Arguments $retryArgs -DurationSeconds $inputDuration
+            $result = Invoke-QsvEncodeWithDepthFallback -Arguments $retryArgs -DurationSeconds $inputDuration
         }
 
         if ($result.ExitCode -ne 0) {

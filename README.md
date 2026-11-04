@@ -38,7 +38,7 @@ FFmpeg を使用して、ドラッグ＆ドロップした動画ファイルを�
 | **プラットフォーム** | **上限** | **推奨設定**                 |
 | -------------------- | -------- | ---------------------------- |
 | **Twitter**          | 512MB    | H.264 固定, 720p, AAC        |
-| **Discord**          | 10MB     | 低ビットレート + HE-AAC/Opus |
+| **Discord**          | 20MB     | 低ビットレート + HE-AAC/Opus |
 | **catbox.moe**       | 200MB    | 任意コーデック選択可         |
 | **uguu.se**          | 64MB     | 小容量向け最適化             |
 | **GitHub**           | 100MB    | WebM/MP4 選択可              |
@@ -214,6 +214,20 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 .\start.bat -h
 ```
 
+### QSV非同期処理数（メニュー項目なし）
+
+QSVエンコード時は `-async_depth 24` を優先し、FFmpegがエラー終了した場合のみ `-async_depth` を指定せずに再試行します（FFmpeg既定値は4）。エンコードが正常終了していても遅い場合の自動最適化は行いません。Bフレーム設定は変更せず、DTS警告だけでは再試行しません。
+
+初回からFFmpegの既定値で開始したい場合は、起動時に `-QsvDefaultDepth` を付けます。選択メニューに項目は追加されません。
+
+エンコード開始時と完了時には、画面とログファイルへ `QSV非同期モード` として「高速化 (24)」「FFmpeg既定値」「手動指定」のどれを使用したか表示します。Depth 24で失敗した場合は、フォールバック開始とその結果も記録します。
+
+```powershell
+.\re-encode-AIOptimus.ps1 -QsvDefaultDepth "C:\Videos\input.mp4"
+.\start.bat -QsvDefaultDepth "C:\Videos\input.mp4"
+```
+
+FFmpegの追加引数などで `-async_depth` が明示指定されている場合は、その値を優先します。この機能はQSVエンコーダーだけが対象で、その他のエンコーダーには適用しません。
 ### インタラクティブメニュー詳細
 
 #### 【メイン】モード選択
@@ -325,17 +339,17 @@ AV1:
 
 容量上限に収めながら最高品質を自動計算します。
 
-**例：Discord (10MB 上限)**
+**例：Discord (20MB 上限)**
 
 ```text
 入力：60秒 動画
 計算プロセス：
-    1. 総ビットレート上限 = (10MB × 0.90) × 8 × 1024 / 60秒
+    1. 総ビットレート上限 = (20MB × 0.90) × 8 × 1024 / 60秒
     2. 音声: Opus 64kbps → 音声ビットレート = 64kbps
     3. 映像ビットレート = 総上限 - 音声
     4. CRF値自動計算：内部的に maxrate で制御
 
-結果：H.265 CRF:22 + maxrate:1024k で 9.8MB に収束
+結果：H.265 CRF:22 + maxrate:2394k で上限20MB以内を目標に制御
 ```
 
 **計算メトリクス：**
@@ -389,6 +403,12 @@ WebM、MKV、MP4 などのコンテナ書込みバッファリングによるサ
   ├─ FFmpeg 警告・エラー（カラー分類）
   └─ 所要時間・エンコード完了情報
 ```
+
+### GPUリサイズとフレーム保持
+
+- GPUデコード中の `scale=幅:-2` は、利用可能なGPUフィルター（`scale_qsv`、`scale_cuda`、`vpp_amf`、`scale_d3d11`、`scale_vulkan` など）へ自動切替。対応フィルターは `ffmpeg -h filter=フィルター名` で直接判定します（QSVは `scale_qsv` がない場合 `vpp_qsv` を確認）。
+- GPU処理に対応しないフィルターやCPUエンコーダーでは、必要な時点でのみ `hwdownload` を行います。D3D11VAデコード＋QSVエンコードでは実機検証済みの `hwdownload,format=nv12,scale` を優先します。それ以外のD3D11VAのGPUリサイズでは出力形式をNV12に明示し、実行時にテクスチャ生成などで失敗した場合はD3D11VAデコードを維持してCPUリサイズを再試行します。それでも失敗した場合は既存のCPUデコードへの再試行を行います。DXVA2はデコーダーを切り替えずに保持し、GPUスケーラーがないため `hwdownload` 後にCPUリサイズします。
+- フレームレートが明示指定されていない場合は `-fps_mode:v passthrough` で元のフレーム時刻を保持します。入力がVFRなら出力もVFRになります。
 
 ### 7. エラーハンドリング
 
