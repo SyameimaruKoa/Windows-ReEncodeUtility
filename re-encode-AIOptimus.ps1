@@ -1236,8 +1236,6 @@ function Resolve-VideoFilterPipeline {
 function Get-PlatformSourceFrameRate {
     param([string]$FilePath)
 
-    $nominalRate = ""
-    $nominalValue = 0.0
     try {
         $jsonStr = & $global:Settings.FfprobePath -v error -select_streams v:0 -show_entries stream=r_frame_rate,avg_frame_rate -of json "$FilePath" 2>$null | Out-String
         $json = $jsonStr | ConvertFrom-Json
@@ -1248,102 +1246,15 @@ function Get-PlatformSourceFrameRate {
                 if ($rate -match '^(\d+)/(\d+)$') {
                     $numerator = [double]$Matches[1]
                     $denominator = [double]$Matches[2]
-                    if ($denominator -gt 0) {
-                        $value = $numerator / $denominator
-                        if ($value -ge 1 -and $value -le 240) {
-                            $nominalRate = $rate
-                            $nominalValue = $value
-                            break
-                        }
+                    if ($denominator -gt 0 -and $numerator / $denominator -ge 1 -and $numerator / $denominator -le 240) {
+                        return $rate
                     }
                 }
             }
         }
     }
     catch {}
-
-    try {
-        # 表示時刻(PTS)の実測分布を利用する。最大瞬間FPSだけでは決めない。
-        $timestamps = New-Object 'System.Collections.Generic.List[double]'
-        $packetTimes = @(& $global:Settings.FfprobePath -v error -select_streams v:0 -show_packets -show_entries packet=pts_time -of csv=p=0 "$FilePath" 2>$null)
-        foreach ($packetTime in $packetTimes) {
-            $timestamp = 0.0
-            if ([double]::TryParse([string]$packetTime, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$timestamp)) {
-                $timestamps.Add($timestamp)
-            }
-        }
-        if ($timestamps.Count -lt 40) { return $nominalRate }
-        $timestamps.Sort()
-
-        $instantFps = New-Object 'System.Collections.Generic.List[double]'
-        for ($i = 1; $i -lt $timestamps.Count; $i++) {
-            $delta = $timestamps[$i] - $timestamps[$i - 1]
-            if ($delta -ge (1.0 / 480.0) -and $delta -le 1.0) {
-                $instantFps.Add(1.0 / $delta)
-            }
-        }
-        if ($instantFps.Count -lt 30) { return $nominalRate }
-        $instantFps.Sort()
-
-        $median = $instantFps[[int][math]::Floor(($instantFps.Count - 1) / 2.0)]
-        $outliers = 0
-        for ($i = $instantFps.Count - 1; $i -ge 0; $i--) {
-            if ($instantFps[$i] -le $median * 1.75) { break }
-            $outliers++
-        }
-        $regularCount = $instantFps.Count
-        if ($outliers -gt 0 -and ($outliers / [double]$instantFps.Count) -le 0.10) {
-            $regularCount -= $outliers
-        }
-        else {
-            $outliers = 0
-        }
-        # 上位99%を使い、通常の高FPS区間はなるべく残し、単発の高FPS外れ値だけを除く。
-        $upperIndex = [int][math]::Ceiling(($regularCount - 1) * 0.99)
-        $targetFps = $instantFps[$upperIndex]
-        $rateText = ""
-
-        if ($nominalValue -gt 0 -and [math]::Abs($nominalValue - $targetFps) / $targetFps -le 0.02) {
-            $rateText = $nominalRate
-        }
-        else {
-            $commonRates = @(
-                @{ Rate = "24000/1001"; Value = 24000.0 / 1001.0 },
-                @{ Rate = "24"; Value = 24.0 },
-                @{ Rate = "25"; Value = 25.0 },
-                @{ Rate = "30000/1001"; Value = 30000.0 / 1001.0 },
-                @{ Rate = "30"; Value = 30.0 },
-                @{ Rate = "48"; Value = 48.0 },
-                @{ Rate = "50"; Value = 50.0 },
-                @{ Rate = "60000/1001"; Value = 60000.0 / 1001.0 },
-                @{ Rate = "60"; Value = 60.0 },
-                @{ Rate = "90"; Value = 90.0 },
-                @{ Rate = "120000/1001"; Value = 120000.0 / 1001.0 },
-                @{ Rate = "120"; Value = 120.0 },
-                @{ Rate = "144"; Value = 144.0 },
-                @{ Rate = "165"; Value = 165.0 },
-                @{ Rate = "240"; Value = 240.0 }
-            )
-            $bestError = 0.02
-            foreach ($candidate in $commonRates) {
-                $errorRatio = [math]::Abs($candidate.Value - $targetFps) / $targetFps
-                if ($errorRatio -lt $bestError) {
-                    $rateText = $candidate.Rate
-                    $bestError = $errorRatio
-                }
-            }
-            if (-not $rateText) {
-                $rateText = $targetFps.ToString("0.###", [System.Globalization.CultureInfo]::InvariantCulture)
-            }
-        }
-        $outlierPct = [math]::Round($outliers * 100.0 / $instantFps.Count, 2)
-        Write-Log "CFRフレーム間隔解析: $($instantFps.Count)区間 / 中央値 $([math]::Round($median, 2))fps / 上位99% $([math]::Round($targetFps, 2))fps / 除外外れ値 $outlierPct% / 出力 $rateText fps"
-        return $rateText
-    }
-    catch {
-        Write-Log "CFRフレーム間隔の解析に失敗したため、動画の基準FPSを使用します: $_" -Level "WARN"
-    }
-    return $nominalRate
+    return ""
 }
 function Add-PreservedFrameRateOption {
     param(
@@ -1858,6 +1769,28 @@ function Invoke-PlatformUploadSetup {
     )
     if ($setupModeIndex -lt 0) { return $null }
 
+    # Enterは従来の自動検出。任意のCFRを使いたい場合だけFPSを入力する。
+    $platformFrameRate = ""
+    while ($true) {
+        $fpsInput = (Read-Host "出力FPS (Enter=自動検出 / 例: 60, 59.94, 60000/1001)").Trim()
+        if (-not $fpsInput) { break }
+        $fpsValue = 0.0
+        if ($fpsInput -match '^(\d{1,6})/(\d{1,6})$') {
+            $num = [double]::Parse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture)
+            $den = [double]::Parse($Matches[2], [System.Globalization.CultureInfo]::InvariantCulture)
+            if ($den -gt 0) { $fpsValue = $num / $den }
+        }
+        elseif ($fpsInput -match '^\d{1,6}(?:\.\d{1,6})?$') {
+            $fpsValue = [double]::Parse($fpsInput, [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+        if ($fpsValue -gt 0 -and $fpsValue -le 1000) {
+            $platformFrameRate = $fpsInput
+            break
+        }
+        Write-Host "  → 0より大きく1000以下のFPSを入力してください。" -ForegroundColor Yellow
+    }
+    $platformConfig.OutputFrameRate = $platformFrameRate
+
     if ($setupModeIndex -eq 0) {
         return Invoke-PlatformAutoSetup -PlatformConfig $platformConfig
     }
@@ -1937,6 +1870,7 @@ function Invoke-PlatformAutoSetup {
     Write-Host "  音声             : $($auto.AudioSetting.Description)"
     Write-Host "  解像度           : $($auto.ScaleFilter)"
     Write-Host "  出力形式         : .$($auto.Extension)"
+    Write-Host "  出力FPS          : $(if ($PlatformConfig.OutputFrameRate) { "$($PlatformConfig.OutputFrameRate) fps (手動・CFR)" } else { '自動検出・CFR' })"
     if (-not $PlatformConfig.NoMaxrate) { Write-Host "  ※maxrateはファイル長から自動計算されます" }
     Write-Host "============================================"
 
@@ -1960,6 +1894,7 @@ function Invoke-PlatformAutoSetup {
         TwoPassMode        = $false
         PlatformName       = $PlatformConfig.Name
         MaxFileSizeMB      = $PlatformConfig.MaxFileSizeMB
+        PlatformFrameRate  = $PlatformConfig.OutputFrameRate
         QualityMode        = $qualityMode
         QualityValue       = $auto.QualityValue
         HWEncoder          = $selectedHW
@@ -2301,6 +2236,7 @@ function Invoke-PlatformDetailedSetup {
     Write-Host "  音声             : $($audioSetting.Description)"
     Write-Host "  解像度           : $(if ($scaleFilter) { $scaleFilter } else { '元の解像度' })"
     Write-Host "  出力形式         : .$extension"
+    Write-Host "  出力FPS          : $(if ($PlatformConfig.OutputFrameRate) { "$($PlatformConfig.OutputFrameRate) fps (手動・CFR)" } else { '自動検出・CFR' })"
     if (-not $PlatformConfig.NoMaxrate) { Write-Host "  映像オプション   : (maxrateはファイル長から自動計算)" }
     Write-Host "============================================================"
 
@@ -2324,6 +2260,7 @@ function Invoke-PlatformDetailedSetup {
         TwoPassMode        = $twoPassMode
         PlatformName       = $PlatformConfig.Name
         MaxFileSizeMB      = $PlatformConfig.MaxFileSizeMB
+        PlatformFrameRate  = $PlatformConfig.OutputFrameRate
         QualityMode        = $qualityMode
         QualityValue       = $qualityValue
         HWEncoder          = $selectedHW
@@ -2991,7 +2928,7 @@ function Invoke-EncodeFile {
         # --- プラットフォームモードではCFRを強制する ---
         $platformSourceFrameRate = ""
         if ($Config.PlatformMode) {
-            $platformSourceFrameRate = Get-PlatformSourceFrameRate -FilePath $InputFile
+            $platformSourceFrameRate = if ($Config.PlatformFrameRate) { [string]$Config.PlatformFrameRate } else { Get-PlatformSourceFrameRate -FilePath $InputFile }
             $rateSettings = "$currentVideoOptions $($Config.AdditionalArgs)"
             $hasManualRate = ($rateSettings -match '(?:^|\s)-r(?::v(?::\d+)?)?\s+' -or
                 $rateSettings -match '(?:^|\s)-fpsmax(?::v(?::\d+)?)?\s+' -or
@@ -2999,8 +2936,11 @@ function Invoke-EncodeFile {
             if ($hasManualRate) {
                 Write-Log "出力フレームレート: CFR (明示されたFPS設定を優先)"
             }
+            elseif ($Config.PlatformFrameRate) {
+                Write-Log "出力フレームレート: CFR ($platformSourceFrameRate fps / 手動指定)"
+            }
             elseif ($platformSourceFrameRate) {
-                Write-Log "出力フレームレート: CFR ($platformSourceFrameRate fps / PTS分布から自動選択)"
+                Write-Log "出力フレームレート: CFR ($platformSourceFrameRate fps / ffprobe自動検出)"
             }
             else {
                 Write-Log "出力フレームレート: CFR (FFmpegがFPSを自動判定)" -Level "WARN"
