@@ -1009,7 +1009,7 @@ function Remove-HwAccelFromArgs {
     $result = $result -replace '\s*-hwaccel\s+\S+', ''
     $result = $result -replace '\s*-extra_hw_frames\s+\d+', ''
     # GPUフィルターをCPU版へ置換し、転送フィルターを除去してから再試行
-    $result = [regex]::Replace($result, '(scale_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=w=(-?\d+):h=(-?\d+)', {
+    $result = [regex]::Replace($result, '(scale_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=(?:w|width)=(-?\d+):(?:h|height)=(-?\d+)', {
         param($match)
         return "scale=$($match.Groups[2].Value):$($match.Groups[3].Value)"
     })
@@ -1120,7 +1120,7 @@ function Resolve-VideoFilterPipeline {
                 $frameFormat = "d3d11"
                 Write-Log "GPUリサイズのためDXVA2からD3D11VAへ切り替え" -Level "DEBUG"
             }
-            $gpuFilter = $filterName + "=w=" + $width + ":h=" + $height
+            $gpuFilter = if ($filterName -eq "scale_d3d11") { "$filterName"+":width=$width"+":height=$height" } else { "$filterName"+":w=$width"+":h=$height" }
             Write-Log "GPUリサイズ: $gpuFilter ($frameFormat)" -Level "DEBUG"
         }
         else {
@@ -2760,6 +2760,7 @@ function Invoke-EncodeFile {
 
             if ($pass1Pipeline.Filter) { $pass1ArgsList += @("-vf", ('"{0}"' -f $pass1Pipeline.Filter)) }
             if ($Config.AdditionalArgs) { $pass1ArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
+            $pass1ArgsList = Add-PreservedFrameRateOption -Arguments $pass1ArgsList -VideoOptions $pass1VideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $pass1Pipeline.Filter
             $pass1ArgsList += @("-an", "-f", "null", "NUL")
 
             Write-Log "========= 2pass: 1st pass 実行 =========" -NoTimestamp
