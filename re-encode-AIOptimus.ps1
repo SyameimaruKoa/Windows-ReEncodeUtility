@@ -1233,9 +1233,49 @@ function Resolve-VideoFilterPipeline {
     return $result
 }
 
+function Get-PlatformSourceFrameRate {
+    param([string]$FilePath)
+
+    try {
+        $jsonStr = & $global:Settings.FfprobePath -v error -select_streams v:0 -show_entries stream=r_frame_rate,avg_frame_rate -of json "$FilePath" 2>$null | Out-String
+        $json = $jsonStr | ConvertFrom-Json
+        $stream = $json.streams | Select-Object -First 1
+        if ($stream) {
+            foreach ($field in @("r_frame_rate", "avg_frame_rate")) {
+                $rate = [string]$stream.$field
+                if ($rate -match '^(\d+)/(\d+)$') {
+                    $numerator = [double]$Matches[1]
+                    $denominator = [double]$Matches[2]
+                    if ($denominator -gt 0 -and $numerator / $denominator -ge 1 -and $numerator / $denominator -le 240) {
+                        return $rate
+                    }
+                }
+            }
+        }
+    }
+    catch {}
+    return ""
+}
+
 function Add-PreservedFrameRateOption {
-    param([string[]]$Arguments, [string]$VideoOptions, [string]$ExtraArguments, [string]$VideoFilter)
+    param(
+        [string[]]$Arguments,
+        [string]$VideoOptions,
+        [string]$ExtraArguments,
+        [string]$VideoFilter,
+        [switch]$ForceCfr,
+        [string]$SourceFrameRate = ""
+    )
     $rateOptions = "$VideoOptions $ExtraArguments"
+    if ($ForceCfr) {
+        $hasExplicitRate = ($rateOptions -match '(?:^|\s)-r(?::v(?::\d+)?)?\s+' -or
+            $rateOptions -match '(?:^|\s)-fpsmax(?::v(?::\d+)?)?\s+' -or
+            $VideoFilter -match '(?:^|,)fps=')
+        if (-not $hasExplicitRate -and $SourceFrameRate) {
+            $Arguments += @("-r:v", $SourceFrameRate)
+        }
+        return @($Arguments + @("-fps_mode:v", "cfr"))
+    }
     if ($rateOptions -notmatch '(?:^|\s)-(?:r(?:\:v(?:\:0)?)?|vsync|fps_mode(?:\:v(?:\:0)?)?)\s+' -and $VideoFilter -notmatch '(?:^|,)fps=') {
         return @($Arguments + @("-fps_mode:v", "passthrough"))
     }
@@ -2860,6 +2900,25 @@ function Invoke-EncodeFile {
             }
         }
 
+        # --- プラットフォームモードではCFRを強制する ---
+        $platformSourceFrameRate = ""
+        if ($Config.PlatformMode) {
+            $platformSourceFrameRate = Get-PlatformSourceFrameRate -FilePath $InputFile
+            $rateSettings = "$currentVideoOptions $($Config.AdditionalArgs)"
+            $hasManualRate = ($rateSettings -match '(?:^|\s)-r(?::v(?::\d+)?)?\s+' -or
+                $rateSettings -match '(?:^|\s)-fpsmax(?::v(?::\d+)?)?\s+' -or
+                $Config.AdditionalVF -match '(?:^|,)fps=')
+            if ($hasManualRate) {
+                Write-Log "出力フレームレート: CFR (明示されたFPS設定を優先)"
+            }
+            elseif ($platformSourceFrameRate) {
+                Write-Log "出力フレームレート: CFR ($platformSourceFrameRate fps / 元動画の基準値)"
+            }
+            else {
+                Write-Log "出力フレームレート: CFR (FFmpegがFPSを自動判定)" -Level "WARN"
+            }
+        }
+
         # --- 2passモード (CPUのみ) ---
         $isDashInput = ([System.IO.Path]::GetExtension($InputFile).ToLowerInvariant() -eq ".mpd")
         if ($Config.PlatformMode -and $Config.TwoPassMode) {
@@ -2878,7 +2937,7 @@ function Invoke-EncodeFile {
 
             if ($pass1Pipeline.Filter) { $pass1ArgsList += @("-vf", ('"{0}"' -f $pass1Pipeline.Filter)) }
             if ($Config.AdditionalArgs) { $pass1ArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
-            $pass1ArgsList = Add-PreservedFrameRateOption -Arguments $pass1ArgsList -VideoOptions $pass1VideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $pass1Pipeline.Filter
+            $pass1ArgsList = Add-PreservedFrameRateOption -Arguments $pass1ArgsList -VideoOptions $pass1VideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $pass1Pipeline.Filter -ForceCfr:$Config.PlatformMode -SourceFrameRate $platformSourceFrameRate
             $pass1ArgsList += @("-an", "-f", "null", "NUL")
 
             Write-Log "========= 2pass: 1st pass 実行 =========" -NoTimestamp
@@ -2949,7 +3008,7 @@ function Invoke-EncodeFile {
         }
         
         if ($useFfmpegMetadata) { $ffmpegArgsList += @("-map_metadata", "$metadataInputIndex") }
-        $ffmpegArgsList = Add-PreservedFrameRateOption -Arguments $ffmpegArgsList -VideoOptions $currentVideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $filterPipeline.Filter
+        $ffmpegArgsList = Add-PreservedFrameRateOption -Arguments $ffmpegArgsList -VideoOptions $currentVideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $filterPipeline.Filter -ForceCfr:$Config.PlatformMode -SourceFrameRate $platformSourceFrameRate
         $ffmpegArgsList += "`"$outputFile`""
         $finalArgString = $ffmpegArgsList -join ' '
 
