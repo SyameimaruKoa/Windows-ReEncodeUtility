@@ -393,7 +393,7 @@ WebM、MKV、MP4 などのコンテナ書込みバッファリングによるサ
 ### GPUリサイズとフレーム保持
 
 - GPUデコード中の `scale=幅:-2` は、利用可能なGPUフィルター（`scale_qsv`、`scale_cuda`、`vpp_amf`、`scale_d3d11`、`scale_vulkan` など）へ自動切替。対応フィルターは `ffmpeg -h filter=フィルター名` で直接判定します（QSVは `scale_qsv` がない場合 `vpp_qsv` を確認）。
-- GPU処理に対応しないフィルターやCPUエンコーダーでは、必要な時点でのみ `hwdownload` を行います。DXVA2はD3D11VAの利用可否に応じて切り替えます。
+- GPU処理に対応しないフィルターやCPUエンコーダーでは、必要な時点でのみ `hwdownload` を行います。D3D11VAのGPUリサイズでは出力形式をNV12に明示します。DXVA2はデコーダーを切り替えずに保持し、GPUスケーラーがないため `hwdownload` 後にCPUリサイズします。
 - フレームレートが明示指定されていない場合は `-fps_mode:v passthrough` で元のフレーム時刻を保持します。入力がVFRなら出力もVFRになります。
 
 ### 7. エラーハンドリング
