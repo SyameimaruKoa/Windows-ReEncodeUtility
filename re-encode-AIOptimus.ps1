@@ -1473,7 +1473,8 @@ function Build-PlatformVideoOptions {
                 }
                 "CRF+Maxrate" {
                     if ($isIntelVp9Qsv) {
-                        $parts += "-q:v $QualityValue -b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
+                        # 容量制限時は固定量子化(CQP)を避け、VBRでシーンごとにレートを配分する
+                        $parts += "-b:v ${MaxrateKbps}k -maxrate $($MaxrateKbps * 2)k -bufsize $($MaxrateKbps * 4)k"
                     }
                     else {
                         $parts += "-global_quality $QualityValue -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
@@ -1790,7 +1791,7 @@ function Invoke-PlatformAutoSetup {
     $videoOptions = Build-PlatformVideoOptions -HW $selectedHW -Codec $auto.Codec -QualityMode $qualityMode -QualityValue $auto.QualityValue -Preset $auto.Preset -MaxrateKbps 0
 
     # --- 確認画面 ---
-    $qualityDesc = if ($PlatformConfig.NoMaxrate) { "CRF (品質優先・ビットレート上限なし)" } else { "CRF+Maxrate (容量内で最大品質を自動確保)" }
+    $qualityDesc = if ($PlatformConfig.NoMaxrate) { "CRF (品質優先・ビットレート上限なし)" } elseif ($selectedHW -eq "Intel" -and $auto.Codec -eq "VP9") { "QSV VBR (容量上限から自動計算)" } else { "CRF+Maxrate (容量内で最大品質を自動確保)" }
     $sizeDisp = if ($PlatformConfig.MaxFileSizeMB -ge 1024) { "$([math]::Round($PlatformConfig.MaxFileSizeMB / 1024, 1)) GB" } else { "$($PlatformConfig.MaxFileSizeMB) MB" }
     Clear-Host
     Write-Host "============= おまかせ自動設定 ============="
@@ -1798,7 +1799,7 @@ function Invoke-PlatformAutoSetup {
     Write-Host "  品質方式         : $qualityDesc"
     Write-Host "  ハードウェア     : $selectedHW"
     Write-Host "  コーデック       : $($auto.Codec)"
-    Write-Host "  CRFベースライン  : $($auto.QualityValue)"
+    if ($PlatformConfig.NoMaxrate -or $selectedHW -ne "Intel" -or $auto.Codec -ne "VP9") { Write-Host "  CRFベースライン  : $($auto.QualityValue)" }
     Write-Host "  プリセット       : $($auto.Preset) (標準速度)"
     Write-Host "  音声             : $($auto.AudioSetting.Description)"
     Write-Host "  解像度           : $($auto.ScaleFilter)"
@@ -1928,7 +1929,8 @@ function Invoke-PlatformDetailedSetup {
             }
         }
         else {
-            Write-Host "`n  ℹ 2passはCPUエンコーダーのみ対応のため、CRF+Maxrate(1pass)を使用します。`n" -ForegroundColor Cyan
+            $modeDesc = if ($selectedHW -eq "Intel" -and $selectedCodec -eq "VP9") { "QSV VBR (1pass)" } else { "CRF+Maxrate (1pass)" }
+            Write-Host "`n  ℹ 2passはCPUエンコーダーのみ対応のため、$modeDesc を使用します。`n" -ForegroundColor Cyan
             $qualityMode = "CRF+Maxrate"
             $twoPassMode = $false
         }
@@ -2144,6 +2146,9 @@ function Invoke-PlatformDetailedSetup {
     elseif ($twoPassMode) {
         "2pass Bitrate (容量内でサイズ安定を優先)"
     }
+    elseif ($selectedHW -eq "Intel" -and $selectedCodec -eq "VP9") {
+        "QSV VBR (容量上限から自動計算)"
+    }
     else {
         "CRF+Maxrate (容量内で最大品質を自動確保)"
     }
@@ -2155,7 +2160,7 @@ function Invoke-PlatformDetailedSetup {
     Write-Host "  品質方式         : $qualityDesc"
     Write-Host "  ハードウェア     : $selectedHW"
     Write-Host "  コーデック       : $encoderDisp"
-    Write-Host "  品質ベースライン  : $qualityValue"
+    if ($PlatformConfig.NoMaxrate -or $selectedHW -ne "Intel" -or $selectedCodec -ne "VP9") { Write-Host "  品質ベースライン  : $qualityValue" }
     Write-Host "  プリセット       : $presetValue"
     Write-Host "  音声             : $($audioSetting.Description)"
     Write-Host "  解像度           : $(if ($scaleFilter) { $scaleFilter } else { '元の解像度' })"
@@ -2821,12 +2826,20 @@ function Invoke-EncodeFile {
                 Write-Log "プラットフォーム    : $($Config.PlatformName) (上限: $sizeDisp)"
                 Write-Log "入力ファイル長      : $durationStr ($([math]::Round($inputDuration))秒)"
                 Write-Log "音声ビットレート    : ${actualAudioKbps} kbps (${audioBrSource})"
-                Write-Log "映像最大ビットレート: ~$targetBitrateKbps kbps (${audioBrDesc}を差し引き)"
-                if ($Config.TwoPassMode) {
-                    Write-Log "品質方式            : 2pass Bitrate ${targetBitrateKbps}kbps (マージン: $([math]::Round($marginFactor * 100))%)"
+                $isIntelVp9Vbr = ($Config.HWEncoder -eq "Intel" -and $Config.CodecName -eq "VP9" -and $Config.QualityMode -eq "CRF+Maxrate")
+                if ($isIntelVp9Vbr) {
+                    Write-Log "映像目標ビットレート: ~$targetBitrateKbps kbps (${audioBrDesc}を差し引き)"
+                    Write-Log "映像最大ビットレート: $($targetBitrateKbps * 2) kbps"
+                    Write-Log "品質方式            : QSV VBR (平均 ${targetBitrateKbps}kbps / ピーク $($targetBitrateKbps * 2)kbps / マージン: $([math]::Round($marginFactor * 100))%)"
                 }
                 else {
-                    Write-Log "品質方式            : CRF $($Config.QualityValue) + maxrate ${targetBitrateKbps}kbps (マージン: $([math]::Round($marginFactor * 100))%)"
+                    Write-Log "映像最大ビットレート: ~$targetBitrateKbps kbps (${audioBrDesc}を差し引き)"
+                    if ($Config.TwoPassMode) {
+                        Write-Log "品質方式            : 2pass Bitrate ${targetBitrateKbps}kbps (マージン: $([math]::Round($marginFactor * 100))%)"
+                    }
+                    else {
+                        Write-Log "品質方式            : CRF $($Config.QualityValue) + maxrate ${targetBitrateKbps}kbps (マージン: $([math]::Round($marginFactor * 100))%)"
+                    }
                 }
                 Write-Log ""
             }
