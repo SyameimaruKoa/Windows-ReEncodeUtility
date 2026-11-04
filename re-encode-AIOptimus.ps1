@@ -1263,7 +1263,7 @@ function Add-PreservedFrameRateOption {
         [string]$VideoOptions,
         [string]$ExtraArguments,
         [string]$VideoFilter,
-        [switch]$ForceCfr,
+        [bool]$ForceCfr = $false,
         [string]$SourceFrameRate = ""
     )
     $rateOptions = "$VideoOptions $ExtraArguments"
@@ -2937,7 +2937,7 @@ function Invoke-EncodeFile {
 
             if ($pass1Pipeline.Filter) { $pass1ArgsList += @("-vf", ('"{0}"' -f $pass1Pipeline.Filter)) }
             if ($Config.AdditionalArgs) { $pass1ArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
-            $pass1ArgsList = Add-PreservedFrameRateOption -Arguments $pass1ArgsList -VideoOptions $pass1VideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $pass1Pipeline.Filter -ForceCfr:$Config.PlatformMode -SourceFrameRate $platformSourceFrameRate
+            $pass1ArgsList = Add-PreservedFrameRateOption -Arguments $pass1ArgsList -VideoOptions $pass1VideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $pass1Pipeline.Filter -ForceCfr ([bool]$Config.PlatformMode) -SourceFrameRate $platformSourceFrameRate
             $pass1ArgsList += @("-an", "-f", "null", "NUL")
 
             Write-Log "========= 2pass: 1st pass 実行 =========" -NoTimestamp
@@ -3008,7 +3008,7 @@ function Invoke-EncodeFile {
         }
         
         if ($useFfmpegMetadata) { $ffmpegArgsList += @("-map_metadata", "$metadataInputIndex") }
-        $ffmpegArgsList = Add-PreservedFrameRateOption -Arguments $ffmpegArgsList -VideoOptions $currentVideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $filterPipeline.Filter -ForceCfr:$Config.PlatformMode -SourceFrameRate $platformSourceFrameRate
+        $ffmpegArgsList = Add-PreservedFrameRateOption -Arguments $ffmpegArgsList -VideoOptions $currentVideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $filterPipeline.Filter -ForceCfr ([bool]$Config.PlatformMode) -SourceFrameRate $platformSourceFrameRate
         $ffmpegArgsList += "`"$outputFile`""
         $finalArgString = $ffmpegArgsList -join ' '
 
