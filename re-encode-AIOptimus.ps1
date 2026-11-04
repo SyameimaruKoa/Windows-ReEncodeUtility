@@ -1124,6 +1124,10 @@ function Resolve-VideoFilterPipeline {
             "videotoolbox" { "scale_vt" }
             default        { if ($frameFormat -in @("dxva2", "dxva2_vld")) { "scale_d3d11" } else { "" } }
         }
+        if ($frameFormat -eq 'qsv' -and -not (Test-FfmpegVideoFilter -Name 'scale_qsv') -and (Test-FfmpegVideoFilter -Name 'vpp_qsv')) {
+            $filterName = 'vpp_qsv'
+            Write-Log 'QSVスケーラー: scale_qsvが未搭載のためvpp_qsvを使用' -Level 'DEBUG'
+        }
         if ($frameFormat -in @('dxva2', 'dxva2_vld') -and $global:HardwareInfo -and $global:HardwareInfo.ScanCompleted -and $global:HardwareInfo.AvailableHwAccels -notcontains 'd3d11va') {
             $filterName = ''
         }
