@@ -2954,33 +2954,6 @@ function Invoke-EncodeFile {
             $result = Invoke-QsvEncodeWithDepthFallback -Arguments $retryArgs -DurationSeconds $inputDuration
         }
 
-        # VP9 QSVのVBRはサイズを保証しないため、上限超過時は目標レートを下げて再試行する
-        if ($result.ExitCode -eq 0 -and $Config.PlatformMode -and $Config.HWEncoder -eq "Intel" -and $Config.CodecName -eq "VP9" -and $Config.QualityMode -eq "CRF+Maxrate") {
-            $limitBytes = [double]$Config.MaxFileSizeMB * 1MB
-            for ($retryCount = 1; $retryCount -le 3; $retryCount++) {
-                if (-not (Test-Path -LiteralPath $outputFile)) { break }
-                $actualBytes = (Get-Item -LiteralPath $outputFile).Length
-                if ($actualBytes -le $limitBytes) { break }
-                $nextBitrateKbps = [int][math]::Floor([double]$targetBitrateKbps * ($limitBytes / [double]$actualBytes) * 0.95)
-                if ($nextBitrateKbps -ge $targetBitrateKbps) { $nextBitrateKbps = $targetBitrateKbps - 1 }
-                if ($nextBitrateKbps -lt 10) {
-                    Write-Log "VP9 QSV VBR: 容量超過ですが、これ以上ビットレートを下げられません。" -Level "WARN"
-                    break
-                }
-                $retryVideoOptions = Build-PlatformVideoOptions -HW $Config.HWEncoder -Codec $Config.CodecName -QualityMode $Config.QualityMode -QualityValue $Config.QualityValue -Preset $Config.PresetValue -MaxrateKbps $nextBitrateKbps -SpecificEncoder $Config.SpecificEncoder
-                if (-not $retryVideoOptions -or -not $finalArgString.Contains($currentVideoOptions)) {
-                    Write-Log "VP9 QSV VBR: 再試行用の映像オプションを構築できませんでした。" -Level "WARN"
-                    break
-                }
-                $finalArgString = $finalArgString.Replace($currentVideoOptions, $retryVideoOptions)
-                $currentVideoOptions = $retryVideoOptions
-                $targetBitrateKbps = $nextBitrateKbps
-                Write-Log "VP9 QSV VBR: 容量超過 ($([math]::Round($actualBytes / 1MB, 2)) MB > $($Config.MaxFileSizeMB) MB)。再試行 $retryCount/3 (目標: ${targetBitrateKbps}kbps / 最大: $($targetBitrateKbps * 2)kbps)" -Level "WARN"
-                $result = Invoke-QsvEncodeWithDepthFallback -Arguments $finalArgString -DurationSeconds $inputDuration
-                if ($result.ExitCode -ne 0) { break }
-            }
-        }
-
         if ($result.ExitCode -ne 0) {
             Write-Log "ffmpegエンコード失敗 (終了コード: $($result.ExitCode))" -Level "ERROR"
             if ($global:Settings.NotifyScriptPath) { & $global:Settings.NotifyScriptPath "$baseName EncodeError" }
@@ -3004,9 +2977,6 @@ function Invoke-EncodeFile {
                     Write-Log "ファイルサイズ上限超過: $outSizeMB MB > $sizeDispWarn" -Level "WARN"
                     if ($Config.QualityMode -eq "CRF") {
                         Write-Log "  CRFモード (ビットレート上限なし) のため、サイズが大きくなりました。CRF値を上げてください。" -Level "WARN"
-                    }
-                    elseif ($Config.HWEncoder -eq "Intel" -and $Config.CodecName -eq "VP9") {
-                        Write-Log "  VP9 QSV VBRの再試行後も容量上限を超過しました。音声レートやドライバー側のレート制御を確認してください。" -Level "WARN"
                     }
                     else {
                         Write-Log "  maxrateで制限していますが、コンテナオーバーヘッド等で超過した可能性があります。" -Level "WARN"
