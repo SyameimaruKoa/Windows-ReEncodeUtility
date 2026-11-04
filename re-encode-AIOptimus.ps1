@@ -1138,7 +1138,7 @@ function Resolve-VideoFilterPipeline {
                 $frameFormat = "d3d11"
                 Write-Log "GPUリサイズのためDXVA2からD3D11VAへ切り替え" -Level "DEBUG"
             }
-            $gpuFilter = if ($filterName -eq "scale_d3d11") { "$filterName"+":width=$width"+":height=$height" } else { "$filterName"+":w=$width"+":h=$height" }
+            $gpuFilter = if ($filterName -eq "scale_d3d11") { "${filterName}=width=$width"+":height=$height" } else { "${filterName}=w=$width"+":h=$height" }
             Write-Log "GPUリサイズ: $gpuFilter ($frameFormat)" -Level "DEBUG"
         }
         else {
