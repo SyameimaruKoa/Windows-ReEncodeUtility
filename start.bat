@@ -18,7 +18,7 @@ echo  動画再エンコード スクリプト (re-encode-AIOptimus)
 echo ========================================================
 echo.
 echo 使い方:
-echo  start.bat ^<動画ファイル^> [動画ファイル2] ...
+echo  start.bat [-QsvDefaultDepth] ^<動画ファイル^> [動画ファイル2] ...
 echo.
 echo 説明:
 echo  FFmpegを利用して、動画ファイルを一括で再エンコードします。
@@ -37,12 +37,18 @@ echo.
 echo 対応ハードウェアエンコード:
 echo  NVIDIA (NVENC), Intel (QSV), AMD (AMF), CPU (Software)
 echo.
+echo QSV async_depth:
+echo  通常は24で開始し、エンコード失敗時にFFmpeg既定値で再試行。
+echo  -QsvDefaultDepth : 初回からFFmpeg既定値を使用。
+echo  選択メニューには項目を追加しません。
+echo.
 echo 設定ファイル:
 echo  config.user.psd1  - ffmpeg等のパス設定
 echo  *.psd1  - エンコード設定テンプレート
 echo.
 echo 例:
 echo  start.bat "C:\Videos\input.mp4"
+echo  start.bat -QsvDefaultDepth "C:\Videos\input.mp4"
 echo  start.bat "C:\Videos\video1.mp4" "C:\Videos\video2.mkv"
 echo.
 pause
