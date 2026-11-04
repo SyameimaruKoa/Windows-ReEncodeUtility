@@ -1009,7 +1009,7 @@ function Remove-HwAccelFromArgs {
     $result = $result -replace '\s*-hwaccel\s+\S+', ''
     $result = $result -replace '\s*-extra_hw_frames\s+\d+', ''
     # GPUフィルターをCPU版へ置換し、転送フィルターを除去してから再試行
-    $result = [regex]::Replace($result, '(scale_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=(?:w|width)=(-?\d+):(?:h|height)=(-?\d+)', {
+    $result = [regex]::Replace($result, '(scale_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=(?:w|width)=(-?\d+):(?:h|height)=([^,\s`"]+)', {
         param($match)
         return "scale=$($match.Groups[2].Value):$($match.Groups[3].Value)"
     })
@@ -1036,11 +1036,13 @@ function Get-EffectiveHwAccelOption {
     if ($result -notmatch '-extra_hw_frames\b') {
         $isCudaDecode = $result -match '-hwaccel\s+cuda\b'
         $isQsvDecode = $result -match '-hwaccel\s+qsv\b'
+        $isAmfDecode = $result -match '-hwaccel\s+amf\b'
         $isNvencEncode = $VideoOptions -match '-c:v\s+\S+_nvenc\b'
         $isQsvEncode = $VideoOptions -match '-c:v\s+\S+_qsv\b'
+        $isAmfEncode = $VideoOptions -match '-c:v\s+\S+_amf\b'
 
         # 同じGPU系の入出力なら、初回から extra_hw_frames を付けず、必要時のみ再試行に回す
-        $shouldSkipExtraFrames = ($isCudaDecode -and $isNvencEncode) -or ($isQsvDecode -and $isQsvEncode)
+        $shouldSkipExtraFrames = ($isCudaDecode -and $isNvencEncode) -or ($isQsvDecode -and $isQsvEncode) -or ($isAmfDecode -and $isAmfEncode)
         if (-not $shouldSkipExtraFrames) {
             $result += " -extra_hw_frames 64"
         }
@@ -1103,6 +1105,8 @@ function Resolve-VideoFilterPipeline {
         $width = $scaleMatch.Groups['w'].Value
         $height = $scaleMatch.Groups['h'].Value
         $tail = $scaleMatch.Groups['tail'].Value
+        if ($height -eq "-2") { $height = "trunc(ih*$width/iw/2)*2" }
+        elseif ($height -eq "-1") { $height = "trunc(ih*$width/iw)" }
         $filterName = switch ($frameFormat) {
             "qsv"          { "scale_qsv" }
             "cuda"         { "scale_cuda" }
@@ -1112,6 +1116,9 @@ function Resolve-VideoFilterPipeline {
             "vaapi"        { "scale_vaapi" }
             "videotoolbox" { "scale_vt" }
             default        { if ($frameFormat -in @("dxva2", "dxva2_vld")) { "scale_d3d11" } else { "" } }
+        }
+        if ($frameFormat -in @('dxva2', 'dxva2_vld') -and $global:HardwareInfo -and $global:HardwareInfo.ScanCompleted -and $global:HardwareInfo.AvailableHwAccels -notcontains 'd3d11va') {
+            $filterName = ''
         }
         if ($filterName -and (Test-FfmpegVideoFilter -Name $filterName)) {
             if ($frameFormat -in @("dxva2", "dxva2_vld")) {
