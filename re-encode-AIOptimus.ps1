@@ -1233,9 +1233,48 @@ function Resolve-VideoFilterPipeline {
     return $result
 }
 
+function Get-PlatformSourceFrameRate {
+    param([string]$FilePath)
+
+    try {
+        $jsonStr = & $global:Settings.FfprobePath -v error -select_streams v:0 -show_entries stream=r_frame_rate,avg_frame_rate -of json "$FilePath" 2>$null | Out-String
+        $json = $jsonStr | ConvertFrom-Json
+        $stream = $json.streams | Select-Object -First 1
+        if ($stream) {
+            foreach ($field in @("r_frame_rate", "avg_frame_rate")) {
+                $rate = [string]$stream.$field
+                if ($rate -match '^(\d+)/(\d+)$') {
+                    $numerator = [double]$Matches[1]
+                    $denominator = [double]$Matches[2]
+                    if ($denominator -gt 0 -and $numerator / $denominator -ge 1 -and $numerator / $denominator -le 240) {
+                        return $rate
+                    }
+                }
+            }
+        }
+    }
+    catch {}
+    return ""
+}
 function Add-PreservedFrameRateOption {
-    param([string[]]$Arguments, [string]$VideoOptions, [string]$ExtraArguments, [string]$VideoFilter)
+    param(
+        [string[]]$Arguments,
+        [string]$VideoOptions,
+        [string]$ExtraArguments,
+        [string]$VideoFilter,
+        [bool]$ForceCfr = $false,
+        [string]$SourceFrameRate = ""
+    )
     $rateOptions = "$VideoOptions $ExtraArguments"
+    if ($ForceCfr) {
+        $hasExplicitRate = ($rateOptions -match '(?:^|\s)-r(?::v(?::\d+)?)?\s+' -or
+            $rateOptions -match '(?:^|\s)-fpsmax(?::v(?::\d+)?)?\s+' -or
+            $VideoFilter -match '(?:^|,)fps=')
+        if (-not $hasExplicitRate -and $SourceFrameRate) {
+            $Arguments += @("-r:v", $SourceFrameRate)
+        }
+        return @($Arguments + @("-fps_mode:v", "cfr"))
+    }
     if ($rateOptions -notmatch '(?:^|\s)-(?:r(?:\:v(?:\:0)?)?|vsync|fps_mode(?:\:v(?:\:0)?)?)\s+' -and $VideoFilter -notmatch '(?:^|,)fps=') {
         return @($Arguments + @("-fps_mode:v", "passthrough"))
     }
@@ -1475,6 +1514,11 @@ function Build-PlatformVideoOptions {
                     if ($isIntelVp9Qsv) {
                         # 容量制限時は固定量子化(CQP)を避け、VBRでシーンごとにレートを配分する
                         $parts += "-b:v ${MaxrateKbps}k -maxrate $($MaxrateKbps * 2)k -bufsize $($MaxrateKbps * 4)k"
+                    }
+                    elseif ($encoder -eq "hevc_qsv") {
+                        # QVBR: 品質目標を維持しつつ容量予算を上限に利用する
+                        $qvbrBitrateKbps = [int][math]::Floor($MaxrateKbps * 0.95)
+                        $parts += "-global_quality $QualityValue -b:v ${qvbrBitrateKbps}k -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
                     }
                     else {
                         $parts += "-global_quality $QualityValue -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k"
@@ -1725,6 +1769,28 @@ function Invoke-PlatformUploadSetup {
     )
     if ($setupModeIndex -lt 0) { return $null }
 
+    # Enterは従来の自動検出。任意のCFRを使いたい場合だけFPSを入力する。
+    $platformFrameRate = ""
+    while ($true) {
+        $fpsInput = (Read-Host "出力FPS (Enter=自動検出 / 例: 60, 59.94, 60000/1001)").Trim()
+        if (-not $fpsInput) { break }
+        $fpsValue = 0.0
+        if ($fpsInput -match '^(\d{1,6})/(\d{1,6})$') {
+            $num = [double]::Parse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture)
+            $den = [double]::Parse($Matches[2], [System.Globalization.CultureInfo]::InvariantCulture)
+            if ($den -gt 0) { $fpsValue = $num / $den }
+        }
+        elseif ($fpsInput -match '^\d{1,6}(?:\.\d{1,6})?$') {
+            $fpsValue = [double]::Parse($fpsInput, [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+        if ($fpsValue -gt 0 -and $fpsValue -le 1000) {
+            $platformFrameRate = $fpsInput
+            break
+        }
+        Write-Host "  → 0より大きく1000以下のFPSを入力してください。" -ForegroundColor Yellow
+    }
+    $platformConfig.OutputFrameRate = $platformFrameRate
+
     if ($setupModeIndex -eq 0) {
         return Invoke-PlatformAutoSetup -PlatformConfig $platformConfig
     }
@@ -1791,7 +1857,7 @@ function Invoke-PlatformAutoSetup {
     $videoOptions = Build-PlatformVideoOptions -HW $selectedHW -Codec $auto.Codec -QualityMode $qualityMode -QualityValue $auto.QualityValue -Preset $auto.Preset -MaxrateKbps 0
 
     # --- 確認画面 ---
-    $qualityDesc = if ($PlatformConfig.NoMaxrate) { "CRF (品質優先・ビットレート上限なし)" } elseif ($selectedHW -eq "Intel" -and $auto.Codec -eq "VP9") { "QSV VBR (容量上限から自動計算)" } else { "CRF+Maxrate (容量内で最大品質を自動確保)" }
+    $qualityDesc = if ($PlatformConfig.NoMaxrate) { "CRF (品質優先・ビットレート上限なし)" } elseif ($selectedHW -eq "Intel" -and $auto.Codec -eq "VP9") { "QSV VBR (容量上限から自動計算)" } elseif ($selectedHW -eq "Intel" -and $auto.Codec -eq "H.265") { "QSV QVBR (品質目標・容量予算を併用)" } else { "CRF+Maxrate (容量内で最大品質を自動確保)" }
     $sizeDisp = if ($PlatformConfig.MaxFileSizeMB -ge 1024) { "$([math]::Round($PlatformConfig.MaxFileSizeMB / 1024, 1)) GB" } else { "$($PlatformConfig.MaxFileSizeMB) MB" }
     Clear-Host
     Write-Host "============= おまかせ自動設定 ============="
@@ -1804,6 +1870,7 @@ function Invoke-PlatformAutoSetup {
     Write-Host "  音声             : $($auto.AudioSetting.Description)"
     Write-Host "  解像度           : $($auto.ScaleFilter)"
     Write-Host "  出力形式         : .$($auto.Extension)"
+    Write-Host "  出力FPS          : $(if ($PlatformConfig.OutputFrameRate) { "$($PlatformConfig.OutputFrameRate) fps (手動・CFR)" } else { '自動検出・CFR' })"
     if (-not $PlatformConfig.NoMaxrate) { Write-Host "  ※maxrateはファイル長から自動計算されます" }
     Write-Host "============================================"
 
@@ -1827,6 +1894,7 @@ function Invoke-PlatformAutoSetup {
         TwoPassMode        = $false
         PlatformName       = $PlatformConfig.Name
         MaxFileSizeMB      = $PlatformConfig.MaxFileSizeMB
+        PlatformFrameRate  = $PlatformConfig.OutputFrameRate
         QualityMode        = $qualityMode
         QualityValue       = $auto.QualityValue
         HWEncoder          = $selectedHW
@@ -1929,7 +1997,7 @@ function Invoke-PlatformDetailedSetup {
             }
         }
         else {
-            $modeDesc = if ($selectedHW -eq "Intel" -and $selectedCodec -eq "VP9") { "QSV VBR (1pass)" } else { "CRF+Maxrate (1pass)" }
+            $modeDesc = if ($selectedHW -eq "Intel" -and $selectedCodec -eq "VP9") { "QSV VBR (1pass)" } elseif ($selectedHW -eq "Intel" -and $selectedCodec -eq "H.265") { "QSV QVBR (1pass)" } else { "CRF+Maxrate (1pass)" }
             Write-Host "`n  ℹ 2passはCPUエンコーダーのみ対応のため、$modeDesc を使用します。`n" -ForegroundColor Cyan
             $qualityMode = "CRF+Maxrate"
             $twoPassMode = $false
@@ -2149,6 +2217,9 @@ function Invoke-PlatformDetailedSetup {
     elseif ($selectedHW -eq "Intel" -and $selectedCodec -eq "VP9") {
         "QSV VBR (容量上限から自動計算)"
     }
+    elseif ($selectedHW -eq "Intel" -and $selectedCodec -eq "H.265") {
+        "QSV QVBR (品質目標・容量予算を併用)"
+    }
     else {
         "CRF+Maxrate (容量内で最大品質を自動確保)"
     }
@@ -2165,6 +2236,7 @@ function Invoke-PlatformDetailedSetup {
     Write-Host "  音声             : $($audioSetting.Description)"
     Write-Host "  解像度           : $(if ($scaleFilter) { $scaleFilter } else { '元の解像度' })"
     Write-Host "  出力形式         : .$extension"
+    Write-Host "  出力FPS          : $(if ($PlatformConfig.OutputFrameRate) { "$($PlatformConfig.OutputFrameRate) fps (手動・CFR)" } else { '自動検出・CFR' })"
     if (-not $PlatformConfig.NoMaxrate) { Write-Host "  映像オプション   : (maxrateはファイル長から自動計算)" }
     Write-Host "============================================================"
 
@@ -2188,6 +2260,7 @@ function Invoke-PlatformDetailedSetup {
         TwoPassMode        = $twoPassMode
         PlatformName       = $PlatformConfig.Name
         MaxFileSizeMB      = $PlatformConfig.MaxFileSizeMB
+        PlatformFrameRate  = $PlatformConfig.OutputFrameRate
         QualityMode        = $qualityMode
         QualityValue       = $qualityValue
         HWEncoder          = $selectedHW
@@ -2827,10 +2900,17 @@ function Invoke-EncodeFile {
                 Write-Log "入力ファイル長      : $durationStr ($([math]::Round($inputDuration))秒)"
                 Write-Log "音声ビットレート    : ${actualAudioKbps} kbps (${audioBrSource})"
                 $isIntelVp9Vbr = ($Config.HWEncoder -eq "Intel" -and $Config.CodecName -eq "VP9" -and $Config.QualityMode -eq "CRF+Maxrate")
+                $isIntelHevcQvbr = ($Config.HWEncoder -eq "Intel" -and $Config.CodecName -eq "H.265" -and $Config.QualityMode -eq "CRF+Maxrate")
                 if ($isIntelVp9Vbr) {
                     Write-Log "映像目標ビットレート: ~$targetBitrateKbps kbps (${audioBrDesc}を差し引き)"
                     Write-Log "映像最大ビットレート: $($targetBitrateKbps * 2) kbps"
                     Write-Log "品質方式            : QSV VBR (平均 ${targetBitrateKbps}kbps / ピーク $($targetBitrateKbps * 2)kbps / マージン: $([math]::Round($marginFactor * 100))%)"
+                }
+                elseif ($isIntelHevcQvbr) {
+                    $qvbrBitrateKbps = [int][math]::Floor($targetBitrateKbps * 0.95)
+                    Write-Log "映像目標ビットレート: ~$qvbrBitrateKbps kbps (${audioBrDesc}を差し引き)"
+                    Write-Log "映像最大ビットレート: $targetBitrateKbps kbps"
+                    Write-Log "品質方式            : QSV QVBR (品質 $($Config.QualityValue) / 平均 ${qvbrBitrateKbps}kbps / ピーク ${targetBitrateKbps}kbps / マージン: $([math]::Round($marginFactor * 100))%)"
                 }
                 else {
                     Write-Log "映像最大ビットレート: ~$targetBitrateKbps kbps (${audioBrDesc}を差し引き)"
@@ -2842,6 +2922,28 @@ function Invoke-EncodeFile {
                     }
                 }
                 Write-Log ""
+            }
+        }
+
+        # --- プラットフォームモードではCFRを強制する ---
+        $platformSourceFrameRate = ""
+        if ($Config.PlatformMode) {
+            $platformSourceFrameRate = if ($Config.PlatformFrameRate) { [string]$Config.PlatformFrameRate } else { Get-PlatformSourceFrameRate -FilePath $InputFile }
+            $rateSettings = "$currentVideoOptions $($Config.AdditionalArgs)"
+            $hasManualRate = ($rateSettings -match '(?:^|\s)-r(?::v(?::\d+)?)?\s+' -or
+                $rateSettings -match '(?:^|\s)-fpsmax(?::v(?::\d+)?)?\s+' -or
+                $Config.AdditionalVF -match '(?:^|,)fps=')
+            if ($hasManualRate) {
+                Write-Log "出力フレームレート: CFR (明示されたFPS設定を優先)"
+            }
+            elseif ($Config.PlatformFrameRate) {
+                Write-Log "出力フレームレート: CFR ($platformSourceFrameRate fps / 手動指定)"
+            }
+            elseif ($platformSourceFrameRate) {
+                Write-Log "出力フレームレート: CFR ($platformSourceFrameRate fps / ffprobe自動検出)"
+            }
+            else {
+                Write-Log "出力フレームレート: CFR (FFmpegがFPSを自動判定)" -Level "WARN"
             }
         }
 
@@ -2863,7 +2965,7 @@ function Invoke-EncodeFile {
 
             if ($pass1Pipeline.Filter) { $pass1ArgsList += @("-vf", ('"{0}"' -f $pass1Pipeline.Filter)) }
             if ($Config.AdditionalArgs) { $pass1ArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
-            $pass1ArgsList = Add-PreservedFrameRateOption -Arguments $pass1ArgsList -VideoOptions $pass1VideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $pass1Pipeline.Filter
+            $pass1ArgsList = Add-PreservedFrameRateOption -Arguments $pass1ArgsList -VideoOptions $pass1VideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $pass1Pipeline.Filter -ForceCfr ([bool]$Config.PlatformMode) -SourceFrameRate $platformSourceFrameRate
             $pass1ArgsList += @("-an", "-f", "null", "NUL")
 
             Write-Log "========= 2pass: 1st pass 実行 =========" -NoTimestamp
@@ -2897,6 +2999,8 @@ function Invoke-EncodeFile {
         $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $currentVideoOptions -VideoFilter $Config.AdditionalVF
         $effectiveHwAccelOption = $filterPipeline.HwAccelOption
         $ffmpegArgsList = @("-hide_banner", "-y")
+        $isHevcQvbrEncode = ($Config.PlatformMode -and $Config.HWEncoder -eq "Intel" -and $Config.CodecName -eq "H.265" -and $Config.QualityMode -eq "CRF+Maxrate")
+        if ($isHevcQvbrEncode) { $ffmpegArgsList += @("-loglevel", "verbose") }
         if ($isDashInput) {
             # DASH入力はタイムスタンプ欠落/逆行が発生しやすいためPTS生成を有効化
             $ffmpegArgsList += @("-fflags", "+genpts")
@@ -2932,7 +3036,7 @@ function Invoke-EncodeFile {
         }
         
         if ($useFfmpegMetadata) { $ffmpegArgsList += @("-map_metadata", "$metadataInputIndex") }
-        $ffmpegArgsList = Add-PreservedFrameRateOption -Arguments $ffmpegArgsList -VideoOptions $currentVideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $filterPipeline.Filter
+        $ffmpegArgsList = Add-PreservedFrameRateOption -Arguments $ffmpegArgsList -VideoOptions $currentVideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $filterPipeline.Filter -ForceCfr ([bool]$Config.PlatformMode) -SourceFrameRate $platformSourceFrameRate
         $ffmpegArgsList += "`"$outputFile`""
         $finalArgString = $ffmpegArgsList -join ' '
 
@@ -2952,6 +3056,29 @@ function Invoke-EncodeFile {
             $retryArgs = Remove-HwAccelFromArgs $finalArgString
             Write-Log "========= ffmpeg エンコード リトライ (HWアクセルなし) =========" -NoTimestamp
             $result = Invoke-QsvEncodeWithDepthFallback -Arguments $retryArgs -DurationSeconds $inputDuration
+        }
+
+        if ($isHevcQvbrEncode) {
+            $actualModes = [regex]::Matches($result.StdErr, '(?im)RateControlMethod:\s*([A-Z0-9_]+)')
+            if ($actualModes.Count -gt 0) {
+                $actualMode = $actualModes[$actualModes.Count - 1].Groups[1].Value
+                if ($actualMode -eq "QVBR") {
+                    Write-Log "QSV実際のレート制御: $actualMode"
+                }
+                else {
+                    Write-Log "QSV実際のレート制御: $actualMode (要求したQVBRと異なります)" -Level "WARN"
+                }
+            }
+            else {
+                $requestedModes = [regex]::Matches($result.StdErr, '(?im)Using the (.+?) ratecontrol method')
+                if ($requestedModes.Count -gt 0) {
+                    $requestedMode = $requestedModes[$requestedModes.Count - 1].Groups[1].Value.Trim()
+                    Write-Log "FFmpegが選択したレート制御: $requestedMode (QSV実稼働モードは未確認)" -Level "WARN"
+                }
+                else {
+                    Write-Log "QSVレート制御をログから確認できませんでした。FFmpeg詳細ログを確認してください。" -Level "WARN"
+                }
+            }
         }
 
         if ($result.ExitCode -ne 0) {
