@@ -10,6 +10,10 @@
 <B N="Value">false</B>
 </En>
 <En>
+<S N="Key">ExternalAudioPrompt</S>
+<B N="Value">true</B>
+</En>
+<En>
 <S N="Key">OutputMode</S>
 <S N="Value">Subfolder</S>
 </En>

@@ -5,7 +5,10 @@
     FFmpegを利用して、ドラッグ＆ドロップされた動画ファイルを一括で再エンコードする。
     対話形式での詳細な設定、テンプレートの利用、高品質な中間ファイルの作成、
     さらにチャプターや字幕に基づいた分割保存が可能じゃ。
+    PS CameraのSBS左右交換プロファイルでは、外部4ch WAVの自動同期と2音声トラック合成を選べる。
+    メインメニューの外部音声同期モードなら映像を再エンコードせず音声だけ合成できる。
     エンコード設定は get-ffmpegOptions.ps1 で行うぞ。
+    音声同期で音が一致しない場合は手動オフセットを選択する。
 .PARAMETER QsvDefaultDepth
     QSVのasync_depthをFFmpeg既定値（未指定）で実行する。メニュー選択項目は追加しない。
 .PARAMETER ShowHelp
@@ -2286,6 +2289,82 @@ function Invoke-PlatformDetailedSetup {
 
 #endregion
 
+
+#region 外部音声同期・音声トラック合成
+function Read-ExternalAudioSyncSettings {
+    param([string]$VideoPath)
+
+    $choice = Show-Menu -Title "外部音声の同期方法を選択してください（$([System.IO.Path]::GetFileName($VideoPath))）" -Choices @(
+        "外部音声を使用しない",
+        "波形から自動同期する",
+        "手動オフセットを指定する"
+    )
+    if ($choice -le 0) { return $null }
+
+    $externalAudioPath = ""
+    while (-not $externalAudioPath) {
+        $entered = (Read-Host "別録り音声ファイルのパス（空欄ならキャンセル）").Trim().Trim('"', "'")
+        if (-not $entered) { return $null }
+        if (Test-Path -LiteralPath $entered -PathType Leaf) {
+            $externalAudioPath = (Resolve-Path -LiteralPath $entered).ProviderPath
+        }
+        else {
+            Write-Host "指定された音声ファイルが見つからぬ: $entered" -ForegroundColor Yellow
+        }
+    }
+
+    $settings = @{ AudioPath = $externalAudioPath; Manual = ($choice -eq 2) }
+    if ($choice -eq 2) {
+        $culture = [System.Globalization.CultureInfo]::InvariantCulture
+        $style = [System.Globalization.NumberStyles]::Float
+        while ($true) {
+            $entered = Read-Host "動画上の外部音声開始位置を秒で指定（例: -0.35）"
+            $manualOffset = 0.0
+            if ([double]::TryParse($entered, $style, $culture, [ref]$manualOffset)) {
+                $settings.ManualOffsetSeconds = $manualOffset
+                break
+            }
+            Write-Host "オフセットは小数で入力するのじゃ。" -ForegroundColor Yellow
+        }
+    }
+    return $settings
+}
+
+function Invoke-ExternalAudioSynthesis {
+    param(
+        [Parameter(Mandatory = $true)][string]$VideoPath,
+        [Parameter(Mandatory = $true)][hashtable]$Settings,
+        [string]$OutputPath = ""
+    )
+    $audioTool = Join-Path $global:ScriptDir "Tools\Audio\Sync-ExternalAudio.ps1"
+    if (-not (Test-Path -LiteralPath $audioTool -PathType Leaf)) {
+        throw "音声同期ツールが見つからぬ: $audioTool"
+    }
+    $syncArguments = @{
+        Video = $VideoPath
+        Audio = $Settings.AudioPath
+        FfmpegPath = $global:Settings.FfmpegPath
+        FfprobePath = $global:Settings.FfprobePath
+    }
+    if ($OutputPath) { $syncArguments.Output = $OutputPath }
+    if ($Settings.Manual) { $syncArguments.ManualOffsetSeconds = [double]$Settings.ManualOffsetSeconds }
+
+    Write-Log "外部音声同期: $($Settings.AudioPath)"
+    & $audioTool @syncArguments
+    $expectedOutput = if ($OutputPath) {
+        $OutputPath
+    }
+    else {
+        Join-Path ([System.IO.Path]::GetDirectoryName($VideoPath)) ([System.IO.Path]::GetFileNameWithoutExtension($VideoPath) + "_stereo_sync.mkv")
+    }
+    if (-not (Test-Path -LiteralPath $expectedOutput -PathType Leaf)) {
+        throw "同期後の動画ファイルが作成されておらぬ: $expectedOutput"
+    }
+    Write-Log "外部音声の同期・合成完了: $expectedOutput"
+    return $expectedOutput
+}
+#endregion
+
 #region メイン処理
 
 #region モード選択・セットアップ
@@ -2362,9 +2441,30 @@ function Start-MainProcess {
     }
 
     # --- 実行モード選択 ---
-    $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "プラットフォーム向けアップロード (Twitter/Discord/catbox.moe)", "中間ファイル作成モード (高画質・MKV・音声設定可)", "チャプター/字幕分割モード (分割して再エンコード)")
+    $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "プラットフォーム向けアップロード (Twitter/Discord/catbox.moe)", "中間ファイル作成モード (高画質・MKV・音声設定可)", "チャプター/字幕分割モード (分割して再エンコード)", "外部音声同期・マルチトラック合成（映像の再エンコードなし）")
     $selectedMode = Show-Menu -Title "実行モードを選択してください。" -Choices $modeChoices
-    
+    if ($selectedMode -lt 0) { return }
+
+    if ($selectedMode -eq 5) {
+        foreach ($inputFile in $Path) {
+            $inputFile = $inputFile.Trim('"')
+            if (-not (Test-Path -LiteralPath $inputFile -PathType Leaf)) {
+                Write-Log "動画ファイルが見つからぬ: $inputFile" -Level "ERROR"
+                continue
+            }
+            $syncSettings = Read-ExternalAudioSyncSettings -VideoPath $inputFile
+            if (-not $syncSettings) { continue }
+            try {
+                $resolvedInput = (Resolve-Path -LiteralPath $inputFile).ProviderPath
+                $null = Invoke-ExternalAudioSynthesis -VideoPath $resolvedInput -Settings $syncSettings
+            }
+            catch {
+                Write-Log "外部音声同期に失敗: $_" -Level "ERROR"
+            }
+        }
+        return
+    }
+
     $config = $null
     switch ($selectedMode) {
         0 { $config = Invoke-InteractiveSetup }
@@ -2389,6 +2489,9 @@ function Start-MainProcess {
             Invoke-SplitEncodeFile -InputFile $inputFile -Config $config -HwAccelOption $hwAccelOption
         }
         else {
+            if ($config.ExternalAudioPrompt) {
+                $config['ExternalAudioSync'] = Read-ExternalAudioSyncSettings -VideoPath $inputFile
+            }
             Invoke-EncodeFile -InputFile $inputFile -Config $config -HwAccelOption $hwAccelOption
         }
     }
@@ -2762,6 +2865,11 @@ function Invoke-EncodeFile {
 
         $outputFile = Join-Path $outputDir "$baseName.$($Config.Extension)"
         $tempDir = Join-Path $outputDir "temp_$baseName"; if (-not (Test-Path $tempDir)) { New-Item -Path $tempDir -ItemType Directory | Out-Null }
+        $useExternalAudioSync = ($null -ne $Config.ExternalAudioSync)
+        if ($useExternalAudioSync) {
+            $finalOutputFile = Join-Path $outputDir "$baseName.mkv"
+            $outputFile = Join-Path $tempDir "$baseName.mkv"
+        }
 
         $cutInfo = ""; $useFfmpegMetadata = $false
         $ffmpegMetadataFile = Join-Path $tempDir "ffmpeg_metadata.txt"
@@ -3087,6 +3195,12 @@ function Invoke-EncodeFile {
         }
         else {
             Write-Log "ffmpegエンコードが正常に完了しました。"
+
+            if ($useExternalAudioSync) {
+                Write-Log "外部音声の同期とマルチトラック合成を開始するのじゃ。"
+                $null = Invoke-ExternalAudioSynthesis -VideoPath $outputFile -Settings $Config.ExternalAudioSync -OutputPath $finalOutputFile
+                $outputFile = $finalOutputFile
+            }
 
             # --- 出力ファイル情報をログに記録 ---
             if (Test-Path $outputFile) {
