@@ -8,16 +8,18 @@ FFmpeg を使用して、ドラッグ＆ドロップした動画ファイルを�
 
 ## PS Camera SBSの左右交換と4ch音声同期
 
-既存のPSVR向けプロファイルとは別に、`Profiles/PS Camera SBS - 左右交換.psd1` を追加した。**左右映像を入れ替えるだけ**で、クロップ・拡縮・レンズ補正は行わない。映像は `hevc_qsv -global_quality 25 -preset veryslow`、音声はコピー（既存PSVRプロファイルと同設定）。
+既存のPSVR向けプロファイルとは別に、`Profiles/PS Camera SBS - 左右交換.psd1` を追加した。**左右映像を入れ替えるだけ**で、クロップ・拡縮・レンズ補正は行わない。映像は `hevc_qsv -global_quality 25 -preset veryslow`、音声はコピー（既存PSVRプロファイルと同設定）。MKVには正式な3D識別情報 `stereo_mode=left_right` を付与する。
 
-**メインメニューの「テンプレートから選択」→「PS Camera SBS - 左右交換」**を選ぶと、エンコード時に外部音声の自動同期または手動オフセットを指定できる。WAVを選択した場合、メイン（ch1/ch4）と補助（ch2/ch3）の2トラックを同期してMKVに合成する。音声を選択しなければ従来どおりのエンコードを行う。
+**メインメニューの「テンプレートから選択」→「PS Camera SBS - 左右交換」**を選ぶと、エンコード時に外部音声の自動同期または手動オフセットを指定できる。WAVを選択した場合、メイン（ch1/ch4）と補助（ch2/ch3）の2トラックを同期してMKVに合成する。音声を選択しなければ、入力音声をコピーして3D情報付きのMKVを出力する。外部音声を選択した場合はメイン・補助の2トラックをOpus（各256kbps VBR）で保存する。
 
 さらに、**メインメニューの「外部音声同期・マルチトラック合成」**を選べば、既存動画に外部音声だけを同期して結合できる。映像は再エンコードしない。
 
 独立実行する場合は次のツールも利用できる。
 
-- `Tools/Audio/Convert-AudioToStereo.ps1` — 4ch WAVをメイン（ch1/ch4）と補助（ch2/ch3）の2トラックに分離してMKA/FLACで保存
+- `Tools/Audio/Convert-AudioToStereo.ps1` — 4ch WAVをメイン（ch1/ch4）と補助（ch2/ch3）の2トラックに分離してMKA/Opusで保存
 - `Tools/Audio/Sync-ExternalAudio.ps1` — 動画内の同期用音声と外部WAVを波形照合し、4ch入力時はメインと補助を同じタイミングで2音声トラックとして合成
+
+他のPSVR用SBSプロファイル4種もMKVへ変更し、同じ `stereo_mode=left_right` を付与する。映像の変換処理は従来のまま維持する。
 
 詳しくは [音声ツールの使い方](Tools/Audio/README.md) を参照。
 

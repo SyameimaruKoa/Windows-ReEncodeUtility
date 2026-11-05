@@ -45,14 +45,20 @@ function Convert-AudioToStereo {
     $pan = Get-AudioStereoPanFilter -InputChannels $InputChannels -LeftChannel $LeftChannel -RightChannel $RightChannel
     $auxiliaryChannels = @(Get-AudioAuxiliaryChannelPair -InputChannels $InputChannels -LeftChannel $LeftChannel -RightChannel $RightChannel)
     $extension = [System.IO.Path]::GetExtension($OutputPath).ToLowerInvariant()
-    if ($auxiliaryChannels.Count -eq 2 -and $extension -in @('.mka', '.mkv')) {
+    if ($auxiliaryChannels.Count -eq 2 -and $extension -notin @('.mka', '.mkv')) {
+        throw '4chの2トラックを保存するには、出力を.mkaまたは.mkvに指定せよ。'
+    }
+    if ($auxiliaryChannels.Count -eq 0 -and $extension -notin @('.opus', '.mka', '.mkv')) {
+        throw 'Opusの出力形式は.opus、.mka、または.mkvを指定せよ。'
+    }
+    if ($auxiliaryChannels.Count -eq 2) {
         $auxiliaryPan = Get-AudioStereoPanFilter -InputChannels $InputChannels -LeftChannel $auxiliaryChannels[0] -RightChannel $auxiliaryChannels[1]
         $graph = '[0:a:0]asplit=2[main_source][aux_source];[main_source]' + $pan + '[main];[aux_source]' + $auxiliaryPan + '[aux]'
         $resolvedRight = if ($RightChannel -eq 0) { 4 } else { $RightChannel }
-        & $FfmpegPath -hide_banner -nostdin -v error -y -i $InputPath -filter_complex $graph -map '[main]' -map '[aux]' -c:a flac -metadata:s:a:0 "title=Main stereo (CH$LeftChannel/CH$resolvedRight)" -metadata:s:a:1 "title=Auxiliary stereo (CH$($auxiliaryChannels[0])/CH$($auxiliaryChannels[1]))" -disposition:a:0 default -disposition:a:1 0 $OutputPath
+        & $FfmpegPath -hide_banner -nostdin -v error -y -i $InputPath -filter_complex $graph -map '[main]' -map '[aux]' -c:a libopus -b:a 256k -metadata:s:a:0 "title=Main stereo (CH$LeftChannel/CH$resolvedRight)" -metadata:s:a:1 "title=Auxiliary stereo (CH$($auxiliaryChannels[0])/CH$($auxiliaryChannels[1]))" -disposition:a:0 default -disposition:a:1 0 $OutputPath
     }
     else {
-        & $FfmpegPath -hide_banner -nostdin -v error -y -i $InputPath -map 0:a:0 -af $pan -c:a flac $OutputPath
+        & $FfmpegPath -hide_banner -nostdin -v error -y -i $InputPath -map 0:a:0 -af $pan -c:a libopus -b:a 256k $OutputPath
     }
     if ($LASTEXITCODE -ne 0) { throw "Audio downmix failed: $InputPath" }
     return $OutputPath

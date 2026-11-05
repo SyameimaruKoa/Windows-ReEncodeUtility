@@ -27,7 +27,7 @@
 </En>
 <En>
 <S N="Key">AdditionalArgs</S>
-<S N="Value"></S>
+<S N="Value">-metadata:s:v:0 stereo_mode=left_right</S>
 </En>
 <En>
 <S N="Key">AdditionalVF</S>
@@ -39,7 +39,7 @@
 </En>
 <En>
 <S N="Key">Extension</S>
-<S N="Value">mp4</S>
+<S N="Value">mkv</S>
 </En>
 <En>
 <S N="Key">OutputFixedPath</S>

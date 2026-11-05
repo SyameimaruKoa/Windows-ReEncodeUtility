@@ -1,14 +1,14 @@
 ﻿<#
 .SYNOPSIS
-    任意の多チャンネル音声から左右2チャンネルを選んでFLACへ変換する。
+    任意の多チャンネル音声から左右2チャンネルを選んでOpusへ変換する。
 .DESCRIPTION
     4ch入力ではch1/ch4をメイン、ch2/ch3を補助として2トラックに分離する。
-    既定出力はMKA（FLAC×2）。元ファイルは変更しない。
-    出力ファイルをFLACに指定した場合は従来どおりメインの2chのみ抽出する。
+    既定出力はMKA（Opus×2）。元ファイルは変更しない。
+    4ch入力の補助トラックも残すため、出力形式はMKAとする。
 .PARAMETER Input
     入力の音声ファイル。
 .PARAMETER Output
-    出力先。4ch入力の既定は _stereo.mka、それ以外は _stereo.flac。
+    出力先。4ch入力の既定は _stereo.mka、それ以外は _stereo.opus。
 .PARAMETER LeftChannel
     左へ割り当てる入力チャンネル番号（1始まり、既定1）。
 .PARAMETER RightChannel
@@ -46,7 +46,7 @@ $probe = & $FfprobePath -v error -select_streams a:0 -show_entries stream=channe
 if ($LASTEXITCODE -ne 0) { throw '入力チャンネル数を取得できぬ。' }
 $channels = [int]($probe | Select-Object -First 1)
 if (-not $Output) {
-    $ext = if ($channels -eq 4) { '.mka' } else { '.flac' }
+    $ext = if ($channels -eq 4) { '.mka' } else { '.opus' }
     $Output = Join-Path ([System.IO.Path]::GetDirectoryName($InputPath)) ([System.IO.Path]::GetFileNameWithoutExtension($InputPath) + '_stereo' + $ext)
 }
 if ([System.IO.Path]::GetFullPath($Output) -eq $InputPath) { throw '出力先と入力が同一じゃ。' }

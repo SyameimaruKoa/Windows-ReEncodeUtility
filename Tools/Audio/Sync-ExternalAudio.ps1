@@ -6,7 +6,7 @@
     複数箇所が一致すれば録音クロック差も補正する。
     動画の長さに合わせ、短い音声は無音で補い、長い音声は切り詰める。
     -ManualOffsetSeconds で手動同期も利用できる。
-    映像は再エンコードせずコピーし、音声をFLACでMKVへ書き出す。
+    映像は再エンコードせずコピーし、音声をOpus（ステレオ各256kbps VBR）でMKVへ書き出す。
     4ch入力ではch1/ch4をメイン、ch2/ch3を補助の2トラックにする。
 .PARAMETER Video
     同期先の動画。自動同期には比較用の音声トラックが必要。
@@ -75,7 +75,7 @@ if (-not $Output) {
 }
 $Output = [System.IO.Path]::GetFullPath($Output)
 if ([System.IO.Path]::GetExtension($Output).ToLowerInvariant() -ne '.mkv') {
-    throw '出力コンテナはMKVを指定するのじゃ（FLACと映像の無劣化コピーを維持するため）。'
+    throw '出力コンテナはMKVを指定するのじゃ（Opus音声と映像の無劣化コピーを保持するため）。'
 }
 if ($Output -eq $Video -or $Output -eq $Audio) { throw '出力先と入力元が同一じゃ。' }
 
@@ -167,12 +167,12 @@ if ($KeepReferenceAudio -and $referenceAudio.Count -gt 0) {
 }
 $arguments += @(
     '-map', '0:s?', '-map_metadata', '0', '-map_chapters', '0',
-    '-c:v', 'copy', '-c:a:0', 'flac', '-c:s', 'copy'
+    '-c:v', 'copy', '-c:a:0', 'libopus', '-b:a:0', '256k', '-c:s', 'copy'
 )
 if ($hasAuxiliaryTrack) {
     $mainRightChannel = if ($RightChannel -eq 0) { 4 } else { $RightChannel }
     $arguments += @(
-        '-c:a:1', 'flac',
+        '-c:a:1', 'libopus', '-b:a:1', '256k',
         '-metadata:s:a:0', "title=Main stereo (CH$LeftChannel/CH$mainRightChannel)",
         '-metadata:s:a:1', "title=Auxiliary stereo (CH$($auxiliaryChannels[0])/CH$($auxiliaryChannels[1]))",
         '-disposition:a:0', 'default', '-disposition:a:1', '0'
