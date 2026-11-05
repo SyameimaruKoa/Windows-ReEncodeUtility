@@ -14,10 +14,6 @@
 <B N="Value">true</B>
 </En>
 <En>
-<S N="Key">PreviewWithFfplay</S>
-<B N="Value">true</B>
-</En>
-<En>
 <S N="Key">OutputMode</S>
 <S N="Value">Subfolder</S>
 </En>

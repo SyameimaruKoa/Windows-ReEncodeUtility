@@ -7,11 +7,8 @@
     さらにチャプターや字幕に基づいた分割保存が可能じゃ。
     PS CameraのSBS左右交換プロファイルでは、外部4ch WAVの自動同期と2音声トラック合成を選べる。
     メインメニューの外部音声同期モードなら映像を再エンコードせず音声だけ合成できる。
-    PS Camera SBSプロファイルでは、変換終了後にffplayでFull SBSプレビューを表示する。
     エンコード設定は get-ffmpegOptions.ps1 で行うぞ。
     音声同期で音が一致しない場合は手動オフセットを選択する。
-.PARAMETER NoSbsPreview
-    PS Camera SBSの変換後プレビューを省略する。
 .PARAMETER QsvDefaultDepth
     QSVのasync_depthをFFmpeg既定値（未指定）で実行する。メニュー選択項目は追加しない。
 .PARAMETER ShowHelp
@@ -25,7 +22,6 @@
 [CmdletBinding()]
 param (
     [switch]$QsvDefaultDepth,
-    [switch]$NoSbsPreview,
     [Alias('h', 'help')]
     [switch]$ShowHelp,
     [Parameter(ValueFromPipeline = $true, ValueFromRemainingArguments = $true, HelpMessage = "処理対象のファイルまたはフォルダのパスを入力せい。")]
@@ -2369,28 +2365,6 @@ function Invoke-ExternalAudioSynthesis {
 }
 #endregion
 
-#region SBS 3D完成動画のプレビュー
-function Invoke-EncodedSbsPreview {
-    param([Parameter(Mandatory = $true)][string]$VideoPath)
-
-    $previewScript = Join-Path $global:ScriptDir 'Tools\Playback\Preview-SBS.ps1'
-    if (-not (Test-Path -LiteralPath $previewScript -PathType Leaf)) {
-        throw "SBSプレビュー用スクリプトが見つからぬ: $previewScript"
-    }
-    $ffplayExecutable = [string]$global:Settings.FfplayPath
-    if ([string]::IsNullOrWhiteSpace($ffplayExecutable)) {
-        $ffmpegCommand = Get-Command -Name $global:Settings.FfmpegPath -ErrorAction SilentlyContinue
-        if ($ffmpegCommand -and $ffmpegCommand.Source) {
-            $candidate = Join-Path ([System.IO.Path]::GetDirectoryName($ffmpegCommand.Source)) 'ffplay.exe'
-            if (Test-Path -LiteralPath $candidate -PathType Leaf) { $ffplayExecutable = $candidate }
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($ffplayExecutable)) { $ffplayExecutable = 'ffplay' }
-    Write-Log "ffplayでSBS完成動画を表示する: $VideoPath"
-    & $previewScript -VideoPath $VideoPath -FfplayPath $ffplayExecutable
-}
-#endregion
-
 #region メイン処理
 
 #region モード選択・セットアップ
@@ -3263,16 +3237,6 @@ function Invoke-EncodeFile {
                 }
                 Remove-Item -LiteralPath "$outputFile`_original" -ErrorAction SilentlyContinue
             }
-
-            if ($Config.PreviewWithFfplay -and -not $NoSbsPreview -and (Test-Path -LiteralPath $outputFile -PathType Leaf)) {
-                try {
-                    Invoke-EncodedSbsPreview -VideoPath $outputFile
-                }
-                catch {
-                    Write-Log "ffplayプレビューを実行できなかった: $_" -Level "WARN"
-                }
-            }
-
         }
 
         if ($passLogBase) {

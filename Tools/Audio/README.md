@@ -14,22 +14,6 @@ Windows PowerShell 5.1以降、FFmpeg、FFprobeを使用。追加のPythonパッ
 
 4ch音声は常にメイン・補助の2音声トラックを生成する。録画時間が食い違っていても動画の時間軸に合わせる。自動同期には動画側の比較用音声が必要じゃ。同期エラーが発生した場合、途中までエンコードした映像は一時フォルダーに残して再試行できる。
 
-## ffplayで交換後のSBS映像を確認する
-
-PS Camera SBSテンプレートでエンコードが完了すると、完成品をffplayで全画面表示する。これは**完成品の確認**なので、左右は再交換しない。XREAL 1Sで3840×1080（Full SBS）モードを有効にしておく。
-
-```powershell
-.\Tools\Playback\Preview-SBS.ps1 -VideoPath ".\encoded_output\capture.mkv"
-```
-
-未変換のPS Camera SBSをエンコードせず確認する場合は `-SwapEyes` を指定する。各眼の元の16:10アスペクト比を維持し、左右に黒帯を追加して3840×1080に配置する。
-
-```powershell
-.\Tools\Playback\Preview-SBS.ps1 -VideoPath ".\capture.mkv" -SwapEyes
-```
-
-3840×1080画面がないときは `-Windowed` で通常のウィンドウ確認が可能。完成品プレビューを無効にするには、メイン起動時に `-NoSbsPreview` を指定する。ffplayはEscまたはQで終了する。
-
 ## 1. 4chをメインと補助の2トラックに分離する
 
 ```powershell
