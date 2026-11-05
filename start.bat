@@ -27,12 +27,13 @@ echo  ファイルパスを指定してください。
 echo.
 echo 対応モード:
 echo  - 通常モード  : 対話形式でエンコード設定を選択
-echo  - テンプレート  : 保存済みの設定テンプレートを使用
+echo  - テンプレート  : 保存済みの設定テンプレートを使用（PS Camera SBS＋4ch音声同期対応）
 echo  - プラットフォーム: Twitter/Discord/catbox.moe/uguu.se/GitHub/GitHub Release向け
 echo                   ファイルサイズ上限管理・品質/ビットレート自動計算
 echo                   カスタムモードで任意のサイズ上限も指定可
 echo  - 中間ファイル  : 高画質MKV中間ファイルを作成
 echo  - 分割モード  : チャプター/字幕で分割して再エンコード
+echo  - 外部音声同期  : 動画と別録り音声を波形で同期し、メイン・補助の2音声トラックをMKVへ合成
 echo.
 echo 対応ハードウェアエンコード:
 echo  NVIDIA (NVENC), Intel (QSV), AMD (AMF), CPU (Software)
