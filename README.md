@@ -12,8 +12,8 @@ FFmpeg を使用して、ドラッグ＆ドロップした動画ファイルを�
 
 外部音声を使う場合は以下の独立ツールを使用する。既存エンコード本体に影響しない。
 
-- `Tools/Audio/Convert-AudioToStereo.ps1` — 4ch WAVの1ch→L、4ch→Rを抽出してFLAC化
-- `Tools/Audio/Sync-ExternalAudio.ps1` — 動画内の同期用音声と外部WAVを波形照合し、ステレオにして映像へ合成
+- `Tools/Audio/Convert-AudioToStereo.ps1` — 4ch WAVをメイン（ch1/ch4）と補助（ch2/ch3）の2トラックに分離してMKA/FLACで保存
+- `Tools/Audio/Sync-ExternalAudio.ps1` — 動画内の同期用音声と外部WAVを波形照合し、4ch入力時はメインと補助を同じタイミングで2音声トラックとして合成
 
 詳しくは [音声ツールの使い方](Tools/Audio/README.md) を参照。
 

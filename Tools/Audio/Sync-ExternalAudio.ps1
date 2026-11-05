@@ -7,6 +7,7 @@
     動画の長さに合わせ、短い音声は無音で補い、長い音声は切り詰める。
     -ManualOffsetSeconds で手動同期も利用できる。
     映像は再エンコードせずコピーし、音声をFLACでMKVへ書き出す。
+    4ch入力ではch1/ch4をメイン、ch2/ch3を補助の2トラックにする。
 .PARAMETER Video
     同期先の動画。自動同期には比較用の音声トラックが必要。
 .PARAMETER Audio
@@ -24,7 +25,7 @@
     ステレオ右に使用する元音声のチャンネル番号（1始まり）。
     省略時は4ch入力なら4、モノラルなら1、その他は2。
 .PARAMETER KeepReferenceAudio
-    動画側の元の音声トラックも2番目以降に残す。
+    動画側の元の音声トラックはメイン・補助より後ろに残す。
 .PARAMETER FfmpegPath
     ffmpeg実行ファイルへのパス。
 .PARAMETER FfprobePath
@@ -99,7 +100,13 @@ $durationText = if ($videoStream[0].duration -and $videoStream[0].duration -ne '
 }
 $videoDuration = [double]::Parse([string]$durationText, [System.Globalization.CultureInfo]::InvariantCulture)
 if ($videoDuration -le 0) { throw '動画の長さを取得できぬ。' }
-$panFilter = Get-AudioStereoPanFilter -InputChannels ([int]$externalAudio[0].channels) -LeftChannel $LeftChannel -RightChannel $RightChannel
+$inputChannels = [int]$externalAudio[0].channels
+$panFilter = Get-AudioStereoPanFilter -InputChannels $inputChannels -LeftChannel $LeftChannel -RightChannel $RightChannel
+$auxiliaryChannels = @(Get-AudioAuxiliaryChannelPair -InputChannels $inputChannels -LeftChannel $LeftChannel -RightChannel $RightChannel)
+$hasAuxiliaryTrack = ($auxiliaryChannels.Count -eq 2)
+if ($hasAuxiliaryTrack) {
+    $auxiliaryPanFilter = Get-AudioStereoPanFilter -InputChannels $inputChannels -LeftChannel $auxiliaryChannels[0] -RightChannel $auxiliaryChannels[1]
+}
 #endregion
 
 #region Alignment
@@ -126,7 +133,7 @@ if ($timeScale -le 0 -or [Math]::Abs($timeScale - 1.0) -gt 0.003) {
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
 $rate = (1.0 / $timeScale).ToString('0.000000000', $inv)
 $dur = $videoDuration.ToString('0.000000', $inv)
-$filters = @($panFilter, 'aresample=48000')
+$filters = @('aresample=48000')
 if ([Math]::Abs($timeScale - 1.0) -gt 0.0000001) { $filters += "atempo=$rate" }
 if ($offset -lt 0) {
     $trim = (-$offset).ToString('0.000000', $inv)
@@ -140,12 +147,21 @@ if ($offset -gt 0) {
 $filters += 'apad'
 $filters += "atrim=duration=$dur"
 $filters += 'asetpts=PTS-STARTPTS'
-$graph = '[1:a:0]' + ($filters -join ',') + '[synced]'
+$mainFilter = (@($panFilter) + $filters) -join ','
+$trackCount = 1
+if ($hasAuxiliaryTrack) {
+    $auxiliaryFilter = (@($auxiliaryPanFilter) + $filters) -join ','
+    $graph = '[1:a:0]asplit=2[main_source][aux_source];[main_source]' + $mainFilter + '[synced];[aux_source]' + $auxiliaryFilter + '[aux_synced]'
+    $trackCount = 2
+} else {
+    $graph = '[1:a:0]' + $mainFilter + '[synced]'
+}
 $arguments = @(
     '-hide_banner', '-nostdin', '-y', '-i', $Video, '-i', $Audio,
     '-filter_complex', $graph,
     '-map', '0:v:0', '-map', '[synced]'
 )
+if ($hasAuxiliaryTrack) { $arguments += @('-map', '[aux_synced]') }
 if ($KeepReferenceAudio -and $referenceAudio.Count -gt 0) {
     $arguments += @('-map', '0:a?')
 }
@@ -153,8 +169,17 @@ $arguments += @(
     '-map', '0:s?', '-map_metadata', '0', '-map_chapters', '0',
     '-c:v', 'copy', '-c:a:0', 'flac', '-c:s', 'copy'
 )
+if ($hasAuxiliaryTrack) {
+    $mainRightChannel = if ($RightChannel -eq 0) { 4 } else { $RightChannel }
+    $arguments += @(
+        '-c:a:1', 'flac',
+        '-metadata:s:a:0', "title=Main stereo (CH$LeftChannel/CH$mainRightChannel)",
+        '-metadata:s:a:1', "title=Auxiliary stereo (CH$($auxiliaryChannels[0])/CH$($auxiliaryChannels[1]))",
+        '-disposition:a:0', 'default', '-disposition:a:1', '0'
+    )
+}
 if ($KeepReferenceAudio -and $referenceAudio.Count -gt 0) {
-    for ($i = 1; $i -le $referenceAudio.Count; $i++) {
+    for ($i = $trackCount; $i -lt ($trackCount + $referenceAudio.Count); $i++) {
         $arguments += @("-c:a:$i", 'copy')
     }
 }
