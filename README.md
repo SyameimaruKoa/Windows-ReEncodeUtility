@@ -5,6 +5,18 @@ FFmpeg を使用して、ドラッグ＆ドロップした動画ファイルを�
 
 ハードウェアエンコーディング対応、複数プラットフォーム自動最適化、テンプレート機能、高度なフィルタ処理などに加え、MiraBox等を用いた録画機能も備え、プロフェッショナルな動画処理を実現します。
 
+
+## PS Camera SBSの左右交換と4ch音声同期
+
+既存のPSVR向けプロファイルとは別に、`Profiles/PS Camera SBS - 左右交換.psd1` を追加した。**左右映像を入れ替えるだけ**で、クロップ・拡縮・レンズ補正は行わない。映像は `hevc_qsv -global_quality 25 -preset veryslow`、音声はコピー（既存PSVRプロファイルと同設定）。
+
+外部音声を使う場合は以下の独立ツールを使用する。既存エンコード本体に影響しない。
+
+- `Tools/Audio/Convert-AudioToStereo.ps1` — 4ch WAVの1ch→L、4ch→Rを抽出してFLAC化
+- `Tools/Audio/Sync-ExternalAudio.ps1` — 動画内の同期用音声と外部WAVを波形照合し、ステレオにして映像へ合成
+
+詳しくは [音声ツールの使い方](Tools/Audio/README.md) を参照。
+
 ## 📋 目次
 
 - [特徴](#特徴)
