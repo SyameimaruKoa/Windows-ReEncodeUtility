@@ -21,6 +21,10 @@ FFmpeg を使用して、ドラッグ＆ドロップした動画ファイルを�
 
 他のPSVR用SBSプロファイル4種もMKVへ変更し、同じ `stereo_mode=left_right` を付与する。映像の変換処理は従来のまま維持する。
 
+**ffplay完成動画プレビュー：** PS Camera SBSプロファイルでエンコードが成功すると、XREAL 1SのFull SBS画面（3840×1080）で完成MKVを自動プレビューする。完成動画は左右交換済みなので、表示時に二重交換しない。各眼の縦横比を維持し、必要な黒帯を加える。ffplayを終了すると後処理を再開する。プレビューを省略する場合は `-NoSbsPreview` を付けて起動する。
+
+**元SBSを直接確認：** `Tools/Playback/Preview-SBS.ps1 -VideoPath ".\raw.mkv" -SwapEyes`。保存済みの完成動画なら `-SwapEyes` は指定しない。画面のない場合は `-Windowed` が使える。ffplayはFFmpeg付属のものを自動探索し、必要なら `config.user.psd1` に `FfplayPath` を指定可能。
+
 詳しくは [音声ツールの使い方](Tools/Audio/README.md) を参照。
 
 ## 📋 目次
