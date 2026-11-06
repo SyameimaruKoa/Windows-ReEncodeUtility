@@ -107,6 +107,21 @@ namespace ReEncodeUtility.Audio
             return result;
         }
 
+        public static MatchResult FindRange(float[] video, float[] external, int sampleRate,
+            double videoStartSeconds, double videoEndSeconds)
+        {
+            if (sampleRate <= 0) throw new ArgumentOutOfRangeException("sampleRate");
+            int from = Math.Max(0, (int)Math.Round(videoStartSeconds * sampleRate));
+            int to = Math.Min(video.Length, (int)Math.Round(videoEndSeconds * sampleRate));
+            if (to - from < 2 * sampleRate)
+                throw new InvalidOperationException("This segment is too short for waveform matching.");
+            float[] segment = new float[to - from];
+            Array.Copy(video, from, segment, 0, segment.Length);
+            MatchResult result = Find(segment, external, sampleRate);
+            result.OffsetSeconds += from / (double)sampleRate;
+            return result;
+        }
+
         public static MatchResult Find(float[] video, float[] external, int sampleRate)
         {
             if (sampleRate <= 0) throw new ArgumentOutOfRangeException("sampleRate");
