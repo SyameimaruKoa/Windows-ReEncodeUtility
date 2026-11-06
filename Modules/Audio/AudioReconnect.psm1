@@ -78,7 +78,7 @@ function Get-AudioReconnectTimeline {
     if ($SampleRate -ne 100) { throw '音声フィンガープリントは100Hzで処理する。' }
     $interruptions = @(Get-ReferenceInterruptions -ReferencePath $ReferencePath -VideoDuration $VideoDuration -FfmpegPath $FfmpegPath)
     if ($interruptions.Count -eq 0) {
-        return [pscustomobject]@{ ReconnectCount = 0; Sections = @(); Candidates = 0 }
+        return [pscustomobject]@{ ReconnectCount = 0; Sections = @(); Candidates = 0; Alignment = $null }
     }
     if (-not ('ReEncodeUtility.Audio.FingerprintMatcher' -as [type])) {
         Add-Type -Path (Join-Path $PSScriptRoot 'AudioFingerprint.cs') -ErrorAction Stop
@@ -104,13 +104,14 @@ function Get-AudioReconnectTimeline {
         $external = [ReEncodeUtility.Audio.FingerprintMatcher]::ReadSamples($files[1])
         $referenceDuration = $reference.Length / [double]$SampleRate
         $confirmed = New-Object 'System.Collections.Generic.List[object]'
+        $unverifiedCritical = New-Object 'System.Collections.Generic.List[object]'
 
         foreach ($pause in $interruptions) {
             $beforeStart = [Math]::Max(0.0, $pause.Start - 24.0)
             $beforeEnd = [Math]::Max(0.0, $pause.Start - 0.2)
             $afterStart = [Math]::Min($referenceDuration, $pause.End + 0.2)
             $afterEnd = [Math]::Min($referenceDuration, $pause.End + 24.0)
-            if ($beforeEnd - $beforeStart -lt 3.5 -or $afterEnd - $afterStart -lt 3.5) { continue }
+            if ($beforeEnd - $beforeStart -lt 2.05 -or $afterEnd - $afterStart -lt 2.05) { continue }
             try {
                 $before = [ReEncodeUtility.Audio.FingerprintMatcher]::FindRange(
                     $reference, $external, $SampleRate, $beforeStart, $beforeEnd)
@@ -119,6 +120,7 @@ function Get-AudioReconnectTimeline {
             }
             catch {
                 Write-Warning ("{0:F2}～{1:F2}秒の停止候補: 前後の波形照合に失敗: {2}" -f $pause.Start, $pause.End, $_)
+                $unverifiedCritical.Add($pause)
                 continue
             }
             $sourceBefore = ($pause.Start - $before.OffsetSeconds) / $before.TimeScale
@@ -128,6 +130,7 @@ function Get-AudioReconnectTimeline {
             if ([Math]::Abs($jump) -le 0.35) { continue }
             if ($sourceAfter -lt $sourceBefore - 0.35) {
                 Write-Warning ("{0:F2}秒の停止候補は録音時刻が逆行するため採用せぬ。" -f $pause.Start)
+                $unverifiedCritical.Add($pause)
                 continue
             }
             $confirmed.Add([pscustomobject]@{
@@ -136,8 +139,15 @@ function Get-AudioReconnectTimeline {
                 BeforeMatch = $before; AfterMatch = $after
             })
         }
+        if ($unverifiedCritical.Count -gt 0) {
+            throw ("動画停止と無音が重なる{0}箇所で前後の同期を確証できぬ。誤同期を避けるため中止した。" -f $unverifiedCritical.Count)
+        }
         if ($confirmed.Count -eq 0) {
-            return [pscustomobject]@{ ReconnectCount = 0; Sections = @(); Candidates = $interruptions.Count }
+            $alignment = [ReEncodeUtility.Audio.FingerprintMatcher]::Find($reference, $external, $SampleRate)
+            return [pscustomobject]@{
+                ReconnectCount = 0; Sections = @(); Candidates = $interruptions.Count
+                Alignment = $alignment
+            }
         }
         if ($confirmed.Count -gt 20) { throw '再接続を20回超検出したため自動合成を中止する。' }
 

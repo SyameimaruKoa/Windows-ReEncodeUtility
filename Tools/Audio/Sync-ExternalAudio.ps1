@@ -128,7 +128,12 @@ if ($PSBoundParameters.ContainsKey('ManualOffsetSeconds')) {
         Write-Host ("再接続を{0}箇所で確定した。区間ごとに音声を再同期するのじゃ。" -f $timeline.ReconnectCount)
     }
     else {
-        $match = Get-AudioSyncAlignment -ReferencePath $Video -ExternalPath $Audio -FfmpegPath $FfmpegPath
+        $match = if ($timeline.Alignment) {
+            $timeline.Alignment
+        }
+        else {
+            Get-AudioSyncAlignment -ReferencePath $Video -ExternalPath $Audio -FfmpegPath $FfmpegPath
+        }
         $offset = $match.OffsetSeconds
         if (-not $NoDriftCorrection) { $timeScale = $match.TimeScale }
         Write-Host ('波形一致: {0}箇所 / 信頼度 {1:F3}' -f $match.MatchedAnchors, $match.Confidence)
