@@ -218,8 +218,34 @@ namespace ReEncodeUtility.Audio
             {
                 SyncRegion before = regions[index], after = regions[index + 1];
                 if (before.Match == null || after.Match == null)
-                    throw new InvalidOperationException(
-                        "Audio matching failed around a suspected camera reconnect. Cannot guess the missing segment.");
+                {
+                    // Ordinary quiet/static passages may leave an adjacent region unmatchable.
+                    // Use more distant verified anchors only to prove continuity, never to invent a cut.
+                    SyncRegion preceding = null, following = null;
+                    for (int j = index; j >= 0; j--)
+                    {
+                        if (regions[j].Match != null) { preceding = regions[j]; break; }
+                    }
+                    for (int j = index + 1; j < regions.Count; j++)
+                    {
+                        if (regions[j].Match != null) { following = regions[j]; break; }
+                    }
+                    if (preceding == null || following == null)
+                        throw new InvalidOperationException(string.Format(
+                            "Reconnect candidate {0:F2}-{1:F2}s: no reliable audio anchors on both sides.",
+                            merged[index].Start, merged[index].End));
+                    double beforeExternal = (merged[index].Start - preceding.Offset) / preceding.Match.TimeScale;
+                    double afterExternal = (merged[index].End - following.Offset) / following.Match.TimeScale;
+                    double videoGap = merged[index].End - merged[index].Start;
+                    double audioGap = (afterExternal - beforeExternal) *
+                        (preceding.Match.TimeScale + following.Match.TimeScale) / 2.0;
+                    if (Math.Abs(videoGap - audioGap) <= Math.Max(0.65, videoGap * 0.04))
+                        continue;
+                    throw new InvalidOperationException(string.Format(
+                        "Reconnect candidate {0:F2}-{1:F2}s: audio offset changes across unmatchable intervals; " +
+                        "the exact cut cannot be established safely.",
+                        merged[index].Start, merged[index].End));
+                }
                 double externalBefore = (merged[index].Start - before.Offset) / before.Match.TimeScale;
                 double externalAfter = (merged[index].End - after.Offset) / after.Match.TimeScale;
                 double elapsed = externalAfter - externalBefore;

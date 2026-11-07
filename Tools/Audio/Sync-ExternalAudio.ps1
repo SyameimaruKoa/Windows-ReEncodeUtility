@@ -23,6 +23,10 @@
     音声の再生速度を補正しない（開始位置のみ合わせる）。
 .PARAMETER NoReconnectCorrection
     カメラ再接続の自動検出を無効にし、従来の単一区間同期を使う。
+.PARAMETER AnalyzeOnly
+    音声同期を先に検証する。出力動画は作らず、-AlignmentPlanPathに結果を保存する。
+.PARAMETER AlignmentPlanPath
+    事前解析結果の保存先／読込元。入力音声と動画の長さを検証して再利用する。
 .PARAMETER LeftChannel
     ステレオ左に使用する元音声のチャンネル番号（1始まり、デフォルト1）。
 .PARAMETER RightChannel
@@ -49,6 +53,8 @@ param(
     [double]$ManualOffsetSeconds = 0,
     [switch]$NoDriftCorrection,
     [switch]$NoReconnectCorrection,
+    [switch]$AnalyzeOnly,
+    [string]$AlignmentPlanPath,
     [ValidateRange(1, 256)][int]$LeftChannel = 1,
     [ValidateRange(0, 256)][int]$RightChannel = 0,
     [switch]$KeepReferenceAudio,
@@ -84,6 +90,9 @@ if ([System.IO.Path]::GetExtension($Output).ToLowerInvariant() -ne '.mkv') {
     throw '出力コンテナはMKVを指定するのじゃ（Opus音声と映像の無劣化コピーを保持するため）。'
 }
 if ($Output -eq $Video -or $Output -eq $Audio) { throw '出力先と入力元が同一じゃ。' }
+if ($AnalyzeOnly -and [string]::IsNullOrWhiteSpace($AlignmentPlanPath)) {
+    throw '-AnalyzeOnlyには-AlignmentPlanPathを指定するのじゃ。'
+}
 
 function Get-Streams {
     param([string]$File)
@@ -119,8 +128,28 @@ if ($hasAuxiliaryTrack) {
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
 $externalDuration = [double]::Parse([string]$audioInfo.format.duration, $inv)
 if ($externalDuration -le 0) { throw '外部音声の長さが取得できぬ。' }
-
-if ($PSBoundParameters.ContainsKey('ManualOffsetSeconds')) {
+$audioFileInfo = Get-Item -LiteralPath $Audio
+$plan = $null
+if (-not $AnalyzeOnly -and $AlignmentPlanPath) {
+    if (-not (Test-Path -LiteralPath $AlignmentPlanPath -PathType Leaf)) {
+        throw "事前解析結果が見つからぬ: $AlignmentPlanPath"
+    }
+    $plan = Import-Clixml -LiteralPath $AlignmentPlanPath
+    if ($plan.SchemaVersion -ne 1 -or
+        $plan.AudioPath -ne $Audio -or
+        [long]$plan.AudioFileLength -ne [long]$audioFileInfo.Length -or
+        [long]$plan.AudioWriteTicks -ne [long]$audioFileInfo.LastWriteTimeUtc.Ticks -or
+        [Math]::Abs([double]$plan.VideoDuration - $videoDuration) -gt 0.5 -or
+        [Math]::Abs([double]$plan.ExternalDuration - $externalDuration) -gt 0.1 -or
+        [bool]$plan.NoDriftCorrection -ne [bool]$NoDriftCorrection -or
+        [bool]$plan.NoReconnectCorrection -ne [bool]$NoReconnectCorrection) {
+        throw '事前解析結果と現在の入力・設定が異なる。音声同期の再解析が必要じゃ。'
+    }
+    $pieces = @($plan.Pieces)
+    if ($pieces.Count -eq 0) { throw '事前解析結果に同期区間が見つからぬ。' }
+    Write-Host ('事前に照合済みの音声同期区間 {0}個を再利用する。' -f $pieces.Count)
+}
+elseif ($PSBoundParameters.ContainsKey('ManualOffsetSeconds')) {
     $pieces = @([pscustomobject]@{
         VideoStart = 0.0
         VideoEnd = $videoDuration
@@ -129,7 +158,8 @@ if ($PSBoundParameters.ContainsKey('ManualOffsetSeconds')) {
         Confidence = 1.0
     })
     Write-Host ("手動オフセット: {0:+0.000;-0.000;0.000}秒" -f $ManualOffsetSeconds)
-} else {
+}
+else {
     if ($referenceAudio.Count -eq 0) {
         throw '映像に同期基準の音声トラックがないため、自動同期できぬ。映像停止だけでは絶対的な音声位置を確定できない。-ManualOffsetSeconds を指定せよ。'
     }
@@ -137,7 +167,8 @@ if ($PSBoundParameters.ContainsKey('ManualOffsetSeconds')) {
     if ($null -ne $match.PSObject.Properties['Pieces']) {
         $pieces = @($match.Pieces)
         Write-Host ("再接続候補 {0}箇所 / 補正確定 {1}箇所 / 信頼度 {2:F3}" -f $match.EventCount, $match.CorrectedDiscontinuities, $match.Confidence)
-    } else {
+    }
+    else {
         $pieces = @([pscustomobject]@{
             VideoStart = 0.0
             VideoEnd = $videoDuration
@@ -152,6 +183,22 @@ if ($pieces.Count -eq 0) { throw '同期可能な音声区間が見つからぬ�
 $timeline = @(New-AudioSyncTimeline -Pieces $pieces -VideoDuration $videoDuration -ExternalDuration $externalDuration -NoDriftCorrection:$NoDriftCorrection)
 foreach ($part in $pieces) {
     Write-Host ('同期区間: 映像 {0:F3}～{1:F3}秒 / 開始オフセット {2:+0.000;-0.000;0.000}秒 / 倍率 {3:F8}' -f $part.VideoStart, $part.VideoEnd, $part.OffsetSeconds, $part.TimeScale)
+}
+if ($AnalyzeOnly) {
+    $plan = [pscustomobject]@{
+        SchemaVersion = 1
+        AudioPath = $Audio
+        AudioFileLength = [long]$audioFileInfo.Length
+        AudioWriteTicks = [long]$audioFileInfo.LastWriteTimeUtc.Ticks
+        VideoDuration = $videoDuration
+        ExternalDuration = $externalDuration
+        NoDriftCorrection = [bool]$NoDriftCorrection
+        NoReconnectCorrection = [bool]$NoReconnectCorrection
+        Pieces = @($pieces)
+    }
+    Export-Clixml -InputObject $plan -LiteralPath $AlignmentPlanPath
+    Write-Host ('音声の事前解析が完了した: {0}' -f $AlignmentPlanPath)
+    return
 }
 #endregion
 

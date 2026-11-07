@@ -20,6 +20,20 @@ Windows PowerShell 5.1以降、FFmpeg、FFprobeを使用。追加のPythonパッ
 
 画面が静止しているだけ、あるいは単に無音になっただけで音声の同期位置が変わっていなければ分割しない。十分な波形一致が得られない場合は、勝手な推測による再配置を避けて処理を中止する。
 
+### 長時間エンコード前の音声事前解析
+
+PS CameraのSBSプロファイルで波形自動同期を選ぶと、**映像をエンコードする前に音声の照合を完了**させる。成功した同期情報は一時フォルダーの`external_audio_alignment.clixml`に保存し、エンコード後に再利用する。これにより、同期できない動画で長時間のエンコードを先に実行したり、同じ音声を2回解析したりすることを避ける。カットを指定した場合は動画の時間軸が変わるため、事前解析の再利用は行わない。
+
+単独でも事前解析と合成を分けられる。
+
+```powershell
+.\Tools\Audio\Sync-ExternalAudio.ps1 -Video ".\capture.mp4" -Audio ".\recording.wav" -AnalyzeOnly -AlignmentPlanPath ".\alignment.clixml"
+.\Tools\Audio\Sync-ExternalAudio.ps1 -Video ".\encoded_output\temp_capture\capture.mkv" -Audio ".\recording.wav" -AlignmentPlanPath ".\alignment.clixml" -Output ".\encoded_output\capture.mkv"
+```
+
+音声同期が失敗した後に一時フォルダーに映像MKVが残っていれば、そのMKVを入力して音声同期のみ再試行できる。**再度、映像エンコードを実行する必要はない**。再接続候補の波形が照合できない場合は、該当する候補時刻をエラーに含め、推測でタイムラインを変更しない。
+
+
 映像に比較用の音声トラックが**全く存在しない**場合、映像停止だけを手掛かりに別録り音声の正確な開始位置・再開位置を自動確定することはできぬ。その場合は録画側のタイムコードなど別の同期手掛かりが必要じゃ。
 
 ## 1. 4chをメインと補助の2トラックに分離する

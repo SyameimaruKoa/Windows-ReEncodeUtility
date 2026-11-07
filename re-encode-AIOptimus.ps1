@@ -2348,6 +2348,7 @@ function Invoke-ExternalAudioSynthesis {
     }
     if ($OutputPath) { $syncArguments.Output = $OutputPath }
     if ($Settings.Manual) { $syncArguments.ManualOffsetSeconds = [double]$Settings.ManualOffsetSeconds }
+    if ($Settings.AlignmentPlanPath) { $syncArguments.AlignmentPlanPath = [string]$Settings.AlignmentPlanPath }
 
     Write-Log "外部音声同期: $($Settings.AudioPath)"
     & $audioTool @syncArguments
@@ -2889,6 +2890,36 @@ function Invoke-EncodeFile {
             $cutStart = Read-Host "開始位置 (例:00:01:15.000)"; $cutEnd = Read-Host "終了位置 (例:00:03:30.500)"
             if ($cutStart -and $cutEnd) { $cutInfo = "-ss $cutStart -to $cutEnd"; Write-Log "カット情報: 開始 $cutStart, 終了 $cutEnd" }
             else { Write-Log "カット位置が未入力のため、カットしません。" -Level "WARN" }
+        }
+
+        # --- 外部音声の同期解析は長時間の映像エンコードより先に行う ---
+        # 正常な解析結果をClixmlで残し、映像エンコード後の重複解析を避ける。
+        if ($useExternalAudioSync -and -not $Config.ExternalAudioSync.Manual) {
+            if (-not $cutInfo) {
+                $analysisTool = Join-Path $global:ScriptDir "Tools\Audio\Sync-ExternalAudio.ps1"
+                $analysisPlan = Join-Path $tempDir "external_audio_alignment.clixml"
+                $analysisArguments = @{
+                    Video = $InputFile
+                    Audio = $Config.ExternalAudioSync.AudioPath
+                    FfmpegPath = $global:Settings.FfmpegPath
+                    FfprobePath = $global:Settings.FfprobePath
+                    AnalyzeOnly = $true
+                    AlignmentPlanPath = $analysisPlan
+                }
+                if (Test-Path -LiteralPath $analysisPlan -PathType Leaf) {
+                    Remove-Item -LiteralPath $analysisPlan -Force
+                }
+                Write-Log "外部音声の事前解析を開始。同期できなければ映像エンコードを開始しないのじゃ。"
+                & $analysisTool @analysisArguments
+                if (-not (Test-Path -LiteralPath $analysisPlan -PathType Leaf)) {
+                    throw "外部音声の事前解析結果が作成されなかった: $analysisPlan"
+                }
+                $Config.ExternalAudioSync.AlignmentPlanPath = $analysisPlan
+                Write-Log "外部音声の事前解析が正常に完了した。結果を映像エンコード後に再利用するのじゃ。"
+            }
+            else {
+                Write-Log "カット処理を行うため、事前解析結果の再利用を省略する。" -Level "WARN"
+            }
         }
 
         # --- 外部エンコーダーによる先行音声エンコード ---
