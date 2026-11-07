@@ -196,7 +196,7 @@ if ($AnalyzeOnly) {
         NoReconnectCorrection = [bool]$NoReconnectCorrection
         Pieces = @($pieces)
     }
-    Export-Clixml -InputObject $plan -LiteralPath $AlignmentPlanPath
+    Export-Clixml -InputObject $plan -LiteralPath $AlignmentPlanPath -Depth 5
     Write-Host ('音声の事前解析が完了した: {0}' -f $AlignmentPlanPath)
     return
 }
