@@ -27,6 +27,9 @@
     音声同期を先に検証する。出力動画は作らず、-AlignmentPlanPathに結果を保存する。
 .PARAMETER AlignmentPlanPath
     事前解析結果の保存先／読込元。入力音声と動画の長さを検証して再利用する。
+.PARAMETER AlignmentMapPath
+    実録音の独立した波形照合で検証したJSON同期区間を適用する。
+    入力ファイル名・長さを照合し、映像をコピーして外部4ch音声のみ合成する。
 .PARAMETER LeftChannel
     ステレオ左に使用する元音声のチャンネル番号（1始まり、デフォルト1）。
 .PARAMETER RightChannel
@@ -44,6 +47,8 @@
     .\Sync-ExternalAudio.ps1 -Video .\video.mkv -Audio .\PSCam4Win-mic.wav
 .EXAMPLE
     .\Sync-ExternalAudio.ps1 -Video .\video.mkv -Audio .\microphone.wav -ManualOffsetSeconds -0.32
+.EXAMPLE
+    .\Sync-ExternalAudio.ps1 -Video .\capture.mkv -Audio .\original4ch.wav -AlignmentMapPath .\verified_audio_alignment.json
 #>
 [CmdletBinding()]
 param(
@@ -55,6 +60,7 @@ param(
     [switch]$NoReconnectCorrection,
     [switch]$AnalyzeOnly,
     [string]$AlignmentPlanPath,
+    [string]$AlignmentMapPath,
     [ValidateRange(1, 256)][int]$LeftChannel = 1,
     [ValidateRange(0, 256)][int]$RightChannel = 0,
     [switch]$KeepReferenceAudio,
@@ -93,6 +99,10 @@ if ($Output -eq $Video -or $Output -eq $Audio) { throw '出力先と入力元が
 if ($AnalyzeOnly -and [string]::IsNullOrWhiteSpace($AlignmentPlanPath)) {
     throw '-AnalyzeOnlyには-AlignmentPlanPathを指定するのじゃ。'
 }
+if ($AlignmentMapPath -and ($AnalyzeOnly -or $AlignmentPlanPath -or $NoDriftCorrection -or
+    $PSBoundParameters.ContainsKey('ManualOffsetSeconds'))) {
+    throw '-AlignmentMapPathは手動同期・解析結果キャッシュ・ドリフト補正無効と同時に指定できぬ。'
+}
 
 function Get-Streams {
     param([string]$File)
@@ -130,7 +140,25 @@ $externalDuration = [double]::Parse([string]$audioInfo.format.duration, $inv)
 if ($externalDuration -le 0) { throw '外部音声の長さが取得できぬ。' }
 $audioFileInfo = Get-Item -LiteralPath $Audio
 $plan = $null
-if (-not $AnalyzeOnly -and $AlignmentPlanPath) {
+$verifiedMap = $false
+if ($AlignmentMapPath) {
+    if (-not (Test-Path -LiteralPath $AlignmentMapPath -PathType Leaf)) {
+        throw "同期マップが見つからぬ: $AlignmentMapPath"
+    }
+    $map = Get-Content -LiteralPath $AlignmentMapPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($map.SchemaVersion -ne 1 -or
+        [Math]::Abs([double]$map.VideoDuration - $videoDuration) -gt 0.25 -or
+        [Math]::Abs([double]$map.ExternalDuration - $externalDuration) -gt 0.25 -or
+        $map.ExpectedVideoBaseName -ne [System.IO.Path]::GetFileName($Video) -or
+        $map.ExpectedAudioBaseName -ne [System.IO.Path]::GetFileName($Audio)) {
+        throw '同期マップが入力動画・外部音声と一致せぬ。別の録画には適用できぬ。'
+    }
+    $pieces = @($map.Pieces)
+    if ($pieces.Count -lt 1 -or $pieces.Count -gt 120) { throw '同期マップの区間数が不正じゃ。' }
+    $verifiedMap = $true
+    Write-Host ('実録音で照合済みの同期マップを適用する: {0}区間' -f $pieces.Count)
+}
+elseif (-not $AnalyzeOnly -and $AlignmentPlanPath) {
     if (-not (Test-Path -LiteralPath $AlignmentPlanPath -PathType Leaf)) {
         throw "事前解析結果が見つからぬ: $AlignmentPlanPath"
     }
@@ -180,7 +208,8 @@ else {
     }
 }
 if ($pieces.Count -eq 0) { throw '同期可能な音声区間が見つからぬ。' }
-$timeline = @(New-AudioSyncTimeline -Pieces $pieces -VideoDuration $videoDuration -ExternalDuration $externalDuration -NoDriftCorrection:$NoDriftCorrection)
+$maxDeviation = if ($verifiedMap) { 0.06 } else { 0.003 }
+$timeline = @(New-AudioSyncTimeline -Pieces $pieces -VideoDuration $videoDuration -ExternalDuration $externalDuration -NoDriftCorrection:$NoDriftCorrection -MaxTimeScaleDeviation $maxDeviation)
 foreach ($part in $pieces) {
     Write-Host ('同期区間: 映像 {0:F3}～{1:F3}秒 / 開始オフセット {2:+0.000;-0.000;0.000}秒 / 倍率 {3:F8}' -f $part.VideoStart, $part.VideoEnd, $part.OffsetSeconds, $part.TimeScale)
 }

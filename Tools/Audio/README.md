@@ -87,6 +87,19 @@ PS CameraのSBSプロファイルで波形自動同期を選ぶと、**映像を
 - `-FfmpegPath` / `-FfprobePath`: 実行ファイルのパスを指定。
 - `-h` / `--help`、または引数なし: 詳しいヘルプ。
 
+### 実録音から検証した同期マップによる復旧
+
+録画で波形自動照合が確定できない場合も、**実録音で独立に検証されたJSON同期マップ**を指定すれば、重い解析を再度実施せずに音声だけ合成できる。これは任意の録画に使える自動推定ではなく、**その録画専用**の照合結果を適用する機能じゃ。
+
+```powershell
+.\Tools\Audio\Sync-ExternalAudio.ps1 -Video ".\encoded_output\temp_capture\capture.mkv" -Audio ".\recording.wav" -AlignmentMapPath ".\verified_audio_alignment.json" -Output ".\encoded_output\capture.mkv"
+```
+
+- 動画・外部音声のファイル名と長さを検査し、異なる録画には適用しない。
+- マップは`VideoStart`、`VideoEnd`、`OffsetSeconds`、`TimeScale`を持つ同期区間を含む。区間の間には自動的に無音を挿入する。
+- 長時間のクロック差が実証された録画では、通常の±0.3%より広い±6%までの倍率を**照合済みマップに限って**許可する。
+- 4ch→Opus 2トラックと動画ストリームコピーは従来どおり。元のWAVや映像は変更しない。
+
 ## 3. PS CameraのSBS左右交換
 
 テンプレートモードから `PS Camera SBS - 左右交換` を選択する。

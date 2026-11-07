@@ -22,7 +22,8 @@ function New-AudioSyncTimeline {
         [Parameter(Mandatory = $true)][object[]]$Pieces,
         [Parameter(Mandatory = $true)][double]$VideoDuration,
         [Parameter(Mandatory = $true)][double]$ExternalDuration,
-        [switch]$NoDriftCorrection
+        [switch]$NoDriftCorrection,
+        [ValidateRange(0.003, 0.1)][double]$MaxTimeScaleDeviation = 0.003
     )
     if ($VideoDuration -le 0 -or $ExternalDuration -le 0) {
         throw '映像または外部音声の長さが不正じゃ。'
@@ -35,7 +36,7 @@ function New-AudioSyncTimeline {
         $end = [double]$part.VideoEnd
         $offset = [double]$part.OffsetSeconds
         $scale = [double]$part.TimeScale
-        if ($scale -le 0 -or [Math]::Abs($scale - 1.0) -gt 0.003) {
+        if ($scale -le 0 -or [Math]::Abs($scale - 1.0) -gt $MaxTimeScaleDeviation) {
             throw '音声時間倍率が異常じゃ。'
         }
         if ($NoDriftCorrection) {
