@@ -12,6 +12,39 @@ namespace ReEncodeUtility.Audio
         public int MatchedAnchors { get; set; }
     }
 
+
+    public sealed class AlignmentPiece
+    {
+        public double VideoStart { get; set; }
+        public double VideoEnd { get; set; }
+        public double OffsetSeconds { get; set; }
+        public double TimeScale { get; set; }
+        public double Confidence { get; set; }
+    }
+
+    public sealed class SegmentedMatchResult
+    {
+        public AlignmentPiece[] Pieces { get; set; }
+        public int EventCount { get; set; }
+        public int CorrectedDiscontinuities { get; set; }
+        public double Confidence { get; set; }
+    }
+
+    internal sealed class SyncInterval
+    {
+        public double Start;
+        public double End;
+    }
+
+    internal sealed class SyncRegion
+    {
+        public double Start;
+        public double End;
+        public MatchResult Match;
+        public double Offset;
+        public double Confidence;
+    }
+
     internal sealed class Candidate
     {
         public double VideoTime;
@@ -105,6 +138,196 @@ namespace ReEncodeUtility.Audio
                 result.Add(c);
             }
             return result;
+        }
+
+
+        public static SegmentedMatchResult FindSegmented(float[] video, float[] external, int sampleRate,
+            double[] eventStarts, double[] eventEnds, double videoDuration)
+        {
+            if (eventStarts == null || eventEnds == null || eventStarts.Length != eventEnds.Length)
+                throw new ArgumentException("Reconnect event arrays are invalid.");
+            if (videoDuration <= 0 || sampleRate <= 0)
+                throw new ArgumentOutOfRangeException("videoDuration");
+            List<SyncInterval> events = new List<SyncInterval>();
+            double availableVideo = video.Length / (double)sampleRate;
+            for (int i = 0; i < eventStarts.Length; i++)
+            {
+                double start = Math.Max(0.0, eventStarts[i]);
+                double end = Math.Min(videoDuration, eventEnds[i]);
+                if (double.IsNaN(start) || double.IsNaN(end) || end - start < 0.9) continue;
+                if (start < 1.0 || end >= availableVideo - 1.0) continue;
+                events.Add(new SyncInterval { Start = start, End = end });
+            }
+            events.Sort((a, b) => a.Start.CompareTo(b.Start));
+            List<SyncInterval> merged = new List<SyncInterval>();
+            foreach (SyncInterval interval in events)
+            {
+                if (merged.Count > 0 && interval.Start - merged[merged.Count - 1].End < 5.0)
+                {
+                    merged[merged.Count - 1].End = Math.Max(merged[merged.Count - 1].End, interval.End);
+                }
+                else
+                {
+                    merged.Add(new SyncInterval { Start = interval.Start, End = interval.End });
+                }
+            }
+            if (merged.Count == 0)
+            {
+                MatchResult regular = Find(video, external, sampleRate);
+                return new SegmentedMatchResult
+                {
+                    EventCount = 0, CorrectedDiscontinuities = 0, Confidence = regular.Confidence,
+                    Pieces = new AlignmentPiece[] { new AlignmentPiece {
+                        VideoStart = 0, VideoEnd = videoDuration, OffsetSeconds = regular.OffsetSeconds,
+                        TimeScale = regular.TimeScale, Confidence = regular.Confidence } }
+                };
+            }
+
+            List<SyncRegion> regions = new List<SyncRegion>();
+            double regionStart = 0;
+            for (int index = 0; index <= merged.Count; index++)
+            {
+                double regionEnd = index == merged.Count ? Math.Min(videoDuration, availableVideo) : merged[index].Start;
+                SyncRegion region = new SyncRegion { Start = regionStart, End = regionEnd };
+                int first = Math.Max(0, (int)Math.Ceiling(regionStart * sampleRate));
+                int last = Math.Min(video.Length, (int)Math.Floor(regionEnd * sampleRate));
+                if (last - first >= 5 * sampleRate)
+                {
+                    float[] regionAudio = new float[last - first];
+                    Array.Copy(video, first, regionAudio, 0, regionAudio.Length);
+                    try
+                    {
+                        MatchResult match = Find(regionAudio, external, sampleRate);
+                        if (match.MatchedAnchors >= 2 && match.Confidence >= 0.65 ||
+                            match.MatchedAnchors == 1 && match.Confidence >= 0.95)
+                        {
+                            region.Match = match;
+                            region.Offset = first / (double)sampleRate + match.OffsetSeconds;
+                            region.Confidence = match.Confidence;
+                        }
+                    }
+                    catch (InvalidOperationException) { }
+                }
+                regions.Add(region);
+                if (index < merged.Count) regionStart = merged[index].End;
+            }
+
+            bool[] cuts = new bool[merged.Count];
+            int corrections = 0;
+            for (int index = 0; index < merged.Count; index++)
+            {
+                SyncRegion before = regions[index], after = regions[index + 1];
+                if (before.Match == null || after.Match == null)
+                {
+                    // Ordinary quiet/static passages may leave an adjacent region unmatchable.
+                    // Use more distant verified anchors only to prove continuity, never to invent a cut.
+                    SyncRegion preceding = null, following = null;
+                    for (int j = index; j >= 0; j--)
+                    {
+                        if (regions[j].Match != null) { preceding = regions[j]; break; }
+                    }
+                    for (int j = index + 1; j < regions.Count; j++)
+                    {
+                        if (regions[j].Match != null) { following = regions[j]; break; }
+                    }
+                    if (preceding == null || following == null)
+                        throw new InvalidOperationException(string.Format(
+                            "Reconnect candidate {0:F2}-{1:F2}s: no reliable audio anchors on both sides.",
+                            merged[index].Start, merged[index].End));
+                    double beforeExternal = (merged[index].Start - preceding.Offset) / preceding.Match.TimeScale;
+                    double afterExternal = (merged[index].End - following.Offset) / following.Match.TimeScale;
+                    double videoGap = merged[index].End - merged[index].Start;
+                    double audioGap = (afterExternal - beforeExternal) *
+                        (preceding.Match.TimeScale + following.Match.TimeScale) / 2.0;
+                    if (Math.Abs(videoGap - audioGap) <= Math.Max(0.65, videoGap * 0.04))
+                        continue;
+                    throw new InvalidOperationException(string.Format(
+                        "Reconnect candidate {0:F2}-{1:F2}s: audio offset changes across unmatchable intervals; " +
+                        "the exact cut cannot be established safely.",
+                        merged[index].Start, merged[index].End));
+                }
+                double externalBefore = (merged[index].Start - before.Offset) / before.Match.TimeScale;
+                double externalAfter = (merged[index].End - after.Offset) / after.Match.TimeScale;
+                double elapsed = externalAfter - externalBefore;
+                if (elapsed < -0.20)
+                    throw new InvalidOperationException("Matched audio overlaps at a reconnect event. Check the reference recordings.");
+                double videoElapsed = merged[index].End - merged[index].Start;
+                double missing = videoElapsed - elapsed * (before.Match.TimeScale + after.Match.TimeScale) / 2.0;
+                if (Math.Abs(missing) >= Math.Max(0.65, videoElapsed * 0.04))
+                {
+                    cuts[index] = true;
+                    corrections++;
+                }
+            }
+
+            if (corrections == 0)
+            {
+                try
+                {
+                    MatchResult regular = Find(video, external, sampleRate);
+                    return new SegmentedMatchResult
+                    {
+                        EventCount = merged.Count, CorrectedDiscontinuities = 0, Confidence = regular.Confidence,
+                        Pieces = new AlignmentPiece[] { new AlignmentPiece {
+                            VideoStart = 0, VideoEnd = videoDuration,
+                            OffsetSeconds = regular.OffsetSeconds, TimeScale = regular.TimeScale,
+                            Confidence = regular.Confidence } }
+                    };
+                }
+                catch (InvalidOperationException) { }
+            }
+
+            List<AlignmentPiece> pieces = new List<AlignmentPiece>();
+            int groupFrom = 0;
+            double minimumConfidence = 1.0;
+            for (int index = 0; index <= merged.Count; index++)
+            {
+                if (index < merged.Count && !cuts[index]) continue;
+                int groupTo = index;
+                SyncRegion representative = null;
+                for (int regionIndex = groupFrom; regionIndex <= groupTo; regionIndex++)
+                {
+                    SyncRegion candidate = regions[regionIndex];
+                    if (candidate.Match == null) continue;
+                    if (representative == null ||
+                        candidate.Match.MatchedAnchors > representative.Match.MatchedAnchors ||
+                        candidate.Match.MatchedAnchors == representative.Match.MatchedAnchors &&
+                        candidate.Confidence > representative.Confidence)
+                        representative = candidate;
+                }
+                double outputStart = groupFrom == 0 ? 0.0 : merged[groupFrom - 1].End;
+                double outputEnd = index == merged.Count ? videoDuration : merged[index].Start;
+                if (representative == null)
+                    throw new InvalidOperationException(
+                        "Audio around the reconnect has no reliable matching samples. Alignment was not fabricated.");
+                if (outputEnd > outputStart)
+                {
+                    foreach (SyncRegion other in regions)
+                    {
+                        if (other.Match == null || other.Start < outputStart || other.End > outputEnd) continue;
+                        double middle = (other.Start + other.End) / 2.0;
+                        double extAtMiddle = (middle - other.Offset) / other.Match.TimeScale;
+                        double predicted = representative.Offset + representative.Match.TimeScale * extAtMiddle;
+                        if (Math.Abs(predicted - middle) > Math.Max(0.55, (outputEnd - outputStart) * 0.003))
+                            throw new InvalidOperationException(
+                                "Audio alignment is inconsistent within a continuous segment.");
+                    }
+                    minimumConfidence = Math.Min(minimumConfidence, representative.Confidence);
+                    pieces.Add(new AlignmentPiece {
+                        VideoStart = outputStart, VideoEnd = outputEnd,
+                        OffsetSeconds = representative.Offset,
+                        TimeScale = representative.Match.TimeScale,
+                        Confidence = representative.Confidence
+                    });
+                }
+                groupFrom = index + 1;
+            }
+            if (pieces.Count == 0)
+                throw new InvalidOperationException("There are no reliable audio synchronization segments.");
+            return new SegmentedMatchResult {
+                EventCount = merged.Count, CorrectedDiscontinuities = corrections,
+                Confidence = minimumConfidence, Pieces = pieces.ToArray()
+            };
         }
 
         public static MatchResult Find(float[] video, float[] external, int sampleRate)
