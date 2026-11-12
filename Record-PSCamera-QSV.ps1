@@ -29,9 +29,11 @@
 .PARAMETER NoAudio
     音声を録画しない。
 .PARAMETER AudioCodec
-    AAC（既定）またはPCM（16-bit無圧縮）。
+    Opus（既定）、AAC、PCM（16-bit無圧縮）。
 .PARAMETER AudioBitrateKbps
-    AACの音声ビットレート。既定は256kbps。
+    OpusまたはAACの音声ビットレート。既定は256kbps。
+.PARAMETER OpusComplexity
+    libopusのエンコード複雑度（0～10）。既定は5。値を下げるほどCPU負荷が軽くなるが品質も下がる。
 .PARAMETER Width
     録画解像度の幅。既定は2560。
 .PARAMETER Height
@@ -59,7 +61,7 @@
     対話メニューから設定して録画する。
 .EXAMPLE
     .\Record-PSCamera-QSV.ps1 -DurationSeconds 10
-    VDEnc・GPU VPP・AAC音声で10秒間試験録画する。
+    VDEnc・GPU VPP・Opus音声で10秒間試験録画する。
 .EXAMPLE
     .\Record-PSCamera-QSV.ps1 -Mode QSV -Conversion CPU -Codec HEVC
     通常QSV・CPU色変換・H.265で録画する。
@@ -77,8 +79,9 @@ param(
     [ValidateSet('SizeFps', 'YUY2', 'DeviceDefault')][string]$CaptureNegotiation = 'DeviceDefault',
     [string]$AudioDevice = 'Voicemeeter Out B2 (VB-Audio Voicemeeter VAIO)',
     [switch]$NoAudio,
-    [ValidateSet('AAC', 'PCM')][string]$AudioCodec = 'AAC',
+    [ValidateSet('Opus', 'AAC', 'PCM')][string]$AudioCodec = 'Opus',
     [ValidateRange(32, 1024)][int]$AudioBitrateKbps = 256,
+    [ValidateRange(0, 10)][int]$OpusComplexity = 5,
     [ValidateRange(2, 8192)][int]$Width = 2560,
     [ValidateRange(2, 4320)][int]$Height = 800,
     [ValidateRange(1, 240)][int]$Fps = 60,
@@ -136,7 +139,7 @@ function Show-RecordingMenu {
         if (-not [string]::IsNullOrWhiteSpace($deviceName)) {
             $script:AudioDevice = $deviceName
         }
-        $script:AudioCodec = @('AAC', 'PCM')[(Read-Selection '音声コーデック' @('AAC', 'PCM無圧縮') ([array]::IndexOf(@('AAC', 'PCM'), $script:AudioCodec)))]
+        $script:AudioCodec = @('Opus', 'AAC', 'PCM')[(Read-Selection '音声コーデック' @('Opus（既定・省CPU設定）', 'AAC', 'PCM無圧縮') ([array]::IndexOf(@('Opus', 'AAC', 'PCM'), $script:AudioCodec)))]
     }
     $directory = Read-Host ("保存先（Enterで {0}）" -f $script:OutputDirectory)
     if (-not [string]::IsNullOrWhiteSpace($directory)) {
@@ -202,6 +205,9 @@ try {
     $availableEncoders = (& $ffmpegExecutable -hide_banner -encoders 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0 -or $availableEncoders -notmatch [regex]::Escape($encoder)) {
         throw "FFmpegに $encoder が存在しないのじゃ。"
+    }
+    if (-not $NoAudio -and $AudioCodec -eq 'Opus' -and $availableEncoders -notmatch '\blibopus\b') {
+        throw 'FFmpegにlibopusエンコーダーが存在しないのじゃ。'
     }
     if ($Conversion -eq 'GPU') {
         $availableFilters = (& $ffmpegExecutable -hide_banner -filters 2>&1 | Out-String)
@@ -274,6 +280,14 @@ if ($NoAudio) {
     $ffmpegArgs += '-an'
 } elseif ($AudioCodec -eq 'PCM') {
     $ffmpegArgs += @('-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2')
+} elseif ($AudioCodec -eq 'Opus') {
+    $ffmpegArgs += @(
+        '-c:a', 'libopus',
+        '-b:a', ('{0}k' -f $AudioBitrateKbps),
+        '-compression_level:a', "$OpusComplexity",
+        '-ar', '48000',
+        '-ac', '2'
+    )
 } else {
     $ffmpegArgs += @(
         '-c:a', 'aac',
