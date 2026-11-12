@@ -329,8 +329,11 @@ finally {
 }
 if ($exitCode -ne 0) {
     Write-Host ("録画失敗 (FFmpeg終了コード {0})。ログ: {1}" -f $exitCode, $logFile) -ForegroundColor Red
-    Write-Host 'DirectShowの「Could not set video options」が出たら、-ListFormatsで対応形式を確認するのじゃ。' -ForegroundColor Yellow
-    Write-Host '入力形式の強制指定時に失敗する場合は -CaptureNegotiation DeviceDefault で再試行するのじゃ。' -ForegroundColor Yellow
+    if ((Test-Path -LiteralPath $logFile -PathType Leaf) -and
+        (Select-String -LiteralPath $logFile -Pattern 'Could not set video options' -SimpleMatch -Quiet)) {
+        Write-Host 'DirectShowの映像形式設定で失敗したのじゃ。-ListFormatsで対応形式を確認してくれ。' -ForegroundColor Yellow
+        Write-Host '入力形式の強制指定時に失敗する場合は -CaptureNegotiation DeviceDefault で再試行するのじゃ。' -ForegroundColor Yellow
+    }
     exit $exitCode
 }
 #region 出力検証
