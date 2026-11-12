@@ -460,6 +460,28 @@ MiraBox等のキャプチャデバイスから映像を取り込み、**ゼロ�
 - **teeマルチプレクサ**を利用し、エンコード負荷を最小限に抑えながらMKV保存とUDPストリーミングを並行処理
 - 面倒な設定なしで、保存先をインタラクティブに選択可能
 
+
+### PS4 Camera QSV録画（`Record-PSCamera-QSV.ps1`）
+
+PSCam4Winの仮想カメラをプレビューなしで録画する。既定は2560×800・60fps、YUY2→QSV VPP→H.264 VDEnc、Voicemeeter B2音声（AAC 256kbps）、MKV保存。録画中の停止は `q` キー。
+
+```powershell
+.\Record-PSCamera-QSV.ps1
+.\Record-PSCamera-QSV.ps1 -DurationSeconds 10
+.\Record-PSCamera-QSV.ps1 -Mode QSV -Conversion CPU -Codec HEVC
+.\Record-PSCamera-QSV.ps1 -ListDevices
+.\Record-PSCamera-QSV.ps1 -ListFormats
+.\Record-PSCamera-QSV.ps1 -h
+```
+
+- `-Mode VDEnc|QSV`：VDEnc優先または通常QSV。エンコーダーは常にQSVで、x264への自動切替はしない。
+- `-Conversion GPU|CPU`：GPUの色形式変換が使えない場合はCPU変換を明示して再試行できる。
+- `-AudioDevice` / `-AudioCodec AAC|PCM` / `-NoAudio`：音声デバイス・形式を変更する。
+- `-VideoDevice` / `-Width` / `-Height` / `-Fps` / `-Quality`：キャプチャ・品質設定を変更する。
+- FFmpegは `config.user.psd1` の `FfmpegPath` を利用し、録画先に同名の `*.log` を出力する。
+
+GPU VPP・VDEncの実際の対応状況はGPUドライバーに依存する。CPU変換を選んでもQSVエンコードは維持する。
+
 ---
 
 ## ⚙️ 設定ファイル
