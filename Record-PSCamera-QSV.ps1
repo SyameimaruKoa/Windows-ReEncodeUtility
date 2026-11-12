@@ -271,10 +271,10 @@ $filter = if ($Conversion -eq 'GPU') {
 $ffmpegArgs += @(
     '-vf', $filter,
     '-c:v', $encoder,
-    '-low_power', $lowPower,
-    '-preset', 'fast',
-    '-bf', '0',
-    '-global_quality', "$Quality",
+    '-low_power:v', $lowPower,
+    '-preset:v', 'fast',
+    '-bf:v', '0',
+    '-global_quality:v', "$Quality",
     '-fps_mode:v', 'passthrough'
 )
 if (-not $NoAudio) {
