@@ -30,7 +30,7 @@
 .PARAMETER NoAudio
     音声を録画しない。
 .PARAMETER AudioCodec
-    Opus（既定）、AAC、PCM（16-bit無圧縮）。
+    Opus（既定）、AAC、PCM（16-bit無圧縮）。PCMは入力サンプルレートを維持する。
 .PARAMETER AudioBitrateKbps
     OpusまたはAACの音声ビットレート。既定は256kbps。
 .PARAMETER OpusComplexity
@@ -38,6 +38,7 @@
 .PARAMETER AudioTimestampMode
     Compensate（既定）は入力音声時刻に合わせて非同期リサンプリングした後、出力時刻をサンプル数から再生成する。
     Originalは従来の入力音声時刻を使用する。比較検証用。
+    PCM選択時は、明示指定しなければOriginalを使い音声補正を省く。
 .PARAMETER Width
     録画解像度の幅。既定は2560。
 .PARAMETER Height
@@ -144,7 +145,10 @@ function Show-RecordingMenu {
         if (-not [string]::IsNullOrWhiteSpace($deviceName)) {
             $script:AudioDevice = $deviceName
         }
-        $script:AudioCodec = @('Opus', 'AAC', 'PCM')[(Read-Selection '音声コーデック' @('Opus（既定・省CPU設定）', 'AAC', 'PCM無圧縮') ([array]::IndexOf(@('Opus', 'AAC', 'PCM'), $script:AudioCodec)))]
+        $script:AudioCodec = @('Opus', 'AAC', 'PCM')[(Read-Selection '音声コーデック' @('Opus（既定・省CPU設定）', 'AAC', 'PCM無圧縮（入力レート維持）') ([array]::IndexOf(@('Opus', 'AAC', 'PCM'), $script:AudioCodec)))]
+        if ($script:AudioCodec -eq 'PCM' -and -not $PSBoundParameters.ContainsKey('AudioTimestampMode')) {
+            $script:AudioTimestampMode = 'Original'
+        }
     }
     $directory = Read-Host ("保存先（Enterで {0}）" -f $script:OutputDirectory)
     if (-not [string]::IsNullOrWhiteSpace($directory)) {
@@ -201,6 +205,9 @@ try {
     }
     if ($PSBoundParameters.Count -eq 0 -or $Interactive) {
         Show-RecordingMenu
+    }
+    if ($AudioCodec -eq 'PCM' -and -not $PSBoundParameters.ContainsKey('AudioTimestampMode')) {
+        $AudioTimestampMode = 'Original'
     }
 
     if (($Width % 2) -ne 0 -or ($Height % 2) -ne 0) {
@@ -291,7 +298,7 @@ if (-not $NoAudio) {
 if ($NoAudio) {
     $ffmpegArgs += '-an'
 } elseif ($AudioCodec -eq 'PCM') {
-    $ffmpegArgs += @('-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '1')
+    $ffmpegArgs += @('-c:a', 'pcm_s16le', '-ac', '1')
 } elseif ($AudioCodec -eq 'Opus') {
     $ffmpegArgs += @(
         '-c:a', 'libopus',
