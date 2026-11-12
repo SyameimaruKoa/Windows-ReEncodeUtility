@@ -20,9 +20,9 @@
 .PARAMETER VideoDevice
     DirectShowの映像デバイス名。
 .PARAMETER CaptureNegotiation
-    SizeFps（既定）は解像度とFPSだけを指定し、入力のピクセル形式はDirectShowに選ばせる。
+    SizeFpsは解像度とFPSだけを指定し、入力のピクセル形式はDirectShowに選ばせる。
     YUY2は解像度・FPS・YUY2をすべて要求する。
-    DeviceDefaultは入力の全形式をカメラ側に任せる。出力の解像度・FPSはログで確認すること。
+    DeviceDefault（既定）は入力の全形式をカメラ側に任せる。出力の解像度・FPSはログで確認すること。
 .PARAMETER AudioDevice
     DirectShowの音声デバイス名。既定はVoicemeeter Out B2。
 .PARAMETER NoAudio
@@ -71,7 +71,7 @@ param(
     [ValidateSet('H264', 'HEVC')][string]$Codec = 'H264',
     [ValidateSet('GPU', 'CPU')][string]$Conversion = 'GPU',
     [string]$VideoDevice = 'PS4 Camera (Windows 仮想カメラ)',
-    [ValidateSet('SizeFps', 'YUY2', 'DeviceDefault')][string]$CaptureNegotiation = 'SizeFps',
+    [ValidateSet('SizeFps', 'YUY2', 'DeviceDefault')][string]$CaptureNegotiation = 'DeviceDefault',
     [string]$AudioDevice = 'Voicemeeter Out B2 (VB-Audio Voicemeeter VAIO)',
     [switch]$NoAudio,
     [ValidateSet('AAC', 'PCM')][string]$AudioCodec = 'AAC',
@@ -302,7 +302,7 @@ finally {
 if ($exitCode -ne 0) {
     Write-Host ("録画失敗 (FFmpeg終了コード {0})。ログ: {1}" -f $exitCode, $logFile) -ForegroundColor Red
     Write-Host 'DirectShowの「Could not set video options」が出たら、-ListFormatsで対応形式を確認するのじゃ。' -ForegroundColor Yellow
-    Write-Host '既定のSizeFpsが失敗する場合は -CaptureNegotiation DeviceDefault で切り分けられるぞ。' -ForegroundColor Yellow
+    Write-Host '入力形式の強制指定時に失敗する場合は -CaptureNegotiation DeviceDefault で再試行するのじゃ。' -ForegroundColor Yellow
     exit $exitCode
 }
 Write-Host ("録画完了: {0}" -f $outputFile) -ForegroundColor Green
