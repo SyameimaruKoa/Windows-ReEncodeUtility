@@ -477,7 +477,7 @@ PSCam4Winの仮想カメラをプレビューなしで録画する。既定は25
 - `-Mode VDEnc|QSV`：VDEnc優先または通常QSV。エンコーダーは常にQSVで、x264への自動切替はしない。
 - `-CaptureNegotiation SizeFps|YUY2|DeviceDefault`：DirectShowで要求する入力条件。既定の`DeviceDefault`は入力形式をカメラへ任せる（実際の解像度・FPSはFFmpegログで確認）。`SizeFps`は解像度とFPSを指定、`YUY2`はピクセル形式も強制する。PSCam4Winでは60fps強制指定時にDirectShowの設定が失敗したため、`DeviceDefault`を標準にしている。
 - `-Conversion GPU|CPU`：GPUの色形式変換が使えない場合はCPU変換を明示して再試行できる。
-- `-AudioDevice` / `-AudioCodec Opus|AAC|PCM` / `-NoAudio`：音声デバイス・形式を変更する。既定はOpus、AACも引き続き選択可能。 Opus・AAC・PCMはいずれも`pan=mono|c0=c0`で入力の第1チャンネルだけを抽出してモノラル保存する。第2チャンネルとのミックスは行わない。
+- `-AudioDevice` / `-AudioCodec Opus|AAC|PCM` / `-NoAudio`：音声デバイス・形式を変更する。既定はOpus、AACも引き続き選択可能。 Opus・AAC・PCMはいずれも`pan=mono|c0=c0`で入力の第1チャンネルだけを抽出してモノラル保存する。第2チャンネルとのミックスは行わない。 PCM選択時は入力の44.1kHzを維持し、音声時刻補正を既定で無効にする（明示した`-AudioTimestampMode`は優先）。
 - `-AudioBitrateKbps`（既定256）/ `-OpusComplexity`（既定5、範囲0～10）：音声ビットレートとOpusエンコード時のCPU負荷・品質を調整する。
 - `-AudioTimestampMode Compensate|Original`：既定の`Compensate`は音声時刻の揺れに合わせて48kHzへの非同期リサンプリングと連番PTSを適用する。`Original`は従来の入力時刻を使用し、同期を比較するための設定。
 - `-VideoDevice` / `-Width` / `-Height` / `-Fps` / `-Quality`：キャプチャ・品質設定を変更する。
