@@ -475,6 +475,7 @@ PSCam4Winの仮想カメラをプレビューなしで録画する。既定は25
 ```
 
 - `-Mode VDEnc|QSV`：VDEnc優先または通常QSV。エンコーダーは常にQSVで、x264への自動切替はしない。
+- `-CaptureNegotiation SizeFps|YUY2|DeviceDefault`：DirectShowで要求する入力条件。既定は解像度とFPSのみを指定し、ピクセル形式を強制しない。`YUY2`はYUY2も明示要求、`DeviceDefault`は全条件をデバイスへ任せる（実際の解像度・FPSはFFmpegログで確認）。
 - `-Conversion GPU|CPU`：GPUの色形式変換が使えない場合はCPU変換を明示して再試行できる。
 - `-AudioDevice` / `-AudioCodec AAC|PCM` / `-NoAudio`：音声デバイス・形式を変更する。
 - `-VideoDevice` / `-Width` / `-Height` / `-Fps` / `-Quality`：キャプチャ・品質設定を変更する。
