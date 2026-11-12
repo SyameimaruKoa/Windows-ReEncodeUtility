@@ -479,6 +479,7 @@ PSCam4Winの仮想カメラをプレビューなしで録画する。既定は25
 - `-Conversion GPU|CPU`：GPUの色形式変換が使えない場合はCPU変換を明示して再試行できる。
 - `-AudioDevice` / `-AudioCodec Opus|AAC|PCM` / `-NoAudio`：音声デバイス・形式を変更する。既定はOpus、AACも引き続き選択可能。 Opus・AAC・PCMはいずれも`pan=mono|c0=c0`で入力の第1チャンネルだけを抽出してモノラル保存する。第2チャンネルとのミックスは行わない。
 - `-AudioBitrateKbps`（既定256）/ `-OpusComplexity`（既定5、範囲0～10）：音声ビットレートとOpusエンコード時のCPU負荷・品質を調整する。
+- `-AudioTimestampMode Compensate|Original`：既定の`Compensate`は音声時刻の揺れに合わせて48kHzへの非同期リサンプリングと連番PTSを適用する。`Original`は従来の入力時刻を使用し、同期を比較するための設定。
 - `-VideoDevice` / `-Width` / `-Height` / `-Fps` / `-Quality`：キャプチャ・品質設定を変更する。
 - FFmpegは `config.user.psd1` の `FfmpegPath` を利用し、録画先に同名の `*.log` を出力する。
 - 録画後にFFprobe（`config.user.psd1` の `FfprobePath`）で動画フレーム数と録画時間を検証し、実効FPSが指定FPSの90%未満なら異常終了する。FFprobeがない場合は検証を省略した旨を表示する。
