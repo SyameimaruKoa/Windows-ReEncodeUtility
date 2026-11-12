@@ -19,6 +19,10 @@
     CPU変換を選んでも映像エンコーダーはQSVのまま。
 .PARAMETER VideoDevice
     DirectShowの映像デバイス名。
+.PARAMETER CaptureNegotiation
+    SizeFps（既定）は解像度とFPSだけを指定し、入力のピクセル形式はDirectShowに選ばせる。
+    YUY2は解像度・FPS・YUY2をすべて要求する。
+    DeviceDefaultは入力の全形式をカメラ側に任せる。出力の解像度・FPSはログで確認すること。
 .PARAMETER AudioDevice
     DirectShowの音声デバイス名。既定はVoicemeeter Out B2。
 .PARAMETER NoAudio
@@ -67,6 +71,7 @@ param(
     [ValidateSet('H264', 'HEVC')][string]$Codec = 'H264',
     [ValidateSet('GPU', 'CPU')][string]$Conversion = 'GPU',
     [string]$VideoDevice = 'PS4 Camera (Windows 仮想カメラ)',
+    [ValidateSet('SizeFps', 'YUY2', 'DeviceDefault')][string]$CaptureNegotiation = 'SizeFps',
     [string]$AudioDevice = 'Voicemeeter Out B2 (VB-Audio Voicemeeter VAIO)',
     [switch]$NoAudio,
     [ValidateSet('AAC', 'PCM')][string]$AudioCodec = 'AAC',
@@ -134,7 +139,7 @@ function Show-RecordingMenu {
         $script:OutputDirectory = $directory
     }
     Write-Host ""
-    Write-Host ("入力: {0} / {1}x{2} / {3}fps" -f $script:VideoDevice, $script:Width, $script:Height, $script:Fps)
+    Write-Host ("入力: {0} / {1}x{2} / {3}fps / {4}" -f $script:VideoDevice, $script:Width, $script:Height, $script:Fps, $script:CaptureNegotiation)
     Write-Host ("映像: {0}, {1}, 変換={2}, 品質={3}" -f $script:Codec, $script:Mode, $script:Conversion, $script:Quality)
     if ($script:NoAudio) {
         Write-Host '音声: なし'
@@ -222,11 +227,17 @@ if ($Conversion -eq 'GPU') {
 $ffmpegArgs += @(
     '-f', 'dshow',
     '-thread_queue_size', '128',
-    '-rtbufsize', '256M',
-    '-video_size', ('{0}x{1}' -f $Width, $Height),
-    '-framerate', "$Fps",
-    '-pixel_format', 'yuyv422'
+    '-rtbufsize', '256M'
 )
+if ($CaptureNegotiation -ne 'DeviceDefault') {
+    $ffmpegArgs += @(
+        '-video_size', ('{0}x{1}' -f $Width, $Height),
+        '-framerate', "$Fps"
+    )
+}
+if ($CaptureNegotiation -eq 'YUY2') {
+    $ffmpegArgs += @('-pixel_format', 'yuyv422')
+}
 $inputName = "video=$VideoDevice"
 if (-not $NoAudio) {
     $inputName += ":audio=$AudioDevice"
@@ -271,7 +282,7 @@ $ffmpegArgs += $outputFile
 $priorReport = [Environment]::GetEnvironmentVariable('FFREPORT', 'Process')
 $env:FFREPORT = 'file={0}.log:level=32' -f $baseName
 Write-Host ("録画開始: {0}" -f $outputFile) -ForegroundColor Cyan
-Write-Host ("モード: {0} / {1} / {2}" -f $Mode, $Codec, $Conversion)
+Write-Host ("モード: {0} / {1} / {2} / 入力設定={3}" -f $Mode, $Codec, $Conversion, $CaptureNegotiation)
 if ($NoAudio) {
     Write-Host '音声: なし'
 } else {
@@ -290,6 +301,8 @@ finally {
 }
 if ($exitCode -ne 0) {
     Write-Host ("録画失敗 (FFmpeg終了コード {0})。ログ: {1}" -f $exitCode, $logFile) -ForegroundColor Red
+    Write-Host 'DirectShowの「Could not set video options」が出たら、-ListFormatsで対応形式を確認するのじゃ。' -ForegroundColor Yellow
+    Write-Host '既定のSizeFpsが失敗する場合は -CaptureNegotiation DeviceDefault で切り分けられるぞ。' -ForegroundColor Yellow
     exit $exitCode
 }
 Write-Host ("録画完了: {0}" -f $outputFile) -ForegroundColor Green
