@@ -8,6 +8,7 @@
     VDEncが使えない場合も通常QSVやソフトウェアエンコードには自動切り替えしない。
     引数なしでは設定メニューを表示し、qキーで録画を正常停止する。
     FFmpegのログは録画ファイルと同じフォルダへ保存する。
+    録画後にFFprobeで実フレーム数と再生時間を検査し、目標FPSを大きく下回れば失敗として報告する。
 .PARAMETER Help
     詳しいヘルプを表示して終了する。-h、-Help、--helpに対応する。
 .PARAMETER Mode
@@ -43,6 +44,8 @@
     録画先フォルダ。既定はWindowsのビデオフォルダ。
 .PARAMETER FfmpegPath
     FFmpeg実行ファイル。未指定時はconfig.user.psd1のFfmpegPathを使う。
+.PARAMETER FfprobePath
+    FFprobe実行ファイル。未指定時はconfig.user.psd1のFfprobePathを使う。
 .PARAMETER DurationSeconds
     指定秒数で録画を停止する。既定の0は手動停止。
 .PARAMETER ListDevices
@@ -82,6 +85,7 @@ param(
     [ValidateRange(1, 51)][int]$Quality = 23,
     [string]$OutputDirectory,
     [string]$FfmpegPath,
+    [string]$FfprobePath,
     [ValidateRange(0, 86400)][int]$DurationSeconds = 0,
     [switch]$ListDevices,
     [switch]$ListFormats,
@@ -161,10 +165,16 @@ try {
             if ($settings.FfmpegPath) {
                 $FfmpegPath = [string]$settings.FfmpegPath
             }
+            if (-not $FfprobePath -and $settings.FfprobePath) {
+                $FfprobePath = [string]$settings.FfprobePath
+            }
         }
     }
     if (-not $FfmpegPath) {
         $FfmpegPath = 'ffmpeg'
+    }
+    if (-not $FfprobePath) {
+        $FfprobePath = 'ffprobe'
     }
     $ffmpegCommand = Get-Command -Name $FfmpegPath -CommandType Application -ErrorAction Stop
     $ffmpegExecutable = $ffmpegCommand.Source
@@ -305,6 +315,37 @@ if ($exitCode -ne 0) {
     Write-Host '入力形式の強制指定時に失敗する場合は -CaptureNegotiation DeviceDefault で再試行するのじゃ。' -ForegroundColor Yellow
     exit $exitCode
 }
+#region 出力検証
+$probeCommand = Get-Command -Name $FfprobePath -CommandType Application -ErrorAction SilentlyContinue
+if ($null -eq $probeCommand) {
+    Write-Host 'FFprobeが見つからないためフレーム数の検証を省略したのじゃ。' -ForegroundColor Yellow
+} else {
+    try {
+        $probeLines = & $probeCommand.Source -v error -count_frames -select_streams 'v:0' -show_entries 'stream=nb_read_frames' -show_entries 'format=duration' -of json -i $outputFile
+        if ($LASTEXITCODE -ne 0) {
+            throw 'FFprobeによるファイル解析に失敗した'
+        }
+        $probe = ($probeLines | Out-String | ConvertFrom-Json)
+        $frames = [double]::Parse([string]$probe.streams[0].nb_read_frames, [Globalization.CultureInfo]::InvariantCulture)
+        $seconds = [double]::Parse([string]$probe.format.duration, [Globalization.CultureInfo]::InvariantCulture)
+        if ($seconds -le 0) {
+            throw '録画時間を取得できない'
+        }
+        $actualFps = $frames / $seconds
+        $capturePercent = 100.0 * $actualFps / $Fps
+        Write-Host ("映像検証: {0}フレーム / {1:N2}秒 / 実効{2:N2}fps（目標{3}fpsの{4:N1}%）" -f $frames, $seconds, $actualFps, $Fps, $capturePercent)
+        if ($capturePercent -lt 90.0) {
+            Write-Host '録画異常: 目標フレームレートの90%に達しておらぬ。録画を正常扱いしないのじゃ。' -ForegroundColor Red
+            Write-Host ("録画ファイル: {0}" -f $outputFile)
+            Write-Host ("ログ: {0}" -f $logFile)
+            exit 2
+        }
+    }
+    catch {
+        Write-Host ("FFprobe検証失敗: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+    }
+}
+#endregion
 Write-Host ("録画完了: {0}" -f $outputFile) -ForegroundColor Green
 Write-Host ("ログ: {0}" -f $logFile)
 #endregion
