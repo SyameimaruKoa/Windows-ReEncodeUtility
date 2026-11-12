@@ -35,6 +35,9 @@
     OpusまたはAACの音声ビットレート。既定は256kbps。
 .PARAMETER OpusComplexity
     libopusのエンコード複雑度（0～10）。既定は5。値を下げるほどCPU負荷が軽くなるが品質も下がる。
+.PARAMETER AudioTimestampMode
+    Compensate（既定）は入力音声時刻に合わせて非同期リサンプリングした後、出力時刻をサンプル数から再生成する。
+    Originalは従来の入力音声時刻を使用する。比較検証用。
 .PARAMETER Width
     録画解像度の幅。既定は2560。
 .PARAMETER Height
@@ -83,6 +86,7 @@ param(
     [ValidateSet('Opus', 'AAC', 'PCM')][string]$AudioCodec = 'Opus',
     [ValidateRange(32, 1024)][int]$AudioBitrateKbps = 256,
     [ValidateRange(0, 10)][int]$OpusComplexity = 5,
+    [ValidateSet('Compensate', 'Original')][string]$AudioTimestampMode = 'Compensate',
     [ValidateRange(2, 8192)][int]$Width = 2560,
     [ValidateRange(2, 4320)][int]$Height = 800,
     [ValidateRange(1, 240)][int]$Fps = 60,
@@ -152,7 +156,7 @@ function Show-RecordingMenu {
     if ($script:NoAudio) {
         Write-Host '音声: なし'
     } else {
-        Write-Host ("音声: {0} ({1} / 第1ch抽出・モノラル)" -f $script:AudioDevice, $script:AudioCodec)
+        Write-Host ("音声: {0} ({1} / 第1ch抽出・モノラル / 時刻={2})" -f $script:AudioDevice, $script:AudioCodec, $script:AudioTimestampMode)
     }
     if ((Read-Host '録画を開始する場合はEnter、キャンセルはN') -match '^[Nn]$') {
         exit 0
@@ -278,7 +282,11 @@ $ffmpegArgs += @(
     '-fps_mode:v', 'passthrough'
 )
 if (-not $NoAudio) {
-    $ffmpegArgs += @('-af', 'pan=mono|c0=c0')
+    $audioFilter = 'pan=mono|c0=c0'
+    if ($AudioTimestampMode -eq 'Compensate') {
+        $audioFilter += ',aresample=48000:async=1000:first_pts=0,asetpts=N/SR/TB'
+    }
+    $ffmpegArgs += @('-af', $audioFilter)
 }
 if ($NoAudio) {
     $ffmpegArgs += '-an'
@@ -314,7 +322,7 @@ Write-Host ("モード: {0} / {1} / {2} / 入力設定={3}" -f $Mode, $Codec, $C
 if ($NoAudio) {
     Write-Host '音声: なし'
 } else {
-    Write-Host ("音声: {0} ({1} / 第1ch抽出・モノラル)" -f $AudioDevice, $AudioCodec)
+    Write-Host ("音声: {0} ({1} / 第1ch抽出・モノラル / 時刻={2})" -f $AudioDevice, $AudioCodec, $AudioTimestampMode)
 }
 Write-Host 'プレビューなし。手動停止はFFmpegのコンソールで q を押すのじゃ。'
 $exitCode = 1
