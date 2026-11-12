@@ -480,6 +480,7 @@ PSCam4Winの仮想カメラをプレビューなしで録画する。既定は25
 - `-AudioDevice` / `-AudioCodec AAC|PCM` / `-NoAudio`：音声デバイス・形式を変更する。
 - `-VideoDevice` / `-Width` / `-Height` / `-Fps` / `-Quality`：キャプチャ・品質設定を変更する。
 - FFmpegは `config.user.psd1` の `FfmpegPath` を利用し、録画先に同名の `*.log` を出力する。
+- 録画後にFFprobe（`config.user.psd1` の `FfprobePath`）で動画フレーム数と録画時間を検証し、実効FPSが指定FPSの90%未満なら異常終了する。FFprobeがない場合は検証を省略した旨を表示する。
 
 GPU VPP・VDEncの実際の対応状況はGPUドライバーに依存する。CPU変換を選んでもQSVエンコードは維持する。
 
