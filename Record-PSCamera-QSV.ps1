@@ -8,6 +8,7 @@
     VDEncが使えない場合も通常QSVやソフトウェアエンコードには自動切り替えしない。
     引数なしでは設定メニューを表示し、qキーで録画を正常停止する。
     FFmpegのログは録画ファイルと同じフォルダへ保存する。
+    音声はPSCam側で合成済みのモノラルとして、全コーデックで1チャンネル出力する。
     録画後にFFprobeで実フレーム数と再生時間を検査し、目標FPSを大きく下回れば失敗として報告する。
 .PARAMETER Help
     詳しいヘルプを表示して終了する。-h、-Help、--helpに対応する。
@@ -151,7 +152,7 @@ function Show-RecordingMenu {
     if ($script:NoAudio) {
         Write-Host '音声: なし'
     } else {
-        Write-Host ("音声: {0} ({1})" -f $script:AudioDevice, $script:AudioCodec)
+        Write-Host ("音声: {0} ({1} / モノラル)" -f $script:AudioDevice, $script:AudioCodec)
     }
     if ((Read-Host '録画を開始する場合はEnter、キャンセルはN') -match '^[Nn]$') {
         exit 0
@@ -279,21 +280,21 @@ $ffmpegArgs += @(
 if ($NoAudio) {
     $ffmpegArgs += '-an'
 } elseif ($AudioCodec -eq 'PCM') {
-    $ffmpegArgs += @('-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2')
+    $ffmpegArgs += @('-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '1')
 } elseif ($AudioCodec -eq 'Opus') {
     $ffmpegArgs += @(
         '-c:a', 'libopus',
         '-b:a', ('{0}k' -f $AudioBitrateKbps),
         '-compression_level:a', "$OpusComplexity",
         '-ar', '48000',
-        '-ac', '2'
+        '-ac', '1'
     )
 } else {
     $ffmpegArgs += @(
         '-c:a', 'aac',
         '-b:a', ('{0}k' -f $AudioBitrateKbps),
         '-ar', '48000',
-        '-ac', '2'
+        '-ac', '1'
     )
 }
 if ($DurationSeconds -gt 0) {
@@ -310,7 +311,7 @@ Write-Host ("モード: {0} / {1} / {2} / 入力設定={3}" -f $Mode, $Codec, $C
 if ($NoAudio) {
     Write-Host '音声: なし'
 } else {
-    Write-Host ("音声: {0} ({1})" -f $AudioDevice, $AudioCodec)
+    Write-Host ("音声: {0} ({1} / モノラル)" -f $AudioDevice, $AudioCodec)
 }
 Write-Host 'プレビューなし。手動停止はFFmpegのコンソールで q を押すのじゃ。'
 $exitCode = 1
