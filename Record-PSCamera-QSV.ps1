@@ -8,7 +8,7 @@
     VDEncが使えない場合も通常QSVやソフトウェアエンコードには自動切り替えしない。
     引数なしでは設定メニューを表示し、qキーで録画を正常停止する。
     FFmpegのログは録画ファイルと同じフォルダへ保存する。
-    音声はPSCam側で合成済みのモノラルとして、全コーデックで1チャンネル出力する。
+    音声はPSCam側で合成済みのモノラルとして、入力の第1チャンネルのみを抽出して1チャンネル出力する。左右のミックスはしない。
     録画後にFFprobeで実フレーム数と再生時間を検査し、目標FPSを大きく下回れば失敗として報告する。
 .PARAMETER Help
     詳しいヘルプを表示して終了する。-h、-Help、--helpに対応する。
@@ -152,7 +152,7 @@ function Show-RecordingMenu {
     if ($script:NoAudio) {
         Write-Host '音声: なし'
     } else {
-        Write-Host ("音声: {0} ({1} / モノラル)" -f $script:AudioDevice, $script:AudioCodec)
+        Write-Host ("音声: {0} ({1} / 第1ch抽出・モノラル)" -f $script:AudioDevice, $script:AudioCodec)
     }
     if ((Read-Host '録画を開始する場合はEnter、キャンセルはN') -match '^[Nn]$') {
         exit 0
@@ -277,6 +277,9 @@ $ffmpegArgs += @(
     '-global_quality', "$Quality",
     '-fps_mode:v', 'passthrough'
 )
+if (-not $NoAudio) {
+    $ffmpegArgs += @('-af', 'pan=mono|c0=c0')
+}
 if ($NoAudio) {
     $ffmpegArgs += '-an'
 } elseif ($AudioCodec -eq 'PCM') {
@@ -311,7 +314,7 @@ Write-Host ("モード: {0} / {1} / {2} / 入力設定={3}" -f $Mode, $Codec, $C
 if ($NoAudio) {
     Write-Host '音声: なし'
 } else {
-    Write-Host ("音声: {0} ({1} / モノラル)" -f $AudioDevice, $AudioCodec)
+    Write-Host ("音声: {0} ({1} / 第1ch抽出・モノラル)" -f $AudioDevice, $AudioCodec)
 }
 Write-Host 'プレビューなし。手動停止はFFmpegのコンソールで q を押すのじゃ。'
 $exitCode = 1
