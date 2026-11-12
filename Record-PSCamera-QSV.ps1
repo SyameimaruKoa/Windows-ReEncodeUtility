@@ -100,6 +100,7 @@ param(
     [switch]$ListFormats,
     [switch]$Interactive
 )
+$script:AudioTimestampModeExplicit = $PSBoundParameters.ContainsKey('AudioTimestampMode')
 
 #region ヘルプ
 if ($Help) {
@@ -146,7 +147,7 @@ function Show-RecordingMenu {
             $script:AudioDevice = $deviceName
         }
         $script:AudioCodec = @('Opus', 'AAC', 'PCM')[(Read-Selection '音声コーデック' @('Opus（既定・省CPU設定）', 'AAC', 'PCM無圧縮（入力レート維持）') ([array]::IndexOf(@('Opus', 'AAC', 'PCM'), $script:AudioCodec)))]
-        if ($script:AudioCodec -eq 'PCM' -and -not $PSBoundParameters.ContainsKey('AudioTimestampMode')) {
+        if ($script:AudioCodec -eq 'PCM' -and -not $script:AudioTimestampModeExplicit) {
             $script:AudioTimestampMode = 'Original'
         }
     }
@@ -206,7 +207,7 @@ try {
     if ($PSBoundParameters.Count -eq 0 -or $Interactive) {
         Show-RecordingMenu
     }
-    if ($AudioCodec -eq 'PCM' -and -not $PSBoundParameters.ContainsKey('AudioTimestampMode')) {
+    if ($AudioCodec -eq 'PCM' -and -not $script:AudioTimestampModeExplicit) {
         $AudioTimestampMode = 'Original'
     }
 
