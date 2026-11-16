@@ -1176,6 +1176,14 @@ function Test-HwFrameEncoderCompatibility {
 function Resolve-VideoFilterPipeline {
     param([string]$HwAccelOption, [string]$VideoOptions, [string]$VideoFilter)
     $result = @{ HwAccelOption = $HwAccelOption; Filter = $VideoFilter }
+    # 色収差フィルターは16-bit RGBで処理する。GPUからのnv12転送（8-bit化）を避ける。
+    if ($VideoFilter -match '(?:^|,)format=gbrp16le\b') {
+        if ($HwAccelOption) {
+            Write-Log '高精度RGBフィルター: 8-bitへの変換を防ぐためCPUデコードを使用' -Level 'DEBUG'
+        }
+        $result.HwAccelOption = ''
+        return $result
+    }
     if (-not $HwAccelOption -or $HwAccelOption -notmatch '-hwaccel_output_format\s+(\S+)') { return $result }
     $frameFormat = $Matches[1]
     $scaleMatch = [regex]::Match([string]$VideoFilter, '^\s*scale=(?<w>\d+):(?<h>-2|-1|\d+)(?:,(?<tail>.*))?\s*$')
