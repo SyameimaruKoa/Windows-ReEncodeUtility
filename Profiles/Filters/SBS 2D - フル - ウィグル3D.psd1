@@ -15,7 +15,7 @@
 </En>
 <En>
 <S N="Key">AdditionalArgs</S>
-<S N="Value"></S>
+<S N="Value">-metadata:s:v:0 stereo_mode=mono</S>
 </En>
 </DCT>
 </Obj>
