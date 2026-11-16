@@ -110,14 +110,25 @@ function Use-FilterTemplate {
     }
     $oldVF = [string]$Config.AdditionalVF
     $oldArgs = [string]$Config.AdditionalArgs
-    if ($incomingArgs -match '(?:^|\s)-filter_complex\b' -and ($oldVF -or $oldArgs -match '(?:^|\s)-filter_complex\b')) {
-        Write-Host '既存フィルターと-filter_complexを同時に設定できません。' -ForegroundColor Yellow
+    $oldComplex = ($oldArgs -match '(?:^|\s)-filter_complex\b')
+    $incomingComplex = ($incomingArgs -match '(?:^|\s)-filter_complex\b')
+    $graphConflict = (($oldComplex -and $incomingVF) -or ($incomingComplex -and ($oldVF -or $oldComplex)))
+    if ($graphConflict -and $Config.PlatformMode) {
+        Write-Host 'プラットフォームの自動フィルターと複雑なフィルターグラフを併用できません。' -ForegroundColor Yellow
         return
     }
     $replace = $false
     if ($oldVF -or $oldArgs) {
         if ($Config.PlatformMode) {
             Write-Host 'プラットフォーム側の自動フィルターを維持して合成します。'
+        }
+        elseif ($graphConflict) {
+            $choice = Show-Menu -Title '-vfと-filter_complexが競合します。既存フィルターを置き換えますか？' -Choices @(
+                '既存フィルターを置き換える',
+                'キャンセル'
+            )
+            if ($choice -ne 0) { return }
+            $replace = $true
         }
         else {
             $choice = Show-Menu -Title '既存フィルターの扱いを選択してください。' -Choices @(
