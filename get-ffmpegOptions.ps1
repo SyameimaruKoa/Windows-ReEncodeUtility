@@ -437,6 +437,8 @@ function Get-EncoderSettings {
     return @{ Video = $videoSetting; Audio = $audioSetting.Options; AudioType = $audioSetting.Type }
 }
 
+. (Join-Path $PSScriptRoot 'Modules/IntermediateHardware.ps1')
+
 function Get-IntermediateSettings {
     $hwInfo = $global:HardwareInfo
     $availableEncoders = @()
@@ -454,30 +456,37 @@ function Get-IntermediateSettings {
         } catch {}
     }
 
-    # --- 1. コーデック選択 ---
-    $codecChoices = @("H.265/HEVC (libx265)", "H.264/AVC (libx264)"); $codecMap = @("-c:v libx265", "-c:v libx264")
-    $codecIndex = Show-Menu -Title "中間ファイル用コーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
-    $baseEncoder = $codecMap[$codecIndex]
+    $hardwareVideo = Select-IntermediateHardwareVideo -AvailableEncoders $availableEncoders -ScanCompleted ([bool]($hwInfo -and $hwInfo.ScanCompleted))
+    if (-not $hardwareVideo) { return $null }
+    if ($hardwareVideo.Software) {
+        # --- 1. コーデック選択 ---
+        $codecChoices = @("H.265/HEVC (libx265)", "H.264/AVC (libx264)"); $codecMap = @("-c:v libx265", "-c:v libx264")
+        $codecIndex = Show-Menu -Title "中間ファイル用コーデックを選択" -Choices $codecChoices; if ($codecIndex -lt 0) { return $null }
+        $baseEncoder = $codecMap[$codecIndex]
 
-    # --- 2. ピクセルフォーマット選択 ---
-    $pixFmtChoices = @("yuv444p (最高画質)", "yuv422p (高画質)", "yuv420p (標準)"); $pixFmtMap = @("-pix_fmt yuv444p", "-pix_fmt yuv422p", "-pix_fmt yuv420p")
-    $pixFmtIndex = Show-Menu -Title "ピクセルフォーマットを選択" -Choices $pixFmtChoices; if ($pixFmtIndex -lt 0) { return $null }
-    $pixFmtOption = $pixFmtMap[$pixFmtIndex]
+        # --- 2. ピクセルフォーマット選択 ---
+        $pixFmtChoices = @("yuv444p (最高画質)", "yuv422p (高画質)", "yuv420p (標準)"); $pixFmtMap = @("-pix_fmt yuv444p", "-pix_fmt yuv422p", "-pix_fmt yuv420p")
+        $pixFmtIndex = Show-Menu -Title "ピクセルフォーマットを選択" -Choices $pixFmtChoices; if ($pixFmtIndex -lt 0) { return $null }
+        $pixFmtOption = $pixFmtMap[$pixFmtIndex]
 
-    # --- 3. 品質 (CRF) 選択 ---
-    $crfChoices = @("可逆圧縮 (CRF 0)", "ほぼ無劣化 (CRF 5)", "非常に高画質 (CRF 10)", "高画質 (CRF 15)", "カスタム")
-    $crfMap = @("-crf 0", "-crf 5", "-crf 10", "-crf 15")
-    $crfIndex = Show-Menu -Title "品質(CRF値)を選択" -Choices $crfChoices; if ($crfIndex -lt 0) { return $null }
-    $crfOption = ""
-    if ($crfIndex -lt 4) { $crfOption = $crfMap[$crfIndex] } else { $val = Read-Host "カスタムCRF値を入力 (0-51)"; $crfOption = "-crf $val" }
+        # --- 3. 品質 (CRF) 選択 ---
+        $crfChoices = @("可逆圧縮 (CRF 0)", "ほぼ無劣化 (CRF 5)", "非常に高画質 (CRF 10)", "高画質 (CRF 15)", "カスタム")
+        $crfMap = @("-crf 0", "-crf 5", "-crf 10", "-crf 15")
+        $crfIndex = Show-Menu -Title "品質(CRF値)を選択" -Choices $crfChoices; if ($crfIndex -lt 0) { return $null }
+        $crfOption = ""
+        if ($crfIndex -lt 4) { $crfOption = $crfMap[$crfIndex] } else { $val = Read-Host "カスタムCRF値を入力 (0-51)"; $crfOption = "-crf $val" }
 
-    # --- 4. プリセット選択 ---
-    $pPresets = [ordered]@{ "veryslow (最高品質)" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "superfast" = "-preset superfast"; "ultrafast (最速)" = "-preset ultrafast" }
-    $pChoices = @($pPresets.Keys)
-    $pIndex = Show-Menu -Title "エンコード速度のプリセットを選択" -Choices $pChoices; if ($pIndex -lt 0) { return $null }
-    $presetOption = $pPresets[$pChoices[$pIndex]]
+        # --- 4. プリセット選択 ---
+        $pPresets = [ordered]@{ "veryslow (最高品質)" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "superfast" = "-preset superfast"; "ultrafast (最速)" = "-preset ultrafast" }
+        $pChoices = @($pPresets.Keys)
+        $pIndex = Show-Menu -Title "エンコード速度のプリセットを選択" -Choices $pChoices; if ($pIndex -lt 0) { return $null }
+        $presetOption = $pPresets[$pChoices[$pIndex]]
 
-    $videoSetting = "$baseEncoder $pixFmtOption $crfOption $presetOption"
+        $videoSetting = "$baseEncoder $pixFmtOption $crfOption $presetOption"
+    }
+    else {
+        $videoSetting = $hardwareVideo.Video
+    }
 
     # --- 5. 音声設定 ---
     $hasQaac = $false; $hasNero = $false; $hasFdkaac = $false
@@ -577,7 +586,14 @@ function Get-IntermediateSettings {
     $confirm = Show-Menu -Title "この設定でよろしいですか？" -Choices @("はい", "いいえ、やり直します")
     if ($confirm -eq 1) { return Get-IntermediateSettings }
 
-    return @{ Video = $videoSetting; Audio = $audioSetting.Options; AudioType = $audioSetting.Type }
+    if ($confirm -lt 0) { return $null }
+    $result = @{ Video = $videoSetting; Audio = $audioSetting.Options; AudioType = $audioSetting.Type }
+    if (-not $hardwareVideo.Software) {
+        $result.IntermediatePixelFormat = $hardwareVideo.IntermediatePixelFormat
+        $result.IntermediateUploadDevice = $hardwareVideo.IntermediateUploadDevice
+        $result.IntermediateChipPreferred = $hardwareVideo.IntermediateChipPreferred
+    }
+    return $result
 }
 
 # --- スクリプトのエントリーポイント ---

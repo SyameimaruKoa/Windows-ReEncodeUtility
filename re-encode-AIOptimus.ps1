@@ -286,6 +286,44 @@ function Test-IsInterlaced {
 #endregion
 
 #region プロセス実行・エンコード実行
+function Initialize-FFmpegUsageMonitor {
+    if ($script:UsageMonitorInitialized) { return [bool]('ReEncodeUtility.FFmpegUsageMonitor' -as [type]) }
+    $script:UsageMonitorInitialized = $true
+    try {
+        if (-not ('ReEncodeUtility.FFmpegUsageMonitor' -as [type])) {
+            Add-Type -Path (Join-Path $global:ScriptDir 'Modules/FFmpegUsageMonitor.cs') -ErrorAction Stop
+        }
+        return $true
+    }
+    catch {
+        Write-Log "FFmpeg使用率監視を初期化できません: $_" -Level 'WARN'
+        return $false
+    }
+}
+
+function Start-FFmpegUsageMonitor {
+    param([System.Diagnostics.Process]$Process)
+    try {
+        return [ReEncodeUtility.FFmpegUsageMonitor]::new($Process.Handle, $Process.Id, 500)
+    }
+    catch {
+        Write-Log "FFmpeg使用率監視を開始できません: $_" -Level 'WARN'
+        return $null
+    }
+}
+
+function Write-FFmpegUsageReport {
+    param($Monitor)
+    if (-not $Monitor) { return }
+    try {
+        $report = $Monitor.Finish()
+        Write-Log ("[FFmpeg CPU/GPU使用率]`n" + ($report -join "`n"))
+    }
+    catch {
+        Write-Log "FFmpeg使用率を記録できません: $_" -Level 'WARN'
+    }
+}
+
 function Invoke-ExternalProcess {
     param(
         [string]$FilePath,
@@ -296,11 +334,25 @@ function Invoke-ExternalProcess {
     Write-Log "[CMD] `"$FilePath`" $Arguments" -Level "DEBUG"
     $stderrFile = Join-Path ([System.IO.Path]::GetTempPath()) "re-enc-stderr-$([System.IO.Path]::GetRandomFileName())"
     $stdoutFile = Join-Path ([System.IO.Path]::GetTempPath()) "re-enc-stdout-$([System.IO.Path]::GetRandomFileName())"
+    $monitor = $null
     try {
-        $proc = Start-Process -FilePath $FilePath -ArgumentList $Arguments `
-            -Wait -PassThru -NoNewWindow `
-            -RedirectStandardOutput $stdoutFile `
-            -RedirectStandardError $stderrFile
+        $monitorEnabled = ($FilePath -eq $global:Settings.FfmpegPath) -and (Initialize-FFmpegUsageMonitor)
+        $startParams = @{
+            FilePath = $FilePath
+            ArgumentList = $Arguments
+            PassThru = $true
+            NoNewWindow = $true
+            RedirectStandardOutput = $stdoutFile
+            RedirectStandardError = $stderrFile
+        }
+        if (-not $monitorEnabled) { $startParams.Wait = $true }
+        $proc = Start-Process @startParams
+        if ($monitorEnabled) {
+            $null = $proc.Handle
+            $monitor = Start-FFmpegUsageMonitor -Process $proc
+            $proc.WaitForExit()
+            Write-FFmpegUsageReport -Monitor $monitor
+        }
         $stdout = ""; $stderr = ""
         if (Test-Path $stdoutFile) { $stdout = (Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction SilentlyContinue) }
         if (Test-Path $stderrFile) { $stderr = (Get-Content -LiteralPath $stderrFile -Raw -ErrorAction SilentlyContinue) }
@@ -314,6 +366,7 @@ function Invoke-ExternalProcess {
         return @{ ExitCode = $proc.ExitCode; StdOut = $stdout; StdErr = $stderr }
     }
     finally {
+        if ($monitor) { $monitor.Dispose() }
         Remove-Item -LiteralPath $stderrFile, $stdoutFile -Force -ErrorAction SilentlyContinue
     }
 }
@@ -328,6 +381,8 @@ function Invoke-FfmpegEncode {
     $progressFile = Join-Path ([System.IO.Path]::GetTempPath()) "ffprogress-$([System.IO.Path]::GetRandomFileName())"
     $stderrFile = Join-Path ([System.IO.Path]::GetTempPath()) "re-enc-stderr-$([System.IO.Path]::GetRandomFileName())"
     $stdoutFile = Join-Path ([System.IO.Path]::GetTempPath()) "re-enc-stdout-$([System.IO.Path]::GetRandomFileName())"
+    $monitorEnabled = Initialize-FFmpegUsageMonitor
+    $monitor = $null
     $startTime = Get-Date
     try {
         $fullArgs = "$Arguments -progress `"$progressFile`""
@@ -337,6 +392,7 @@ function Invoke-FfmpegEncode {
             -RedirectStandardError $stderrFile
         # PS 5.1ではハンドルを事前にキャッシュしないと終了後にExitCodeがnullになる
         $null = $proc.Handle
+        if ($monitorEnabled) { $monitor = Start-FFmpegUsageMonitor -Process $proc }
         $startPos = $null
         $totalSizeVal = 0.0
         $maxBitrateVal = 0.0
@@ -630,6 +686,7 @@ function Invoke-FfmpegEncode {
         Write-Host ($finalLine1Sub + (" " * $pad1))
         Write-Host ($finalLine2Sub + (" " * $pad2))
         Write-Log "エンコード所要時間: $($elapsed.ToString('hh\:mm\:ss'))"
+        Write-FFmpegUsageReport -Monitor $monitor
         $stdout = ""; $stderr = ""
         if (Test-Path $stdoutFile) { $stdout = Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction SilentlyContinue }
         if (Test-Path $stderrFile) { $stderr = Get-Content -LiteralPath $stderrFile -Raw -ErrorAction SilentlyContinue }
@@ -691,6 +748,7 @@ function Invoke-FfmpegEncode {
         return @{ ExitCode = $proc.ExitCode; StdOut = $stdout; StdErr = $stderr }
     }
     finally {
+        if ($monitor) { $monitor.Dispose() }
         Remove-Item -LiteralPath $stderrFile, $stdoutFile, $progressFile -Force -ErrorAction SilentlyContinue
     }
 }
@@ -1174,8 +1232,31 @@ function Test-HwFrameEncoderCompatibility {
 }
 
 function Resolve-VideoFilterPipeline {
-    param([string]$HwAccelOption, [string]$VideoOptions, [string]$VideoFilter)
+    param(
+        [string]$HwAccelOption,
+        [string]$VideoOptions,
+        [string]$VideoFilter,
+        [hashtable]$EncoderSettings
+    )
     $result = @{ HwAccelOption = $HwAccelOption; Filter = $VideoFilter }
+    $uploadDevice = [string]$EncoderSettings.IntermediateUploadDevice
+    $pixelFormat = [string]$EncoderSettings.IntermediatePixelFormat
+    if ($uploadDevice -in @('vulkan', 'd3d12va')) {
+        # GPUフレーム必須のAPIはフィルター処理後に選択した形式でアップロードする。
+        if ($HwAccelOption) {
+            Write-Log '中間ファイルのGPUフレーム転送: 指定ピクセル形式を維持するためCPUデコードを使用' -Level 'DEBUG'
+        }
+        $result.HwAccelOption = "-init_hw_device $uploadDevice=intermediate_encode -filter_hw_device intermediate_encode"
+        $uploadFilter = "format=$pixelFormat,hwupload"
+        $result.Filter = if ($VideoFilter) { "$VideoFilter,$uploadFilter" } else { $uploadFilter }
+        return $result
+    }
+    if ($pixelFormat -and $HwAccelOption -match '-hwaccel_output_format\s+\S+') {
+        # ソフトウェアフレーム形式を指定したとき、固定NV12転送による10-bit/4:4:4の損失を防ぐ。
+        Write-Log "中間ファイルの指定ピクセル形式 ($pixelFormat) を維持するためCPUデコードを使用" -Level 'DEBUG'
+        $result.HwAccelOption = ''
+        return $result
+    }
     # 16-bit RGBフィルター（アナグリフ等）はGPUからのnv12転送（8-bit化）を避ける。
     if ($VideoFilter -match '(?:^|,)format=gbrp16le\b') {
         if ($HwAccelOption) {
@@ -2768,7 +2849,7 @@ function Invoke-SplitEncodeFile {
 
             # --- 映像エンコードと結合 ---
             $effectiveHwAccelOption = Get-EffectiveHwAccelOption -HwAccelOption $HwAccelOption -VideoOptions $Config.EncoderSettings.Video
-            $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $Config.EncoderSettings.Video -VideoFilter $Config.AdditionalVF
+            $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $Config.EncoderSettings.Video -VideoFilter $Config.AdditionalVF -EncoderSettings $Config.EncoderSettings
             $effectiveHwAccelOption = $filterPipeline.HwAccelOption
             $ffmpegArgsList = @("-hide_banner", "-y")
             if ($effectiveHwAccelOption) { $ffmpegArgsList += $effectiveHwAccelOption.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) }
@@ -2814,7 +2895,7 @@ function Invoke-SplitEncodeFile {
             }
 
             # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
-            if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -and (Test-HwAccelRelatedFailure $result.StdErr)) {
+            if ($result.ExitCode -ne 0 -and ($effectiveHwAccelOption -match '-hwaccel\s+\S+') -and (Test-HwAccelRelatedFailure $result.StdErr)) {
                 Write-Log "HWアクセル関連エラーを検出。HWアクセルなしでリトライします。(セグメント: $outputFileName)" -Level "WARN"
                 $HwAccelOption = ""
                 $retryArgs = Remove-HwAccelFromArgs $finalArgString
@@ -3069,7 +3150,7 @@ function Invoke-EncodeFile {
         if ($Config.PlatformMode -and $Config.TwoPassMode) {
             $passLogBase = Join-Path ([System.IO.Path]::GetTempPath()) ("ff2pass-" + [System.IO.Path]::GetRandomFileName())
             $pass1VideoOptions = "$currentVideoOptions -pass 1 -passlogfile $passLogBase"
-            $pass1Pipeline = Resolve-VideoFilterPipeline -HwAccelOption $HwAccelOption -VideoOptions $pass1VideoOptions -VideoFilter $Config.AdditionalVF
+            $pass1Pipeline = Resolve-VideoFilterPipeline -HwAccelOption $HwAccelOption -VideoOptions $pass1VideoOptions -VideoFilter $Config.AdditionalVF -EncoderSettings $Config.EncoderSettings
             $pass1ArgsList = @("-hide_banner", "-y")
             if ($isDashInput) {
                 $pass1ArgsList += @("-fflags", "+genpts")
@@ -3113,7 +3194,7 @@ function Invoke-EncodeFile {
         }
 
         # --- エンコード実行 ---
-        $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $currentVideoOptions -VideoFilter $Config.AdditionalVF
+        $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $currentVideoOptions -VideoFilter $Config.AdditionalVF -EncoderSettings $Config.EncoderSettings
         $effectiveHwAccelOption = $filterPipeline.HwAccelOption
         $ffmpegArgsList = @("-hide_banner", "-y")
         $isHevcQvbrEncode = ($Config.PlatformMode -and $Config.HWEncoder -eq "Intel" -and $Config.CodecName -eq "H.265" -and $Config.QualityMode -eq "CRF+Maxrate")
@@ -3167,7 +3248,7 @@ function Invoke-EncodeFile {
         }
 
         # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
-        if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -and (Test-HwAccelRelatedFailure $result.StdErr)) {
+        if ($result.ExitCode -ne 0 -and ($effectiveHwAccelOption -match '-hwaccel\s+\S+') -and (Test-HwAccelRelatedFailure $result.StdErr)) {
             Write-Log "HWアクセル関連エラーを検出。HWアクセルなしでリトライします。" -Level "WARN"
             $HwAccelOption = ""
             $retryArgs = Remove-HwAccelFromArgs $finalArgString
