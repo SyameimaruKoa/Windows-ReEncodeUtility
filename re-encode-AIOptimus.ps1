@@ -106,6 +106,8 @@ if (-not (Test-Path $configFilePath)) {
 }
 $global:Settings = Import-PowerShellDataFile -Path $configFilePath
 $global:Settings.TemplateDir = Join-Path $global:ScriptDir 'Profiles'
+$global:Settings.EncodingTemplateDir = Join-Path $global:Settings.TemplateDir 'Encoding'
+$global:Settings.FilterTemplateDir = Join-Path $global:Settings.TemplateDir 'Filters'
 $global:AppCacheDir = Join-Path $global:ScriptDir '.cache'
 
 function Ensure-Directory {
@@ -116,6 +118,8 @@ function Ensure-Directory {
 }
 
 Ensure-Directory -Path $global:Settings.TemplateDir
+Ensure-Directory -Path $global:Settings.EncodingTemplateDir
+Ensure-Directory -Path $global:Settings.FilterTemplateDir
 Ensure-Directory -Path $global:AppCacheDir
 
 # --- 依存スクリプトの確認 ---
@@ -781,6 +785,7 @@ function Show-Menu {
 
 # Show-Menuをグローバルに公開 (get-ffmpegOptions.ps1 からも利用するため)
 Set-Item -Path function:global:Show-Menu -Value (Get-Item -LiteralPath function:Show-Menu).ScriptBlock
+. (Join-Path $global:ScriptDir 'Modules/TemplateManager.ps1')
 
 function Sanitize-FileName {
     param ([string]$Name)
@@ -1171,6 +1176,14 @@ function Test-HwFrameEncoderCompatibility {
 function Resolve-VideoFilterPipeline {
     param([string]$HwAccelOption, [string]$VideoOptions, [string]$VideoFilter)
     $result = @{ HwAccelOption = $HwAccelOption; Filter = $VideoFilter }
+    # 16-bit RGBフィルター（アナグリフ等）はGPUからのnv12転送（8-bit化）を避ける。
+    if ($VideoFilter -match '(?:^|,)format=gbrp16le\b') {
+        if ($HwAccelOption) {
+            Write-Log '16-bit RGBフィルター: 8-bitへの変換を防ぐためCPUデコードを使用' -Level 'DEBUG'
+        }
+        $result.HwAccelOption = ''
+        return $result
+    }
     if (-not $HwAccelOption -or $HwAccelOption -notmatch '-hwaccel_output_format\s+(\S+)') { return $result }
     $frameFormat = $Matches[1]
     $scaleMatch = [regex]::Match([string]$VideoFilter, '^\s*scale=(?<w>\d+):(?<h>-2|-1|\d+)(?:,(?<tail>.*))?\s*$')
@@ -2474,6 +2487,10 @@ function Start-MainProcess {
         4 { $config = Invoke-SplitModeSetup }
     }
     if (-not $config) { Write-Log "設定がキャンセルされたため、処理を中断します。"; return }
+    if (-not (Invoke-TemplateOptions -Config $config)) {
+        Write-Log "テンプレート設定がキャンセルされました。"
+        return
+    }
 
     $fileCount = 0; $totalFiles = $Path.Count
     foreach ($inputFile in $Path) {
@@ -2500,7 +2517,7 @@ function Start-MainProcess {
 }
 
 function Invoke-InteractiveSetup {
-    $encoderSettings = . $optionsScriptPath -HwScanMode On
+    $encoderSettings = Select-EncoderProfile
     if (-not $encoderSettings) { Write-Log "エンコード設定が中止されました。"; return $null }
 
     $outputMode = "Subfolder"; $outputFixedPath = ""
@@ -2543,14 +2560,6 @@ function Invoke-InteractiveSetup {
         AdditionalVF = $additionalVF; AdditionalArgs = $additionalArgs
     }
 
-    if ((Show-Menu -Title "この設定をテンプレートとして保存しますか？" -Choices @("いいえ", "はい")) -eq 1) {
-        $templateName = Read-Host "テンプレート名を入力してください"
-        if ($templateName) {
-            $templatePath = Join-Path $global:Settings.TemplateDir "$templateName.psd1"
-            $currentConfig | Export-CliXml -Path $templatePath
-            Write-Log "設定を $templatePath に保存しました。"
-        }
-    }
     return $currentConfig
 }
 
@@ -2567,7 +2576,7 @@ function Invoke-TemplateSelect {
 
 function Invoke-IntermediateMode {
     Write-Log "中間ファイル用のエンコードオプションを設定します..."
-    $encoderSettings = . $optionsScriptPath -Intermediate -HwScanMode On
+    $encoderSettings = Select-EncoderProfile -Intermediate
     if (-not $encoderSettings) { Write-Log "エンコード設定が中止されました。"; return $null }
     return @{
         IsSplitMode = $false
@@ -2579,7 +2588,7 @@ function Invoke-IntermediateMode {
 
 function Invoke-SplitModeSetup {
     Write-Log "チャプター/字幕分割モードの設定を行います。"
-    $encoderSettings = . $optionsScriptPath -HwScanMode On
+    $encoderSettings = Select-EncoderProfile
     if (-not $encoderSettings) { Write-Log "エンコード設定が中止されました。"; return $null }
 
     $splitSource = @("InternalChapter", "ExternalSRT")[(Show-Menu -Title "分割に使用するソースを選択してください" -Choices @("内部チャプターを使用", "外部SRT字幕ファイルを使用"))]
