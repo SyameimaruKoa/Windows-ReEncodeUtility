@@ -286,6 +286,44 @@ function Test-IsInterlaced {
 #endregion
 
 #region プロセス実行・エンコード実行
+function Initialize-FFmpegUsageMonitor {
+    if ($script:UsageMonitorInitialized) { return [bool]('ReEncodeUtility.FFmpegUsageMonitor' -as [type]) }
+    $script:UsageMonitorInitialized = $true
+    try {
+        if (-not ('ReEncodeUtility.FFmpegUsageMonitor' -as [type])) {
+            Add-Type -Path (Join-Path $global:ScriptDir 'Modules/FFmpegUsageMonitor.cs') -ErrorAction Stop
+        }
+        return $true
+    }
+    catch {
+        Write-Log "FFmpeg使用率監視を初期化できません: $_" -Level 'WARN'
+        return $false
+    }
+}
+
+function Start-FFmpegUsageMonitor {
+    param([System.Diagnostics.Process]$Process)
+    try {
+        return [ReEncodeUtility.FFmpegUsageMonitor]::new($Process.Handle, $Process.Id, 500)
+    }
+    catch {
+        Write-Log "FFmpeg使用率監視を開始できません: $_" -Level 'WARN'
+        return $null
+    }
+}
+
+function Write-FFmpegUsageReport {
+    param($Monitor)
+    if (-not $Monitor) { return }
+    try {
+        $report = $Monitor.Finish()
+        Write-Log ("[FFmpeg CPU/GPU使用率]`n" + ($report -join "`n"))
+    }
+    catch {
+        Write-Log "FFmpeg使用率を記録できません: $_" -Level 'WARN'
+    }
+}
+
 function Invoke-ExternalProcess {
     param(
         [string]$FilePath,
@@ -296,11 +334,25 @@ function Invoke-ExternalProcess {
     Write-Log "[CMD] `"$FilePath`" $Arguments" -Level "DEBUG"
     $stderrFile = Join-Path ([System.IO.Path]::GetTempPath()) "re-enc-stderr-$([System.IO.Path]::GetRandomFileName())"
     $stdoutFile = Join-Path ([System.IO.Path]::GetTempPath()) "re-enc-stdout-$([System.IO.Path]::GetRandomFileName())"
+    $monitor = $null
     try {
-        $proc = Start-Process -FilePath $FilePath -ArgumentList $Arguments `
-            -Wait -PassThru -NoNewWindow `
-            -RedirectStandardOutput $stdoutFile `
-            -RedirectStandardError $stderrFile
+        $monitorEnabled = ($FilePath -eq $global:Settings.FfmpegPath) -and (Initialize-FFmpegUsageMonitor)
+        $startParams = @{
+            FilePath = $FilePath
+            ArgumentList = $Arguments
+            PassThru = $true
+            NoNewWindow = $true
+            RedirectStandardOutput = $stdoutFile
+            RedirectStandardError = $stderrFile
+        }
+        if (-not $monitorEnabled) { $startParams.Wait = $true }
+        $proc = Start-Process @startParams
+        if ($monitorEnabled) {
+            $null = $proc.Handle
+            $monitor = Start-FFmpegUsageMonitor -Process $proc
+            $proc.WaitForExit()
+            Write-FFmpegUsageReport -Monitor $monitor
+        }
         $stdout = ""; $stderr = ""
         if (Test-Path $stdoutFile) { $stdout = (Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction SilentlyContinue) }
         if (Test-Path $stderrFile) { $stderr = (Get-Content -LiteralPath $stderrFile -Raw -ErrorAction SilentlyContinue) }
@@ -314,6 +366,7 @@ function Invoke-ExternalProcess {
         return @{ ExitCode = $proc.ExitCode; StdOut = $stdout; StdErr = $stderr }
     }
     finally {
+        if ($monitor) { $monitor.Dispose() }
         Remove-Item -LiteralPath $stderrFile, $stdoutFile -Force -ErrorAction SilentlyContinue
     }
 }
@@ -328,6 +381,8 @@ function Invoke-FfmpegEncode {
     $progressFile = Join-Path ([System.IO.Path]::GetTempPath()) "ffprogress-$([System.IO.Path]::GetRandomFileName())"
     $stderrFile = Join-Path ([System.IO.Path]::GetTempPath()) "re-enc-stderr-$([System.IO.Path]::GetRandomFileName())"
     $stdoutFile = Join-Path ([System.IO.Path]::GetTempPath()) "re-enc-stdout-$([System.IO.Path]::GetRandomFileName())"
+    $monitorEnabled = Initialize-FFmpegUsageMonitor
+    $monitor = $null
     $startTime = Get-Date
     try {
         $fullArgs = "$Arguments -progress `"$progressFile`""
@@ -337,6 +392,7 @@ function Invoke-FfmpegEncode {
             -RedirectStandardError $stderrFile
         # PS 5.1ではハンドルを事前にキャッシュしないと終了後にExitCodeがnullになる
         $null = $proc.Handle
+        if ($monitorEnabled) { $monitor = Start-FFmpegUsageMonitor -Process $proc }
         $startPos = $null
         $totalSizeVal = 0.0
         $maxBitrateVal = 0.0
@@ -630,6 +686,7 @@ function Invoke-FfmpegEncode {
         Write-Host ($finalLine1Sub + (" " * $pad1))
         Write-Host ($finalLine2Sub + (" " * $pad2))
         Write-Log "エンコード所要時間: $($elapsed.ToString('hh\:mm\:ss'))"
+        Write-FFmpegUsageReport -Monitor $monitor
         $stdout = ""; $stderr = ""
         if (Test-Path $stdoutFile) { $stdout = Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction SilentlyContinue }
         if (Test-Path $stderrFile) { $stderr = Get-Content -LiteralPath $stderrFile -Raw -ErrorAction SilentlyContinue }
@@ -691,6 +748,7 @@ function Invoke-FfmpegEncode {
         return @{ ExitCode = $proc.ExitCode; StdOut = $stdout; StdErr = $stderr }
     }
     finally {
+        if ($monitor) { $monitor.Dispose() }
         Remove-Item -LiteralPath $stderrFile, $stdoutFile, $progressFile -Force -ErrorAction SilentlyContinue
     }
 }
