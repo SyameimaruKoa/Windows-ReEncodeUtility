@@ -16,7 +16,13 @@ function Get-AudioSyncAlignment {
     if (-not $matcherType) {
         Add-Type -Path (Join-Path $PSScriptRoot 'AudioFingerprint.cs') -ErrorAction Stop
     }
-    $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ('reencode-audiosync-' + [guid]::NewGuid().ToString('N'))
+    # 一時ファイルはプロジェクト直下の git 対象外 .cache\tmp に限定する
+    $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $projectTempRoot = Join-Path $projectRoot '.cache\tmp'
+    if (-not (Test-Path -LiteralPath $projectTempRoot -PathType Container)) {
+        $null = New-Item -ItemType Directory -Path $projectTempRoot -Force
+    }
+    $temporary = Join-Path $projectTempRoot ('reencode-audiosync-' + [guid]::NewGuid().ToString('N'))
     New-Item -Path $temporary -ItemType Directory -ErrorAction Stop | Out-Null
     try {
         $files = @((Join-Path $temporary 'reference.f32'), (Join-Path $temporary 'external.f32'))

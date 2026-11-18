@@ -32,6 +32,11 @@ $global:AppCacheDir = Join-Path $scriptDir '.cache'
 if (-not (Test-Path -LiteralPath $global:AppCacheDir -PathType Container)) {
     $null = New-Item -ItemType Directory -Path $global:AppCacheDir -Force
 }
+# 一時ファイルは git 対象外の .cache 配下に限定する（プロジェクト外は触らない）
+$global:AppTempDir = Join-Path $global:AppCacheDir 'tmp'
+if (-not (Test-Path -LiteralPath $global:AppTempDir -PathType Container)) {
+    $null = New-Item -ItemType Directory -Path $global:AppTempDir -Force
+}
 
 function Write-LogFallback {
     param([string]$Message, [string]$Level = "INFO")
@@ -178,7 +183,7 @@ try {
     $info.HasD3D12VA = @($info.AvailableEncoders | Where-Object { $_ -match '_d3d12va$' }).Count -gt 0
     $info.HasMF = @($info.AvailableEncoders | Where-Object { $_ -match '_mf$' }).Count -gt 0
 
-    $testClipPath = Join-Path ([System.IO.Path]::GetTempPath()) "hwaccel_test_$([System.IO.Path]::GetRandomFileName()).mp4"
+    $testClipPath = Join-Path $global:AppTempDir "hwaccel_test_$([System.IO.Path]::GetRandomFileName()).mp4"
     try {
         $null = & $ffmpegPath -hide_banner -y -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 5 -pix_fmt yuv420p -c:v libx264 -preset ultrafast "$testClipPath" 2>&1
         if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $testClipPath)) {
