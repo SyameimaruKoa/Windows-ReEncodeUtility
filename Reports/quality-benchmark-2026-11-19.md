@@ -26,7 +26,7 @@
 | pi335 (N3350) | Linux | Apollo Lake QSV | h264/hevc QSV | mpeg2 QSV 候補不正 |
 | op3040 (6500T) | Linux | Skylake QSV | h264/hevc/mpeg2 QSV | jellyfin コンテナ内 ffmpeg 経由 |
 | q508 (Z8700) | Linux | Cherry Trail VAAPI | h264_vaapi（ドライバ変更＋profile main） | QSV 初期化不可、mjpeg/mpeg2/vp8 は比較対象外 |
-| tbook (7530U) | Linux | VCN 3 / VAAPI | h264/hevc VAAPI | AMF 未検出、VRAM 64MB でも2秒は動作 |
+| tbook (7530U) | Bazzite 44 | VCN 3 / VAAPI | h264/hevc VAAPI | AMF はランタイム `libamfrt64.so.1` 未導入で不可。VRAM 64MB→2GB 変更後も品質値・VMAF は同一 |
 | 8750H + RTX2070 | Linux (停止前) | Coffee Lake QSV / Turing NVENC | h264/hevc/mpeg2 QSV、h264/hevc NVENC | AV1 NVENC 不可、QSV は oneVPL GPU ランタイム導入後に解決 |
 | 6300U | Linux | Skylake QSV | h264/hevc/mpeg2 QSV | 上記ホストの別ハードウェアとして計測 |
 | HD 5450 | 未接続 | Cedar | なし | HW エンコーダー無し |
