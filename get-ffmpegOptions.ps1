@@ -359,6 +359,11 @@ function Get-EncoderSettings {
             elseif ($codecMap[$codecIndex] -eq "mjpeg_qsv") {
                 $qPresets = [ordered]@{ "高品質 (Q:5)" = "-q:v 5"; "標準品質 (Q:10)" = "-q:v 10"; "カスタム品質 (Q)" = "-q:v {val}" }
             }
+            elseif ($codecMap[$codecIndex] -eq "mpeg2_qsv") {
+                # mpeg2_qsv は -global_quality 非対応 (Current profile is unsupported)。
+                # 量子化指定 (-q:v) またはビットレート指定のみ利用できる。
+                $qPresets = [ordered]@{ "高品質 (Q:5)" = "-q:v 5"; "中品質 (Q:10)" = "-q:v 10"; "低品質 (Q:20)" = "-q:v 20"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
+            }
             else {
                 $qPresets = [ordered]@{ "高品質 (GQ:20)" = "-global_quality 20"; "中品質 (GQ:25)" = "-global_quality 25"; "低品質 (GQ:30)" = "-global_quality 30"; "カスタム品質 (GQ)" = "-global_quality {val}"; "カスタムビットレート" = "-b:v {val}" }
             }
