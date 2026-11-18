@@ -82,7 +82,7 @@ function Load-HardwareCache {
     if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) { return $null }
     try { $cached = Import-Clixml -Path $cachePath } catch { return $null }
 
-    if (-not $cached -or $cached.SchemaVersion -ne 2) { return $null }
+    if (-not $cached -or $cached.SchemaVersion -ne 3) { return $null }
     if ($cached.MachineName -ne $env:COMPUTERNAME) { return $null }
     if ($cached.FfmpegSignature -ne (Get-FfmpegSignature -FfPath $ffmpegPath)) { return $null }
     if (-not $cached.ScanCompleted) { return $null }
@@ -93,7 +93,7 @@ function Save-HardwareCache {
     param([object]$HardwareInfo)
     $cachePath = Get-HardwareCachePath
     $cacheObject = [pscustomobject]@{
-        SchemaVersion     = 2
+        SchemaVersion     = 3
         MachineName       = $env:COMPUTERNAME
         SavedAt           = Get-Date
         FfmpegSignature   = Get-FfmpegSignature -FfPath $ffmpegPath
