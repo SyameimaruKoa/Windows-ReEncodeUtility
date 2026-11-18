@@ -143,8 +143,14 @@ try {
                     $opts = Build-PlatformVideoOptions -HW $hw -Codec $codec -QualityMode $qmode `
                         -QualityValue 25 -Preset 'medium' -MaxrateKbps 4000 -SpecificEncoder $variant.Encoder
                     $name = "生成: $hw / $codec / $qmode$(if ($variant.Encoder) { " / $($variant.Encoder)" })"
-                    $ok = $opts -and $opts.StartsWith('-c:v ') -and $opts -notmatch '[\{\}]'
-                    Assert-Ok -Condition ([bool]$ok) -Name $name -Detail "$opts"
+                    if ($hw -in @('Vulkan','D3D12VA','MF')) {
+                        # GPU 使用を保証できないため非明示対応: オプションを生成せず null を返すこと
+                        Assert-Ok -Condition ($null -eq $opts) -Name "非対応: $hw / $codec / $qmode" -Detail 'パラメータ変換せず null'
+                    }
+                    else {
+                        $ok = $opts -and $opts.StartsWith('-c:v ') -and $opts -notmatch '[\{\}]'
+                        Assert-Ok -Condition ([bool]$ok) -Name $name -Detail "$opts"
+                    }
                 }
             }
         }
