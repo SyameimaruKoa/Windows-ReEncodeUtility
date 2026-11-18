@@ -4,6 +4,61 @@
 
 このリポジトリの元になった素材は [git@gist.github.com:85e306167a7f1298d0ec93ea1081c5d3.git](https://gist.github.com/85e306167a7f1298d0ec93ea1081c5d3) 由来で、最初はそのファイル群を AI で最適化するところから始まっている。あわせて、このリポジトリ自体もその AI 最適化を行ったタイミングで git 管理を開始しているため、以後の履歴はその時点からの実装変遷として記録している。
 
+## 2026-11-18（GPU 使用の実測と非対応化・未コミット）
+
+- ffmpeg verbose ログで各 HW 経路が実際に GPU を使うか確認した。QSV は oneVPL MFX、D3D12VA は `hwupload`+`pix_fmt=d3d12` のときだけ `Intel Iris Xe Graphics` を使用。MF 映像既定と `aac_mf` / `mp3_mf` はソフトウェア MFT で CPU 動作（`-hw_encoding 1` のときのみハードウェア MFT）。Vulkan 映像エンコーダーはこの環境で初期化失敗。
+- ユーザー指示により「パラメータの変換は行わず、非対応明記または非表示」に対応:
+  - `get-ffmpegOptions.ps1` と `Get-FilteredHwChoices` から Vulkan / D3D12VA / MF を非表示化。
+  - `Get-PlatformAvailableCodecs` と `Build-PlatformVideoOptions` からこれらを削除し、旧来の `-b:v` 代替コードを削除（`null` を返して非対応を明示）。
+  - `Get-HardwareInfo.ps1` は音声エンコーダーを `AvailableEncoders` に含めないように変更（`*_mf` を GPU エンコーダーとして列出さない）。
+  - 正当な GPU 経路は中間ファイル作成モード (`hwupload` / `-hw_encoding 1`) のみとする。
+- 網羅テストを更新し、非対応 HW は「オプションを生成せず null」を期待するように変更。158 PASS / 1 SKIP を確認。
+
+## 2026-11-18（音声同期対策・未コミット）
+
+### 外部エンコーダー音声のリップシンク実測と対策
+
+- `Tests/Test-ExternalAudioSync.ps1` を追加。0.5/1.5/2.5秒にビープ音（相互相関用には広帯域ノイズ）を置いた基準動画を使い、アプリと同じ「WAV抽出→外部エンコード→`-c:a copy` でmux」の経路を再現してオフセットを実測。
+- 結果（内部エンコーダーはベースライン）: ffmpeg 内蔵 AAC/Opus/Vorbis/FLAC/AC3/MP3 はすべて **0ms**。外部も AAC-LC（qaac / fdkaac / nero）と nero HE-AAC は **0ms** だったが、**qaac HE-AAC と fdkaac HE-AAC は約 +20ms の音声遅延**を検出（ノイズ相互相関で 20.04ms / 20.02ms を確認）。
+- `-itsoffset` は `-c:a copy` では効かず、入力 `-ss` は AAC フレーム単位で飛び -46ms となったため、mux 側の補正は見送った。
+- **対策（外部エンコーダーを含む）**: プラットフォーム自動選択の低ビットレート MP4 で qaac/fdkaac の HE-AAC を除外し、Nero HE（0ms）→ qaac/fdkaac の AAC-LC（0ms）→ 内蔵 AAC-LC の順に変更。手動メニューでは qaac/fdkaac の HE-AAC に「約20ms遅延」を明記してユーザー choice は尊重。検証スクリプトに「自動選択プリセットと内蔵エンコーダーは |offset| <= 5ms」の判定を追加し PASS を確認。
+
+### 未テストエンコーダーの詳細検証
+
+- `Tests/Test-UntestedEncoders.ps1` を追加（12 PASS / 23 FAIL、環境依存）。
+- 使えたもの: **D3D12VA の H.264/HEVC は `hwupload` + `pix_fmt=d3d12` で動作**（CPU フレーム入力では失敗）。Vulkan の `ffv1_vulkan` も hwupload で動作。MF 音声は `aac_mf` と `mp3_mf` が動作（`ac3_mf` は MFT なし）。外部音声エンコーダー 7プリセットはすべて正常。
+- 使えなかったもの: Vulkan 映像H.264/HEVC/AV1（Vulkan コンピュートパイプライン初期化失敗）、MF の `hevc_mf` / `av1_mf`、D3D12VA AV1。いずれもこの環境のドライバ／MFT 不足が原因で、コード側の不具合ではない。
+
+## 2026-11-18（追記・未コミット）
+
+### 一時ファイルをプロジェクト内に限定
+
+- ユーザー指示により、プロジェクトフォルダ外へのコマンド送信を全面禁止した。すべての `[System.IO.Path]::GetTempPath()` 利用を git 対象外の `.cache\tmp` に置き換えた（メインスクリプト、Get-HardwareInfo.ps1、Modules/EncodeFallback.ps1、Modules/Audio/AudioSync.psm1）。
+- テストスクリプトの作業領域を `.cache\test-work\<専用名>` に変更し、再帰削除の前に「そのパス配下であること」を検証する安全装置を追加した。
+- 実動画（2560x720）での再検証で、Intel QSV の MPEG-2 エンコーダーは幅 1920 が上限で、それを超えると `-q:v` でも `Current profile is unsupported` になることを確認。網羅テストでは 1920x720 に縮小して検証し、上限超過は既知制約として SKIP 記録する。
+
+## 2026-11-18（未コミット）
+
+### 全モード／全コーデック／全品質モードの網羅検証と修正
+
+- `Tests/Test-AllModesAndCodecs.ps1` を新規追加。AST から関数定義のみを読み込み、対話UIを起動せずに全オプション生成・全テンプレート読込・実エンコード・中間モード・7プラットフォーム×おまかせ/詳細・分割（SRT 2セグメント）・外部音声同期を実行する。検証用動画が無い場合は合成クリップを自動生成する。
+- 実機（Intel QSV / MF のみ可利用）で **158件すべて PASS**。NVENC/AMF/Vulkan/D3D12VA/AV1-QSV はこの環境ではテストエンコードに失敗するため、オプション生成のみ検証した。
+- 検証で見つかった不具合を修正:
+  1. `mpeg2_qsv` に `-global_quality` を渡すと `Current profile is unsupported` で失敗する。-q:v / -b:v に変更（get-ffmpegOptions.ps1）。
+  2. ゼロコピー用の `needsCpuFrames=false` が通常の `scale_qsv` 経路（MFエンコーダ等）にも波及し `hwdownload` が欠落するリグレッションを修正。専用フラグ `$usingZeroCopyPath` を導入。
+  3. D3D11VA→QSV のゼロコピー候補 `hwmap=mode=direct` が環境によって ffmpeg を ACCESS_VIOLATION で落とすため候補から除外。
+- **事故**: 検証ハーネスの後始末が、`Get-HardwareInfo.ps1` に上書きされた `$global:AppCacheDir` を指し、リポジトリの `.cache`（ユーザー指定のテスト動画を含む）を削除した。現在は一時ディレクトリの再設定と、削除前にパスを検証する安全装置を追加済み。
+
+## 2026-11-17（未コミット）
+
+### 事前検証／統一フォールバック／ゼロコピー経路プローブの導入
+
+- `Modules/EncodeFallback.ps1` を新規追加。エンコード能力キャッシュ（`.cache/encode-capability-cache.clixml`）、stderr の失敗分類（`HwDecodeInit` / `HwFilter` / `HwEncodeInit` / `EncoderOption` / `Unknown`）、本番設定の 8 フレーム事前検証、段階的フォールバック（要求設定 → CPUスケール → HWアクセルなし → 任意でCPUエンコーダ）、GPUスケール→CPUスケールの汎用引数変換を実装した。
+- `re-encode-AIOptimus.ps1` を変更。3箇所（セグメント／2pass 1st pass／本エンコード）に重複していた HW エラーリトライを `Invoke-EncodeWithFallback` に統一。QSV の `async_depth` フォールバックも各ステージ内で従来どおり動作する。`-ClearEncodeCapabilityCache` スイッチを追加。
+- `Resolve-VideoFilterPipeline` に `InputPath` を追加し、D3D11VA→QSV の強制 CPU リサイズを、実動画で `scale_qsv` / `hwmap` / `vpp_qsv` をプローブする方式に変更。成功時のみゼロコピー経路を採用し、失敗時は従来の CPU リサイズに戻る。
+- `Tests/Test-EncodeFallback.ps1` を新規追加。失敗分類・キー生成・キャッシュ・引数変換・階層構築・事前検証の単体テストに加え、指定された実動画（2560x720 / 59.94fps）を使ったプローブと統一フォールバックの実行を検証（34件すべて成功）。
+- ドキュメント更新。SPECIFICATION のハードウェアキャッシュ拡張子を実装に合わせ `.clixml` に修正し、5.6.1 節を追加。README と IMPLEMENTATION_HISTORY に本変更を追記。
+
 ## 2025-05-24
 
 ### f7e9b36 - 初期コミット

@@ -252,11 +252,55 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
 
 ### 5.6 ハードウェア検出 & デコード/転送制御 (`internal/core/hw_scanner.go`, `hw_compat.go`)
 - **対応HW**: NVIDIA (NVENC/CUDA), Intel (QSV), AMD (AMF), Vulkan, D3D12VA, MediaFoundation (MF), CPU (Software)
-- **キャッシュ**: `.cache/hardware-scan-cache.json`（マシン名・FFmpegシグネチャ検証）
+- **キャッシュ**: `.cache/hardware-scan-cache.clixml`（マシン名・FFmpegシグネチャ検証）
 - **HWデコード出力形式**: `cuda`, `qsv`, `d3d11`, `dxva2`, `vulkan`
 - **GPU→CPU転送自動挿入**: HWデコード出力使用時かつ（ソフトウェアフィルタ使用時 または CPUエンコーダ使用時 または Vulkanデコード時）に `hwdownload,format=nv12` を自動挿入。
 - **extra_hw_frames 制御**: 同一GPU系統（CUDAデコード+NVENC、QSVデコード+QSVエンコード）以外の組み合わせ時に `-extra_hw_frames 64` を自動付与。
 - **HWエラー自動リトライ**: stderr からドライバ/GPUエラー（DXVA/CUDA/QSV failure）を検知した場合、自動的に `-hwaccel` を除外して CPU/標準フォールバックで即座に1回再実行。
+
+#### 5.6.1 統一フォールバック／能力キャッシュ／事前検証 (`Modules/EncodeFallback.ps1`)
+
+- **統一フォールバック**: 従来セグメント／2pass 1st pass／本エンコードの3箇所に重複していたリトライ処理を `Invoke-EncodeWithFallback` に集約。ステージ（要求設定 → GPUスケールをCPUスケールへ → HWアクセルなし〔HWエンコーダ維持〕 → 任意でCPUエンコーダ）を順に試し、成功したステージを `[Fallback] tier N` としてログに記録する。
+- **失敗分類**: `Get-EncodeFailureClass` が stderr を `HwDecodeInit` / `HwFilter` / `HwEncodeInit` / `EncoderOption` / `Unknown` に分類。HW関連クラスのみフォールバックを継続し、オプション誤り等のHW非関連エラーでは無駄な再試行を止める。
+- **事前検証（preflight）**: 本番設定と同一のデコード／フィルタ／エンコードオプションを 8 フレームだけ `-f null NUL` で試す。2pass の `-pass` / `-passlogfile` は除外するため passlog を汚さない。検証成功したステージから本番を開始し、失敗設定はキャッシュに記録して次回以降の無駄な試行を防ぐ。
+- **能力キャッシュ**: `.cache/encode-capability-cache.clixml`（SchemaVersion 1）。キーは `hwaccel + フィルタ + 映像オプション` の SHA-256。マシン名・FFmpegシグネチャで検証し、7日で失効。`re-encode-AIOptimus.ps1 -ClearEncodeCapabilityCache` でクリア可能。
+- **ゼロコピー経路の実能力プローブ**: D3D11VA デコード + QSV エンコード従来は強制していた CPU リサイズについて、`scale_qsv` / `hwmap + scale_qsv` / `vpp_qsv` を実入力ファイルで短く試し、成功した経路のみ GPU フレームを維持する。失敗時は従来の「検証済みのCPUリサイズ」に戻る。
+- **既定動作**: プローブが成功するまでは従来どおりの動作。新しい経路はすべて実能力確認済みの場合のみ採用される。
+- **既知の制約**: D3D11VA→QSV のゼロコピー候補 `hwmap=mode=direct` は、ドライバによって ffmpeg が ACCESS_VIOLATION で落ちるため候補から除外している。`scale_d3d11` 自体が使えない環境では、フォールバック tier「GPUスケール→CPUスケール」により `hwdownload,format=nv12,scale=...` に切り替えて成功する。
+- **mpeg2_qsv の品質指定**: `-global_quality` 非対応（`Current profile is unsupported`）。`-q:v` または `-b:v` を使用する（get-ffmpegOptions.ps1 のプリセットを修正済み）。
+- **mpeg2_qsv の解像度上限**: この環境の Intel QSV では幅 1920 が上限。2560x720 等の入力では `-q:v` でも `Current profile is unsupported` となる。事前に縮小するか別コーデックを選ぶ必要がある（ハードウェア／ドライバ依存）。
+- **一時ファイルの配置規則**: プロジェクトフォルダ外には一切書き込み・削除しない。ffmpeg の progress/stderr、HWスキャン用クリップ、音声同期の中間ファイル、フォールバックのプローブ、テスト作業領域はすべて git 対象外の `.cache\tmp` / `.cache\test-work` 配下に置く。再帰削除は必ずこれらの配下であることを検証してから実行する。
+
+#### 外部音声エンコーダーの同期特性（実測）
+
+| エンコーダー | プロファイル | オフセット |
+|---|---|---|
+| ffmpeg 内蔵 (AAC/Opus/Vorbis/FLAC/AC3/MP3) | 各自動 | 0ms |
+| qaac | AAC-LC (TVBR) | 0ms |
+| qaac | HE-AAC (CVBR) | **約 +20ms** |
+| fdkaac | AAC-LC (VBR≥4) | 0ms |
+| fdkaac | HE-AAC (VBR≤3) | **約 +20ms** |
+| nero | AAC-LC / HE-AAC | 0ms |
+
+- 上記を踏まえ、プラットフォーム自動選択の低ビットレート MP4 では qaac/fdkaac の HE-AAC を使わず、Nero HE → qaac/fdkaac の AAC-LC → 内蔵 AAC-LC の順に選択する（同期優先）。手動選択の HE-AAC は選択肢に遅延警告を表示する。
+- `-itsoffset` は `-c:a copy` では音声サンプルを動かせず、入力 `-ss` は AAC フレーム単位（約21ms）で飛ぶため補正に使わない。
+
+#### GPU 使用の実測と非対応方針
+
+ffmpeg の verbose ログで実際に選択される MFT / デバイスを確認した結果:
+
+| 経路 | 実際の動作 | 判定 |
+|---|---|---|
+| QSV (`h264_qsv`) | oneVPL MFX セッションを生成（CPU フレームはシステムメモリから転送） | GPU ✅ |
+| MF 映像 既定 (`h264_mf`) | ソフトウェア `H264 Encoder MFT`（HARDWARE_URL 属性なし） | CPU ❌ |
+| MF 映像 `-hw_encoding 1` | `Intel Quick Sync Video H.264 Encoder MFT`（ハードウェア MFT） | GPU ✅（一部環境で不安定） |
+| MF 音声 (`aac_mf` / `mp3_mf`) | `Microsoft AAC Audio Encoder MFT` / `MP3 Encoder ACM Wrapper MFT`（どちらもソフトウェア、GPU 強制オプションなし） | CPU ❌ |
+| D3D12VA (`h264/hevc_d3d12va`) | `hwupload` + `pix_fmt=d3d12` のとき `Using device 8086:a7a1 (Intel Iris Xe Graphics)` | GPU ✅（CPU フレーム入力では失敗） |
+| Vulkan 映像 (`h264/hevc/av1_vulkan`) | Vulkan レイヤは検出されるがコンピュートパイプライン初期化失敗 | ❌（`ffv1_vulkan` は compute で動作） |
+
+- **パラメータ変換は行わない**。通常／プラットフォームモードでは Vulkan / D3D12VA / MF を選択肢から非表示とし、`Build-PlatformVideoOptions` はこれらに対して `null` を返す（旧来の `-b:v` 固定ビットレート代替は削除）。
+- ハードウェアスキャンの `AvailableEncoders` から音声エンコーダー（`*_mf` 含む）を除外し、GPU エンコーダーとして误って表示されないようにした。
+- これらの GPU 経路が正当に使われるのは**中間ファイル作成モードのみ**（`hwupload` / `-hw_encoding 1` を明示付与）。
 
 ### 5.7 インターレース検出 & 解除 (`internal/core/deinterlace.go`)
 - **選択肢**: `行わない (スキップ)` / `自動判定する (動画解析を実行)` / `手動で選択する (解析をスキップして直接フィルター指定)`

@@ -88,6 +88,13 @@ CPU（従来のH.264/H.265）に加えて、NVENC・QSV・AMF・Vulkan Video・D
 
 固定QP等の高品質設定やピクセル形式を選択でき、NVENCのP7など専用回路側の品質設定も利用できます。明示したソフトウェアピクセル形式とGPUデコードの出力が競合する場合はCPUデコードに切り替え、8-bit NV12への強制変換を避けます。Vulkan Video/D3D12VAではCPUデコード・フィルター処理後に指定形式でGPUへアップロードします。エンコード設定は従来どおり独立テンプレートに保存できます。
 
+#### 安定性の自動強化（事前検証・段階的フォールバック）
+
+- エンコード前に、同じ設定を数フレームだけ試す**事前検証**を自動実行します。失敗する設定は本番前に検出され、成功する経路から処理を開始します。
+- HWエラー時は「GPUスケール→CPUスケール」「HWアクセルなし（HWエンコーダは維持）」の順に**段階的に再試行**します。3箇所に重複していたリトライ処理を1つに集約し、ログに `[Fallback] tier N` として記録します。
+- 検証結果は `.cache/encode-capability-cache.clixml` に保存され、2回目以降は即座に判定します。設定変更やFFmpeg更新時は自動的に無効化されます。手動で捨てたい場合は `re-encode-AIOptimus.ps1 -ClearEncodeCapabilityCache` を実行してください。
+- D3D11VAデコード＋QSVエンコードでは、GPUフレームを維持できる経路（`scale_qsv` / `hwmap` / `vpp_qsv`）を実動画でプローブし、成功した場合のみ採用します。従来どおりCPUリサイズに戻ることもあります。
+
 ### 🎛️ 柔軟なエンコード制御
 
 **品質方式を用途に応じて選択：**
@@ -481,6 +488,29 @@ HW アクセルでエラー発生
 ```
 
 ## 📺 付属ツール
+
+### 音声同期の検証 (`Tests/Test-ExternalAudioSync.ps1`)
+
+外部エンコーダー（qaac / nero / fdkaac）と ffmpeg 内蔵エンコーダーについて、既知のタイミングで入れたビープ音／ノイズを基準にリップシンクを実測します。結果は `.cache/external-audio-sync.json` に保存されます。
+
+- ffmpeg 内蔵エンコーダーはすべて **0ms**（ベースライン）
+- 外部の AAC-LC と nero HE-AAC は **0ms**
+- **qaac / fdkaac の HE-AAC は約 +20ms の遅延** → アプリの自動選択では使用せず、手動選択時は警告を表示
+
+### ハードウェアエンコーダー制限チェック (`Tools/Check-HardwareEncoderLimits.ps1`)
+
+利用可能な映像エンコーダーについて、短い合成映像で**実能力を自動プローブ**します。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Tools\Check-HardwareEncoderLimits.ps1
+# -Force でスキャンキャッシュを無視、 -Quick で利用可否と品質オプションのみ
+```
+
+- 利用可否、使える品質指定（`-global_quality` / `-q:v` / `-b:v` / `-crf` 等）、ピクセル形式
+- エンコード可能な最大解像度（例: この環境の `mpeg2_qsv` は **1920x1080** が上限）
+- HWデコード（`qsv` / `d3d11va` / `dxva2` / `vulkan`）から各エンコーダーへの接続可否
+
+結果は `.cache/hardware-limits.json` に保存されます。一時ファイルはすべて `.cache` 配下に作られ、プロジェクト外は触りません。
 
 ### 録画＆プレビュー機能 (`Record-MiraBox-Stable.ps1`)
 
