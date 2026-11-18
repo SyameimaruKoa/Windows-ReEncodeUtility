@@ -232,13 +232,13 @@ def cmd_detect(args):
         if m:
             names.append(m.group(1))
     hw = [n for n in names if re.search(
-        r"_(nvenc|qsv|amf|vulkan|d3d12va|mf|vaapi)$", n)]
+        r"_(nvenc|qsv|amf|vulkan|d3d12va|mf|vaapi|nvv4l2)$", n)]
     sw = [n for n in names if n in {
         "libx264", "libx265", "libsvtav1", "libaom-av1", "librav1e",
         "libvpx-vp9", "libvpx",
     }]
     # Only hardware encoders allowed by the project policy (no MF/Vulkan/D3D12VA).
-    hw = [n for n in hw if re.search(r"_(nvenc|qsv|amf|vaapi)$", n)]
+    hw = [n for n in hw if re.search(r"_(nvenc|qsv|amf|vaapi|nvv4l2)$", n)]
     available = []
     for enc in hw:
         if enc.endswith("_vaapi"):
@@ -289,7 +289,7 @@ def encoder_supported_options(encoder):
     return names
 
 
-BITRATE_EXCEPTION_ENCODERS = {"vp9_qsv", "libvpx"}
+BITRATE_EXCEPTION_ENCODERS = {"vp9_qsv", "libvpx", "h264_nvv4l2", "hevc_nvv4l2"}
 
 
 def quality_range(encoder):
@@ -309,6 +309,8 @@ def bitrate_options(encoder, mbps):
     if encoder == "libvpx":
         return ["-c:v", encoder, "-cpu-used", "4",
                 "-b:v", f"{mbps:.3f}M", "-pix_fmt", "yuv420p"]
+    if encoder.endswith("_nvv4l2"):
+        return ["-c:v", encoder, "-preset", "4", "-b:v", f"{mbps:.3f}M"]
     return ["-c:v", encoder, "-preset", "veryslow",
             "-b:v", f"{mbps:.3f}M", "-pix_fmt", "yuv420p"]
 
@@ -518,6 +520,74 @@ def cmd_tune(args):
     print(f"[DONE] {out_path}")
 
 
+VARIANT_RATES = [0.3, 0.5, 0.8, 1.2, 2.0, 3.0, 5.0, 8.0]
+
+
+def cmd_variants(args):
+    """Encode bitrate variants on a machine that has no VMAF filter."""
+    seg_path = ANALYSIS / "segments.json"
+    if not seg_path.exists():
+        raise SystemExit("Run 'baseline' first.")
+    segments = json.loads(seg_path.read_text(encoding="utf-8"))
+    encoders = [e.strip() for e in args.encoders.split(",") if e.strip()]
+    for encoder in encoders:
+        for name in segments:
+            ref_t = trim_clip(SEGMENTS / f"{name}.mkv", SEGMENTS / f"{name}-tune-ref.mkv")
+            for mbps in VARIANT_RATES:
+                out = ENCODED / "variants" / encoder / f"{name}-{mbps:.3f}M.mkv"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                opts = bitrate_options(encoder, mbps)
+                rc, log = run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+                               "-i", str(ref_t)] + opts + [str(out)])
+                if rc != 0:
+                    print(f"[FAIL] {encoder} {name} {mbps}M: {log[-200:]}")
+                else:
+                    print(f"[VAR] {encoder} {name} {mbps}M")
+    print("[DONE] variants")
+
+
+def cmd_score_variants(args):
+    """Score variant files with VMAF on this PC and write tuning.json entries."""
+    tune_path = ANALYSIS / "tuning.json"
+    seg_path = ANALYSIS / "segments.json"
+    base_path = ANALYSIS / "baseline.json"
+    if not (tune_path.exists() and seg_path.exists() and base_path.exists()):
+        raise SystemExit("Need tuning.json, segments.json and baseline.json.")
+    tune = json.loads(tune_path.read_text(encoding="utf-8"))
+    base = json.loads(base_path.read_text(encoding="utf-8"))
+    targets = {k: v["tune_vmaf"] for k, v in base["results"].items() if "tune_vmaf" in v}
+    encoders = [e.strip() for e in args.encoders.split(",") if e.strip()]
+    for encoder in encoders:
+        materials = {}
+        for name, target in targets.items():
+            ref_t = SEGMENTS / f"{name}-tune-ref.mkv"
+            history = []
+            for mbps in VARIANT_RATES:
+                src = ENCODED / "variants" / encoder / f"{name}-{mbps:.3f}M.mkv"
+                if not src.exists():
+                    continue
+                dst = ENCODED / "variants" / encoder / f"{name}-{mbps:.3f}M-tune.mkv"
+                trim_clip(src, dst)
+                vmaf = measure_vmaf(dst, ref_t)["vmaf"]
+                history.append({"value": mbps, "vmaf": round(vmaf, 3)})
+            if not history:
+                continue
+            best = min(history, key=lambda h: abs(h["vmaf"] - target))
+            materials[name] = {
+                "target": round(target, 3), "value_unit": "Mbps",
+                "best_value": best["value"], "best_vmaf": best["vmaf"],
+                "diff": round(best["vmaf"] - target, 3), "history": history,
+            }
+            print(f"[SCORE] {encoder} {name}: value={best['value']} vmaf={best['vmaf']:.3f} "
+                  f"diff={materials[name]['diff']}")
+        tune["results"][f"{encoder}:normal"] = {
+            "encoder": encoder, "mode": "normal", "cu_assist": False,
+            "chip_options": [], "materials": materials,
+        }
+    tune_path.write_text(json.dumps(tune, indent=2), encoding="utf-8")
+    print(f"[DONE] {tune_path}")
+
+
 def cmd_final(args):
     """Encode full 10s segments with the proposed common values and measure speed/quality."""
     tune_path = ANALYSIS / "tuning.json"
@@ -671,12 +741,17 @@ def main():
                              help="comma-separated encoder filter")
     tune_parser.add_argument("--materials", default="",
                              help="comma-separated material filter")
+    variants_parser = sub.add_parser("variants")
+    variants_parser.add_argument("--encoders", required=True, help="comma-separated encoder filter")
+    score_parser = sub.add_parser("score-variants")
+    score_parser.add_argument("--encoders", required=True, help="comma-separated encoder filter")
     final_parser = sub.add_parser("final")
     final_parser.add_argument("--encoders", default="", help="comma-separated encoder filter")
     sub.add_parser("report")
     args = parser.parse_args()
     {"prepare": cmd_prepare, "baseline": cmd_baseline,
-     "detect": cmd_detect, "tune": cmd_tune, "final": cmd_final,
+     "detect": cmd_detect, "tune": cmd_tune, "variants": cmd_variants,
+     "score-variants": cmd_score_variants, "final": cmd_final,
      "report": cmd_report}[args.command](args)
 
 
