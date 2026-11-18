@@ -546,6 +546,65 @@ def cmd_variants(args):
     print("[DONE] variants")
 
 
+def cmd_variants_quality(args):
+    """Encode quality-mode variants on a machine that has no VMAF filter."""
+    seg_path = ANALYSIS / "segments.json"
+    if not seg_path.exists():
+        raise SystemExit("Run 'baseline' first.")
+    segments = json.loads(seg_path.read_text(encoding="utf-8"))
+    for encoder in [e.strip() for e in args.encoders.split(",") if e.strip()]:
+        lo, hi = quality_range(encoder)
+        values = list(range(lo, hi + 1, 2))
+        for name in segments:
+            ref_t = trim_clip(SEGMENTS / f"{name}.mkv", SEGMENTS / f"{name}-tune-ref.mkv")
+            for value in values:
+                out = ENCODED / "variants" / encoder / f"{name}-q{value}.mkv"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                opts = quality_options(encoder, value)
+                rc, log = run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+                               "-i", str(ref_t)] + opts + [str(out)])
+                print(f"[VAR] {encoder} {name} q{value} {'OK' if rc == 0 else 'FAIL'}")
+
+
+def cmd_score_variants_quality(args):
+    """Score quality-mode variants with VMAF on this PC."""
+    tune_path = ANALYSIS / "tuning.json"
+    base_path = ANALYSIS / "baseline.json"
+    if not (tune_path.exists() and base_path.exists()):
+        raise SystemExit("Need tuning.json and baseline.json.")
+    tune = json.loads(tune_path.read_text(encoding="utf-8"))
+    targets = {k: v["tune_vmaf"] for k, v in json.loads(
+        base_path.read_text(encoding="utf-8"))["results"].items() if "tune_vmaf" in v}
+    for encoder in [e.strip() for e in args.encoders.split(",") if e.strip()]:
+        materials = {}
+        for name, target in targets.items():
+            ref_t = SEGMENTS / f"{name}-tune-ref.mkv"
+            folder = ENCODED / "variants" / encoder
+            history = []
+            for src in sorted(folder.glob(f"{name}-q*.mkv")):
+                value = int(src.stem.split("-q")[-1])
+                dst = folder / f"{src.stem}-tune.mkv"
+                trim_clip(src, dst)
+                history.append({"value": value,
+                                "vmaf": round(measure_vmaf(dst, ref_t)["vmaf"], 3)})
+            if not history:
+                continue
+            best = min(history, key=lambda h: abs(h["vmaf"] - target))
+            materials[name] = {
+                "target": round(target, 3), "value_unit": "quality",
+                "best_value": best["value"], "best_vmaf": best["vmaf"],
+                "diff": round(best["vmaf"] - target, 3), "history": history,
+            }
+            print(f"[SCORE] {encoder} {name}: value={best['value']} vmaf={best['vmaf']:.3f} "
+                  f"diff={materials[name]['diff']}")
+        tune["results"][f"{encoder}:normal"] = {
+            "encoder": encoder, "mode": "normal", "cu_assist": False,
+            "chip_options": [], "materials": materials,
+        }
+    tune_path.write_text(json.dumps(tune, indent=2), encoding="utf-8")
+    print(f"[DONE] {tune_path}")
+
+
 def cmd_score_variants(args):
     """Score variant files with VMAF on this PC and write tuning.json entries."""
     tune_path = ANALYSIS / "tuning.json"
@@ -743,15 +802,22 @@ def main():
                              help="comma-separated material filter")
     variants_parser = sub.add_parser("variants")
     variants_parser.add_argument("--encoders", required=True, help="comma-separated encoder filter")
+    vq_parser = sub.add_parser("variants-quality")
+    vq_parser.add_argument("--encoders", required=True, help="comma-separated encoder filter")
     score_parser = sub.add_parser("score-variants")
     score_parser.add_argument("--encoders", required=True, help="comma-separated encoder filter")
+    sq_parser = sub.add_parser("score-variants-quality")
+    sq_parser.add_argument("--encoders", required=True, help="comma-separated encoder filter")
     final_parser = sub.add_parser("final")
     final_parser.add_argument("--encoders", default="", help="comma-separated encoder filter")
     sub.add_parser("report")
     args = parser.parse_args()
     {"prepare": cmd_prepare, "baseline": cmd_baseline,
      "detect": cmd_detect, "tune": cmd_tune, "variants": cmd_variants,
-     "score-variants": cmd_score_variants, "final": cmd_final,
+     "variants-quality": cmd_variants_quality,
+     "score-variants": cmd_score_variants,
+     "score-variants-quality": cmd_score_variants_quality,
+     "final": cmd_final,
      "report": cmd_report}[args.command](args)
 
 
