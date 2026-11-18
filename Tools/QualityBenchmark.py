@@ -190,7 +190,7 @@ def cmd_baseline(args):
     seg_info = json.loads(seg_info_path.read_text(encoding="utf-8"))
     results = {}
     for name, info in seg_info.items():
-        seg = Path(info["segment"])
+        seg = SEGMENTS / f"{name}.mkv"
         out = ENCODED / f"baseline-{name}.mkv"
         t0 = time.perf_counter()
         rc, log = run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
@@ -271,8 +271,6 @@ def cmd_detect(args):
 
 def trim_clip(src, out_path, seconds=5.0):
     """Make a short copy for tuning. Segments are FFV1 with g=1 so copy is exact."""
-    if out_path.exists():
-        return out_path
     rc, out = run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
                    "-i", str(src), "-t", f"{seconds:.3f}", "-c", "copy", str(out_path)])
     if rc != 0:
@@ -331,8 +329,9 @@ def quality_options(encoder, value):
         return ["-c:v", encoder, "-quality", "quality", "-rc", "cqp",
                 "-qp_i", v, "-qp_p", v, "-qp_b", v, "-pix_fmt", "yuv420p"]
     if encoder.endswith("_vaapi"):
+        profile = ["-profile:v", "main"] if encoder.startswith("h264_") else []
         return ["-vaapi_device", "/dev/dri/renderD128",
-                "-vf", "format=nv12,hwupload", "-c:v", encoder, "-qp", v]
+                "-vf", "format=nv12,hwupload", "-c:v", encoder] + profile + ["-qp", v]
     if encoder in ("libx264", "libx265"):
         return ["-c:v", encoder, "-preset", "medium", "-crf", v, "-pix_fmt", "yuv420p"]
     if encoder == "libsvtav1":
@@ -416,7 +415,7 @@ def cmd_tune(args):
             tune_targets[name] = float(stored)
             print(f"[TARGET] {name}: {float(stored):.3f} (from baseline.json)")
             continue
-        full_ref = Path(info["segment"])
+        full_ref = SEGMENTS / f"{name}.mkv"
         full_enc = Path(baseline["results"].get(name, {}).get("output", ""))
         if not full_enc.exists():
             continue
