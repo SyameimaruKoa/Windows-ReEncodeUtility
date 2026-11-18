@@ -18,7 +18,7 @@ function Show-Menu {
     $currentIndex = $DefaultIndex
     $titleLines = ($Title -split "`r?`n").Count + 1
     $menuLines = $Choices.Length
-    $totalLines = $titleLines + $menuLines
+    $totalLines = $titleLines + $menuLines + 1 # 操作ヒント1行分
     try {
         $startY = $Host.UI.RawUI.CursorPosition.Y
         $windowHeight = $Host.UI.RawUI.WindowSize.Height
@@ -58,12 +58,19 @@ function Show-Menu {
             if ($i -eq $currentIndex) { Write-Host $paddedLine -ForegroundColor Black -BackgroundColor White }
             else { Write-Host $paddedLine }
         }
+        Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
         $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         switch ($key.VirtualKeyCode) {
             38 { if ($currentIndex -gt 0) { $currentIndex-- } }
             40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } }
-            13 { Write-Host ""; return $currentIndex }
-            27 { Write-Host ""; return -1 }
+            13 { $global:MenuNav = ''; Write-Host ""; return $currentIndex }
+            27 { $global:MenuNav = ''; Write-Host ""; return -1 }
+            8  {
+                if ($global:MenuBackHandler) { $global:MenuNav = 'back'; Write-Host ""; return -2 }
+                $currentIndex = $DefaultIndex
+                continue
+            }
+            46 { $global:MenuNav = 'allback'; Write-Host ""; return -3 }
         }
     }
 }
