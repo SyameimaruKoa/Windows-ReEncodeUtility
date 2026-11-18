@@ -4,6 +4,36 @@
 
 このリポジトリの元になった素材は [git@gist.github.com:85e306167a7f1298d0ec93ea1081c5d3.git](https://gist.github.com/85e306167a7f1298d0ec93ea1081c5d3) 由来で、最初はそのファイル群を AI で最適化するところから始まっている。あわせて、このリポジトリ自体もその AI 最適化を行ったタイミングで git 管理を開始しているため、以後の履歴はその時点からの実装変遷として記録している。
 
+## 2026-11-18（追記・未コミット）
+
+### 一時ファイルをプロジェクト内に限定
+
+- ユーザー指示により、プロジェクトフォルダ外へのコマンド送信を全面禁止した。すべての `[System.IO.Path]::GetTempPath()` 利用を git 対象外の `.cache\tmp` に置き換えた（メインスクリプト、Get-HardwareInfo.ps1、Modules/EncodeFallback.ps1、Modules/Audio/AudioSync.psm1）。
+- テストスクリプトの作業領域を `.cache\test-work\<専用名>` に変更し、再帰削除の前に「そのパス配下であること」を検証する安全装置を追加した。
+- 実動画（2560x720）での再検証で、Intel QSV の MPEG-2 エンコーダーは幅 1920 が上限で、それを超えると `-q:v` でも `Current profile is unsupported` になることを確認。網羅テストでは 1920x720 に縮小して検証し、上限超過は既知制約として SKIP 記録する。
+
+## 2026-11-18（未コミット）
+
+### 全モード／全コーデック／全品質モードの網羅検証と修正
+
+- `Tests/Test-AllModesAndCodecs.ps1` を新規追加。AST から関数定義のみを読み込み、対話UIを起動せずに全オプション生成・全テンプレート読込・実エンコード・中間モード・7プラットフォーム×おまかせ/詳細・分割（SRT 2セグメント）・外部音声同期を実行する。検証用動画が無い場合は合成クリップを自動生成する。
+- 実機（Intel QSV / MF のみ可利用）で **158件すべて PASS**。NVENC/AMF/Vulkan/D3D12VA/AV1-QSV はこの環境ではテストエンコードに失敗するため、オプション生成のみ検証した。
+- 検証で見つかった不具合を修正:
+  1. `mpeg2_qsv` に `-global_quality` を渡すと `Current profile is unsupported` で失敗する。-q:v / -b:v に変更（get-ffmpegOptions.ps1）。
+  2. ゼロコピー用の `needsCpuFrames=false` が通常の `scale_qsv` 経路（MFエンコーダ等）にも波及し `hwdownload` が欠落するリグレッションを修正。専用フラグ `$usingZeroCopyPath` を導入。
+  3. D3D11VA→QSV のゼロコピー候補 `hwmap=mode=direct` が環境によって ffmpeg を ACCESS_VIOLATION で落とすため候補から除外。
+- **事故**: 検証ハーネスの後始末が、`Get-HardwareInfo.ps1` に上書きされた `$global:AppCacheDir` を指し、リポジトリの `.cache`（ユーザー指定のテスト動画を含む）を削除した。現在は一時ディレクトリの再設定と、削除前にパスを検証する安全装置を追加済み。
+
+## 2026-11-17（未コミット）
+
+### 事前検証／統一フォールバック／ゼロコピー経路プローブの導入
+
+- `Modules/EncodeFallback.ps1` を新規追加。エンコード能力キャッシュ（`.cache/encode-capability-cache.clixml`）、stderr の失敗分類（`HwDecodeInit` / `HwFilter` / `HwEncodeInit` / `EncoderOption` / `Unknown`）、本番設定の 8 フレーム事前検証、段階的フォールバック（要求設定 → CPUスケール → HWアクセルなし → 任意でCPUエンコーダ）、GPUスケール→CPUスケールの汎用引数変換を実装した。
+- `re-encode-AIOptimus.ps1` を変更。3箇所（セグメント／2pass 1st pass／本エンコード）に重複していた HW エラーリトライを `Invoke-EncodeWithFallback` に統一。QSV の `async_depth` フォールバックも各ステージ内で従来どおり動作する。`-ClearEncodeCapabilityCache` スイッチを追加。
+- `Resolve-VideoFilterPipeline` に `InputPath` を追加し、D3D11VA→QSV の強制 CPU リサイズを、実動画で `scale_qsv` / `hwmap` / `vpp_qsv` をプローブする方式に変更。成功時のみゼロコピー経路を採用し、失敗時は従来の CPU リサイズに戻る。
+- `Tests/Test-EncodeFallback.ps1` を新規追加。失敗分類・キー生成・キャッシュ・引数変換・階層構築・事前検証の単体テストに加え、指定された実動画（2560x720 / 59.94fps）を使ったプローブと統一フォールバックの実行を検証（34件すべて成功）。
+- ドキュメント更新。SPECIFICATION のハードウェアキャッシュ拡張子を実装に合わせ `.clixml` に修正し、5.6.1 節を追加。README と IMPLEMENTATION_HISTORY に本変更を追記。
+
 ## 2025-05-24
 
 ### f7e9b36 - 初期コミット
