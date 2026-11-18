@@ -4,6 +4,31 @@
 
 このリポジトリの元になった素材は [git@gist.github.com:85e306167a7f1298d0ec93ea1081c5d3.git](https://gist.github.com/85e306167a7f1298d0ec93ea1081c5d3) 由来で、最初はそのファイル群を AI で最適化するところから始まっている。あわせて、このリポジトリ自体もその AI 最適化を行ったタイミングで git 管理を開始しているため、以後の履歴はその時点からの実装変遷として記録している。
 
+## 2026-11-18（GPU 使用の実測と非対応化・未コミット）
+
+- ffmpeg verbose ログで各 HW 経路が実際に GPU を使うか確認した。QSV は oneVPL MFX、D3D12VA は `hwupload`+`pix_fmt=d3d12` のときだけ `Intel Iris Xe Graphics` を使用。MF 映像既定と `aac_mf` / `mp3_mf` はソフトウェア MFT で CPU 動作（`-hw_encoding 1` のときのみハードウェア MFT）。Vulkan 映像エンコーダーはこの環境で初期化失敗。
+- ユーザー指示により「パラメータの変換は行わず、非対応明記または非表示」に対応:
+  - `get-ffmpegOptions.ps1` と `Get-FilteredHwChoices` から Vulkan / D3D12VA / MF を非表示化。
+  - `Get-PlatformAvailableCodecs` と `Build-PlatformVideoOptions` からこれらを削除し、旧来の `-b:v` 代替コードを削除（`null` を返して非対応を明示）。
+  - `Get-HardwareInfo.ps1` は音声エンコーダーを `AvailableEncoders` に含めないように変更（`*_mf` を GPU エンコーダーとして列出さない）。
+  - 正当な GPU 経路は中間ファイル作成モード (`hwupload` / `-hw_encoding 1`) のみとする。
+- 網羅テストを更新し、非対応 HW は「オプションを生成せず null」を期待するように変更。158 PASS / 1 SKIP を確認。
+
+## 2026-11-18（音声同期対策・未コミット）
+
+### 外部エンコーダー音声のリップシンク実測と対策
+
+- `Tests/Test-ExternalAudioSync.ps1` を追加。0.5/1.5/2.5秒にビープ音（相互相関用には広帯域ノイズ）を置いた基準動画を使い、アプリと同じ「WAV抽出→外部エンコード→`-c:a copy` でmux」の経路を再現してオフセットを実測。
+- 結果（内部エンコーダーはベースライン）: ffmpeg 内蔵 AAC/Opus/Vorbis/FLAC/AC3/MP3 はすべて **0ms**。外部も AAC-LC（qaac / fdkaac / nero）と nero HE-AAC は **0ms** だったが、**qaac HE-AAC と fdkaac HE-AAC は約 +20ms の音声遅延**を検出（ノイズ相互相関で 20.04ms / 20.02ms を確認）。
+- `-itsoffset` は `-c:a copy` では効かず、入力 `-ss` は AAC フレーム単位で飛び -46ms となったため、mux 側の補正は見送った。
+- **対策（外部エンコーダーを含む）**: プラットフォーム自動選択の低ビットレート MP4 で qaac/fdkaac の HE-AAC を除外し、Nero HE（0ms）→ qaac/fdkaac の AAC-LC（0ms）→ 内蔵 AAC-LC の順に変更。手動メニューでは qaac/fdkaac の HE-AAC に「約20ms遅延」を明記してユーザー choice は尊重。検証スクリプトに「自動選択プリセットと内蔵エンコーダーは |offset| <= 5ms」の判定を追加し PASS を確認。
+
+### 未テストエンコーダーの詳細検証
+
+- `Tests/Test-UntestedEncoders.ps1` を追加（12 PASS / 23 FAIL、環境依存）。
+- 使えたもの: **D3D12VA の H.264/HEVC は `hwupload` + `pix_fmt=d3d12` で動作**（CPU フレーム入力では失敗）。Vulkan の `ffv1_vulkan` も hwupload で動作。MF 音声は `aac_mf` と `mp3_mf` が動作（`ac3_mf` は MFT なし）。外部音声エンコーダー 7プリセットはすべて正常。
+- 使えなかったもの: Vulkan 映像H.264/HEVC/AV1（Vulkan コンピュートパイプライン初期化失敗）、MF の `hevc_mf` / `av1_mf`、D3D12VA AV1。いずれもこの環境のドライバ／MFT 不足が原因で、コード側の不具合ではない。
+
 ## 2026-11-18（追記・未コミット）
 
 ### 一時ファイルをプロジェクト内に限定

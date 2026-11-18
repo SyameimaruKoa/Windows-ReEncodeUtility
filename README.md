@@ -489,6 +489,14 @@ HW アクセルでエラー発生
 
 ## 📺 付属ツール
 
+### 音声同期の検証 (`Tests/Test-ExternalAudioSync.ps1`)
+
+外部エンコーダー（qaac / nero / fdkaac）と ffmpeg 内蔵エンコーダーについて、既知のタイミングで入れたビープ音／ノイズを基準にリップシンクを実測します。結果は `.cache/external-audio-sync.json` に保存されます。
+
+- ffmpeg 内蔵エンコーダーはすべて **0ms**（ベースライン）
+- 外部の AAC-LC と nero HE-AAC は **0ms**
+- **qaac / fdkaac の HE-AAC は約 +20ms の遅延** → アプリの自動選択では使用せず、手動選択時は警告を表示
+
 ### ハードウェアエンコーダー制限チェック (`Tools/Check-HardwareEncoderLimits.ps1`)
 
 利用可能な映像エンコーダーについて、短い合成映像で**実能力を自動プローブ**します。

@@ -271,6 +271,37 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
 - **mpeg2_qsv の解像度上限**: この環境の Intel QSV では幅 1920 が上限。2560x720 等の入力では `-q:v` でも `Current profile is unsupported` となる。事前に縮小するか別コーデックを選ぶ必要がある（ハードウェア／ドライバ依存）。
 - **一時ファイルの配置規則**: プロジェクトフォルダ外には一切書き込み・削除しない。ffmpeg の progress/stderr、HWスキャン用クリップ、音声同期の中間ファイル、フォールバックのプローブ、テスト作業領域はすべて git 対象外の `.cache\tmp` / `.cache\test-work` 配下に置く。再帰削除は必ずこれらの配下であることを検証してから実行する。
 
+#### 外部音声エンコーダーの同期特性（実測）
+
+| エンコーダー | プロファイル | オフセット |
+|---|---|---|
+| ffmpeg 内蔵 (AAC/Opus/Vorbis/FLAC/AC3/MP3) | 各自動 | 0ms |
+| qaac | AAC-LC (TVBR) | 0ms |
+| qaac | HE-AAC (CVBR) | **約 +20ms** |
+| fdkaac | AAC-LC (VBR≥4) | 0ms |
+| fdkaac | HE-AAC (VBR≤3) | **約 +20ms** |
+| nero | AAC-LC / HE-AAC | 0ms |
+
+- 上記を踏まえ、プラットフォーム自動選択の低ビットレート MP4 では qaac/fdkaac の HE-AAC を使わず、Nero HE → qaac/fdkaac の AAC-LC → 内蔵 AAC-LC の順に選択する（同期優先）。手動選択の HE-AAC は選択肢に遅延警告を表示する。
+- `-itsoffset` は `-c:a copy` では音声サンプルを動かせず、入力 `-ss` は AAC フレーム単位（約21ms）で飛ぶため補正に使わない。
+
+#### GPU 使用の実測と非対応方針
+
+ffmpeg の verbose ログで実際に選択される MFT / デバイスを確認した結果:
+
+| 経路 | 実際の動作 | 判定 |
+|---|---|---|
+| QSV (`h264_qsv`) | oneVPL MFX セッションを生成（CPU フレームはシステムメモリから転送） | GPU ✅ |
+| MF 映像 既定 (`h264_mf`) | ソフトウェア `H264 Encoder MFT`（HARDWARE_URL 属性なし） | CPU ❌ |
+| MF 映像 `-hw_encoding 1` | `Intel Quick Sync Video H.264 Encoder MFT`（ハードウェア MFT） | GPU ✅（一部環境で不安定） |
+| MF 音声 (`aac_mf` / `mp3_mf`) | `Microsoft AAC Audio Encoder MFT` / `MP3 Encoder ACM Wrapper MFT`（どちらもソフトウェア、GPU 強制オプションなし） | CPU ❌ |
+| D3D12VA (`h264/hevc_d3d12va`) | `hwupload` + `pix_fmt=d3d12` のとき `Using device 8086:a7a1 (Intel Iris Xe Graphics)` | GPU ✅（CPU フレーム入力では失敗） |
+| Vulkan 映像 (`h264/hevc/av1_vulkan`) | Vulkan レイヤは検出されるがコンピュートパイプライン初期化失敗 | ❌（`ffv1_vulkan` は compute で動作） |
+
+- **パラメータ変換は行わない**。通常／プラットフォームモードでは Vulkan / D3D12VA / MF を選択肢から非表示とし、`Build-PlatformVideoOptions` はこれらに対して `null` を返す（旧来の `-b:v` 固定ビットレート代替は削除）。
+- ハードウェアスキャンの `AvailableEncoders` から音声エンコーダー（`*_mf` 含む）を除外し、GPU エンコーダーとして误って表示されないようにした。
+- これらの GPU 経路が正当に使われるのは**中間ファイル作成モードのみ**（`hwupload` / `-hw_encoding 1` を明示付与）。
+
 ### 5.7 インターレース検出 & 解除 (`internal/core/deinterlace.go`)
 - **選択肢**: `行わない (スキップ)` / `自動判定する (動画解析を実行)` / `手動で選択する (解析をスキップして直接フィルター指定)`
 - **自動検出フロー**:
