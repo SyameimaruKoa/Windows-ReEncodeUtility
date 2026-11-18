@@ -4,6 +4,8 @@
 .DESCRIPTION
     動画と外部音声の録音時間が異なっても、共通の音声波形から開始オフセットを推定する。
     複数箇所が一致すれば録音クロック差も補正する。
+    1秒以上の映像停止・完全無音を再接続候補として検出し、
+    前後の音声波形が一致する場合だけ同期位置を段階的に補正する。
     動画の長さに合わせ、短い音声は無音で補い、長い音声は切り詰める。
     -ManualOffsetSeconds で手動同期も利用できる。
     映像は再エンコードせずコピーし、音声をOpus（ステレオ各256kbps VBR）でMKVへ書き出す。
@@ -19,6 +21,15 @@
     指定した場合は自動波形同期を行わない。負なら外部音声の先頭を切り詰める。
 .PARAMETER NoDriftCorrection
     音声の再生速度を補正しない（開始位置のみ合わせる）。
+.PARAMETER NoReconnectCorrection
+    カメラ再接続の自動検出を無効にし、従来の単一区間同期を使う。
+.PARAMETER AnalyzeOnly
+    音声同期を先に検証する。出力動画は作らず、-AlignmentPlanPathに結果を保存する。
+.PARAMETER AlignmentPlanPath
+    事前解析結果の保存先／読込元。入力音声と動画の長さを検証して再利用する。
+.PARAMETER AlignmentMapPath
+    実録音の独立した波形照合で検証したJSON同期区間を適用する。
+    入力ファイル名・長さを照合し、映像をコピーして外部4ch音声のみ合成する。
 .PARAMETER LeftChannel
     ステレオ左に使用する元音声のチャンネル番号（1始まり、デフォルト1）。
 .PARAMETER RightChannel
@@ -36,6 +47,8 @@
     .\Sync-ExternalAudio.ps1 -Video .\video.mkv -Audio .\PSCam4Win-mic.wav
 .EXAMPLE
     .\Sync-ExternalAudio.ps1 -Video .\video.mkv -Audio .\microphone.wav -ManualOffsetSeconds -0.32
+.EXAMPLE
+    .\Sync-ExternalAudio.ps1 -Video .\capture.mkv -Audio .\original4ch.wav -AlignmentMapPath .\verified_audio_alignment.json
 #>
 [CmdletBinding()]
 param(
@@ -44,6 +57,10 @@ param(
     [string]$Output,
     [double]$ManualOffsetSeconds = 0,
     [switch]$NoDriftCorrection,
+    [switch]$NoReconnectCorrection,
+    [switch]$AnalyzeOnly,
+    [string]$AlignmentPlanPath,
+    [string]$AlignmentMapPath,
     [ValidateRange(1, 256)][int]$LeftChannel = 1,
     [ValidateRange(0, 256)][int]$RightChannel = 0,
     [switch]$KeepReferenceAudio,
@@ -64,6 +81,7 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Import-Module (Join-Path $PSScriptRoot '..\..\Modules\Audio\AudioSync.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot '..\..\Modules\Audio\AudioMixdown.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '..\..\Modules\Audio\AudioTimeline.psm1') -Force
 if (-not (Test-Path -LiteralPath $Video -PathType Leaf)) { throw "動画が見つからぬ: $Video" }
 if (-not (Test-Path -LiteralPath $Audio -PathType Leaf)) { throw "外部音声が見つからぬ: $Audio" }
 $Video = (Resolve-Path -LiteralPath $Video).ProviderPath
@@ -78,6 +96,13 @@ if ([System.IO.Path]::GetExtension($Output).ToLowerInvariant() -ne '.mkv') {
     throw '出力コンテナはMKVを指定するのじゃ（Opus音声と映像の無劣化コピーを保持するため）。'
 }
 if ($Output -eq $Video -or $Output -eq $Audio) { throw '出力先と入力元が同一じゃ。' }
+if ($AnalyzeOnly -and [string]::IsNullOrWhiteSpace($AlignmentPlanPath)) {
+    throw '-AnalyzeOnlyには-AlignmentPlanPathを指定するのじゃ。'
+}
+if ($AlignmentMapPath -and ($AnalyzeOnly -or $AlignmentPlanPath -or $NoDriftCorrection -or
+    $PSBoundParameters.ContainsKey('ManualOffsetSeconds'))) {
+    throw '-AlignmentMapPathは手動同期・解析結果キャッシュ・ドリフト補正無効と同時に指定できぬ。'
+}
 
 function Get-Streams {
     param([string]$File)
@@ -110,52 +135,105 @@ if ($hasAuxiliaryTrack) {
 #endregion
 
 #region Alignment
-$timeScale = 1.0
-if ($PSBoundParameters.ContainsKey('ManualOffsetSeconds')) {
-    $offset = $ManualOffsetSeconds
-    Write-Host ("手動オフセット: {0:+0.000;-0.000;0.000}秒" -f $offset)
-} else {
-    if ($referenceAudio.Count -eq 0) {
-        throw '動画に同期基準の音声がないため自動同期できぬ。-ManualOffsetSeconds を指定せよ。'
+$inv = [System.Globalization.CultureInfo]::InvariantCulture
+$externalDuration = [double]::Parse([string]$audioInfo.format.duration, $inv)
+if ($externalDuration -le 0) { throw '外部音声の長さが取得できぬ。' }
+$audioFileInfo = Get-Item -LiteralPath $Audio
+$plan = $null
+$verifiedMap = $false
+if ($AlignmentMapPath) {
+    if (-not (Test-Path -LiteralPath $AlignmentMapPath -PathType Leaf)) {
+        throw "同期マップが見つからぬ: $AlignmentMapPath"
     }
-    $match = Get-AudioSyncAlignment -ReferencePath $Video -ExternalPath $Audio -FfmpegPath $FfmpegPath
-    $offset = $match.OffsetSeconds
-    if (-not $NoDriftCorrection) { $timeScale = $match.TimeScale }
-    Write-Host ('波形一致: {0}箇所 / 信頼度 {1:F3}' -f $match.MatchedAnchors, $match.Confidence)
-    Write-Host ('外部音声の開始位置: {0:+0.000;-0.000;0.000}秒 / 時間倍率: {1:F8}' -f $offset, $timeScale)
+    $map = Get-Content -LiteralPath $AlignmentMapPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($map.SchemaVersion -ne 1 -or
+        [Math]::Abs([double]$map.VideoDuration - $videoDuration) -gt 0.25 -or
+        [Math]::Abs([double]$map.ExternalDuration - $externalDuration) -gt 0.25 -or
+        $map.ExpectedVideoBaseName -ne [System.IO.Path]::GetFileName($Video) -or
+        $map.ExpectedAudioBaseName -ne [System.IO.Path]::GetFileName($Audio)) {
+        throw '同期マップが入力動画・外部音声と一致せぬ。別の録画には適用できぬ。'
+    }
+    $pieces = @($map.Pieces)
+    if ($pieces.Count -lt 1 -or $pieces.Count -gt 120) { throw '同期マップの区間数が不正じゃ。' }
+    $verifiedMap = $true
+    Write-Host ('実録音で照合済みの同期マップを適用する: {0}区間' -f $pieces.Count)
 }
-if ($timeScale -le 0 -or [Math]::Abs($timeScale - 1.0) -gt 0.003) {
-    throw '推定した時間倍率が異常じゃ。手動オフセットを指定するのじゃ。'
+elseif (-not $AnalyzeOnly -and $AlignmentPlanPath) {
+    if (-not (Test-Path -LiteralPath $AlignmentPlanPath -PathType Leaf)) {
+        throw "事前解析結果が見つからぬ: $AlignmentPlanPath"
+    }
+    $plan = Import-Clixml -LiteralPath $AlignmentPlanPath
+    if ($plan.SchemaVersion -ne 1 -or
+        $plan.AudioPath -ne $Audio -or
+        [long]$plan.AudioFileLength -ne [long]$audioFileInfo.Length -or
+        [long]$plan.AudioWriteTicks -ne [long]$audioFileInfo.LastWriteTimeUtc.Ticks -or
+        [Math]::Abs([double]$plan.VideoDuration - $videoDuration) -gt 0.5 -or
+        [Math]::Abs([double]$plan.ExternalDuration - $externalDuration) -gt 0.1 -or
+        [bool]$plan.NoDriftCorrection -ne [bool]$NoDriftCorrection -or
+        [bool]$plan.NoReconnectCorrection -ne [bool]$NoReconnectCorrection) {
+        throw '事前解析結果と現在の入力・設定が異なる。音声同期の再解析が必要じゃ。'
+    }
+    $pieces = @($plan.Pieces)
+    if ($pieces.Count -eq 0) { throw '事前解析結果に同期区間が見つからぬ。' }
+    Write-Host ('事前に照合済みの音声同期区間 {0}個を再利用する。' -f $pieces.Count)
+}
+elseif ($PSBoundParameters.ContainsKey('ManualOffsetSeconds')) {
+    $pieces = @([pscustomobject]@{
+        VideoStart = 0.0
+        VideoEnd = $videoDuration
+        OffsetSeconds = $ManualOffsetSeconds
+        TimeScale = 1.0
+        Confidence = 1.0
+    })
+    Write-Host ("手動オフセット: {0:+0.000;-0.000;0.000}秒" -f $ManualOffsetSeconds)
+}
+else {
+    if ($referenceAudio.Count -eq 0) {
+        throw '映像に同期基準の音声トラックがないため、自動同期できぬ。映像停止だけでは絶対的な音声位置を確定できない。-ManualOffsetSeconds を指定せよ。'
+    }
+    $match = Get-AudioSyncAlignment -ReferencePath $Video -ExternalPath $Audio -FfmpegPath $FfmpegPath -VideoDuration $videoDuration -NoReconnectCorrection:$NoReconnectCorrection
+    if ($null -ne $match.PSObject.Properties['Pieces']) {
+        $pieces = @($match.Pieces)
+        Write-Host ("再接続候補 {0}箇所 / 補正確定 {1}箇所 / 信頼度 {2:F3}" -f $match.EventCount, $match.CorrectedDiscontinuities, $match.Confidence)
+    }
+    else {
+        $pieces = @([pscustomobject]@{
+            VideoStart = 0.0
+            VideoEnd = $videoDuration
+            OffsetSeconds = $match.OffsetSeconds
+            TimeScale = $match.TimeScale
+            Confidence = $match.Confidence
+        })
+        Write-Host ('波形一致: {0}箇所 / 信頼度 {1:F3}' -f $match.MatchedAnchors, $match.Confidence)
+    }
+}
+if ($pieces.Count -eq 0) { throw '同期可能な音声区間が見つからぬ。' }
+$maxDeviation = if ($verifiedMap) { 0.06 } else { 0.003 }
+$timeline = @(New-AudioSyncTimeline -Pieces $pieces -VideoDuration $videoDuration -ExternalDuration $externalDuration -NoDriftCorrection:$NoDriftCorrection -MaxTimeScaleDeviation $maxDeviation)
+foreach ($part in $pieces) {
+    Write-Host ('同期区間: 映像 {0:F3}～{1:F3}秒 / 開始オフセット {2:+0.000;-0.000;0.000}秒 / 倍率 {3:F8}' -f $part.VideoStart, $part.VideoEnd, $part.OffsetSeconds, $part.TimeScale)
+}
+if ($AnalyzeOnly) {
+    $plan = [pscustomobject]@{
+        SchemaVersion = 1
+        AudioPath = $Audio
+        AudioFileLength = [long]$audioFileInfo.Length
+        AudioWriteTicks = [long]$audioFileInfo.LastWriteTimeUtc.Ticks
+        VideoDuration = $videoDuration
+        ExternalDuration = $externalDuration
+        NoDriftCorrection = [bool]$NoDriftCorrection
+        NoReconnectCorrection = [bool]$NoReconnectCorrection
+        Pieces = @($pieces)
+    }
+    Export-Clixml -InputObject $plan -LiteralPath $AlignmentPlanPath -Depth 5
+    Write-Host ('音声の事前解析が完了した: {0}' -f $AlignmentPlanPath)
+    return
 }
 #endregion
 
 #region Composition
-$inv = [System.Globalization.CultureInfo]::InvariantCulture
-$rate = (1.0 / $timeScale).ToString('0.000000000', $inv)
-$dur = $videoDuration.ToString('0.000000', $inv)
-$filters = @('aresample=48000')
-if ([Math]::Abs($timeScale - 1.0) -gt 0.0000001) { $filters += "atempo=$rate" }
-if ($offset -lt 0) {
-    $trim = (-$offset).ToString('0.000000', $inv)
-    $filters += "atrim=start=$trim"
-}
-$filters += 'asetpts=PTS-STARTPTS'
-if ($offset -gt 0) {
-    $delayMs = [long][Math]::Round($offset * 1000)
-    $filters += "adelay=$($delayMs):all=1"
-}
-$filters += 'apad'
-$filters += "atrim=duration=$dur"
-$filters += 'asetpts=PTS-STARTPTS'
-$mainFilter = (@($panFilter) + $filters) -join ','
-$trackCount = 1
-if ($hasAuxiliaryTrack) {
-    $auxiliaryFilter = (@($auxiliaryPanFilter) + $filters) -join ','
-    $graph = '[1:a:0]asplit=2[main_source][aux_source];[main_source]' + $mainFilter + '[synced];[aux_source]' + $auxiliaryFilter + '[aux_synced]'
-    $trackCount = 2
-} else {
-    $graph = '[1:a:0]' + $mainFilter + '[synced]'
-}
+$graph = Get-AudioSyncGraph -Timeline $timeline -MainPanFilter $panFilter -AuxiliaryPanFilter $(if ($hasAuxiliaryTrack) { $auxiliaryPanFilter } else { '' }) -VideoDuration $videoDuration
+$trackCount = if ($hasAuxiliaryTrack) { 2 } else { 1 }
 $arguments = @(
     '-hide_banner', '-nostdin', '-y', '-i', $Video, '-i', $Audio,
     '-filter_complex', $graph,
@@ -184,7 +262,7 @@ if ($KeepReferenceAudio -and $referenceAudio.Count -gt 0) {
     }
 }
 $arguments += $Output
-Write-Host ("同期した音声を書き出すのじゃ: {0}" -f $Output)
+Write-Host ("再接続の前後を区間別に同期したOpus音声を書き出すのじゃ: {0}" -f $Output)
 & $FfmpegPath @arguments
 if ($LASTEXITCODE -ne 0) { throw 'FFmpegによる音声同期・合成に失敗した。' }
 Write-Host '音声同期・合成完了じゃ。'
