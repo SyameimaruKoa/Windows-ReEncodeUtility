@@ -18,6 +18,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -34,8 +35,8 @@ REPORTS = CACHE / "reports"
 for d in (CACHE, SEGMENTS, ENCODED, ANALYSIS, REPORTS):
     d.mkdir(parents=True, exist_ok=True)
 
-FFMPEG = "ffmpeg"
-FFPROBE = "ffprobe"
+FFMPEG = os.environ.get("QB_FFMPEG", "ffmpeg")
+FFPROBE = os.environ.get("QB_FFPROBE", "ffprobe")
 
 SOURCES = {
     "BD-anime": ROOT / ".cache" / "BD-anime.m2ts",
@@ -575,18 +576,24 @@ def cmd_score_variants_quality(args):
     tune = json.loads(tune_path.read_text(encoding="utf-8"))
     targets = {k: v["tune_vmaf"] for k, v in json.loads(
         base_path.read_text(encoding="utf-8"))["results"].items() if "tune_vmaf" in v}
+    suffix = getattr(args, "suffix", "")
     for encoder in [e.strip() for e in args.encoders.split(",") if e.strip()]:
         materials = {}
         for name, target in targets.items():
             ref_t = SEGMENTS / f"{name}-tune-ref.mkv"
-            folder = ENCODED / "variants" / encoder
+            folder = ENCODED / "variants" / f"{encoder}{suffix}"
             history = []
             for src in sorted(folder.glob(f"{name}-q*.mkv")):
+                if src.stem.endswith("-tune"):
+                    continue
                 value = int(src.stem.split("-q")[-1])
                 dst = folder / f"{src.stem}-tune.mkv"
-                trim_clip(src, dst)
-                history.append({"value": value,
-                                "vmaf": round(measure_vmaf(dst, ref_t)["vmaf"], 3)})
+                try:
+                    trim_clip(src, dst)
+                    vmaf = measure_vmaf(dst, ref_t)["vmaf"]
+                except Exception:
+                    continue
+                history.append({"value": value, "vmaf": round(vmaf, 3)})
             if not history:
                 continue
             best = min(history, key=lambda h: abs(h["vmaf"] - target))
@@ -597,8 +604,8 @@ def cmd_score_variants_quality(args):
             }
             print(f"[SCORE] {encoder} {name}: value={best['value']} vmaf={best['vmaf']:.3f} "
                   f"diff={materials[name]['diff']}")
-        tune["results"][f"{encoder}:normal"] = {
-            "encoder": encoder, "mode": "normal", "cu_assist": False,
+        tune["results"][f"{encoder}{suffix}:normal"] = {
+            "encoder": encoder + suffix, "mode": "normal", "cu_assist": False,
             "chip_options": [], "materials": materials,
         }
     tune_path.write_text(json.dumps(tune, indent=2), encoding="utf-8")
@@ -623,11 +630,14 @@ def cmd_score_variants(args):
             history = []
             for mbps in VARIANT_RATES:
                 src = ENCODED / "variants" / encoder / f"{name}-{mbps:.3f}M.mkv"
-                if not src.exists():
+                if not src.exists() or src.stat().st_size < 1024:
                     continue
                 dst = ENCODED / "variants" / encoder / f"{name}-{mbps:.3f}M-tune.mkv"
-                trim_clip(src, dst)
-                vmaf = measure_vmaf(dst, ref_t)["vmaf"]
+                try:
+                    trim_clip(src, dst)
+                    vmaf = measure_vmaf(dst, ref_t)["vmaf"]
+                except Exception:
+                    continue
                 history.append({"value": mbps, "vmaf": round(vmaf, 3)})
             if not history:
                 continue
@@ -808,6 +818,7 @@ def main():
     score_parser.add_argument("--encoders", required=True, help="comma-separated encoder filter")
     sq_parser = sub.add_parser("score-variants-quality")
     sq_parser.add_argument("--encoders", required=True, help="comma-separated encoder filter")
+    sq_parser.add_argument("--suffix", default="", help="variant folder suffix (e.g. -8750h)")
     final_parser = sub.add_parser("final")
     final_parser.add_argument("--encoders", default="", help="comma-separated encoder filter")
     sub.add_parser("report")
