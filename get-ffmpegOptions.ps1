@@ -71,12 +71,19 @@ if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction Silen
                     Write-Host "   $($Choices[$i])"
                 }
             }
+            Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
             $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
             switch ($key.VirtualKeyCode) {
                 38 { if ($currentIndex -gt 0) { $currentIndex-- } } # UpArrow
                 40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } } # DownArrow
-                13 { return $currentIndex } # Enter
-                27 { return -1 } # Escape
+                13 { $global:MenuNav = ''; return $currentIndex } # Enter
+                27 { $global:MenuNav = ''; return -1 } # Escape
+                8  {
+                    if ($global:MenuBackHandler) { $global:MenuNav = 'back'; return -2 }
+                    $currentIndex = $DefaultIndex
+                    continue
+                }
+                46 { $global:MenuNav = 'allback'; return -3 } # Delete
             }
         }
     }

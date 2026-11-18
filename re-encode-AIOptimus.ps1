@@ -774,6 +774,11 @@ function Invoke-FfmpegEncode {
 #endregion
 
 #region UIユーティリティ
+# キー読み取りを分離しておく（テストから差し替え可能にするため）
+function Read-MenuKey {
+    return $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
+
 function Show-Menu {
     param ([string]$Title, [string[]]$Choices, [int]$DefaultIndex = 0, [switch]$NoClear)
     
@@ -783,7 +788,7 @@ function Show-Menu {
     
     $titleLines = ($Title -split "`r?`n").Count + 1
     $menuLines = $Choices.Length
-    $totalLines = $titleLines + $menuLines
+    $totalLines = $titleLines + $menuLines + 1 # 操作ヒント1行分
 
     try {
         $startY = $Host.UI.RawUI.CursorPosition.Y
@@ -850,12 +855,23 @@ function Show-Menu {
             }
         }
 
-        $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
+
+        $key = Read-MenuKey
         switch ($key.VirtualKeyCode) {
             38 { if ($currentIndex -gt 0) { $currentIndex-- } }       # UpArrow
             40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } } # DownArrow
-            13 { Write-Host ""; return $currentIndex } # Enter
-            27 { Write-Host ""; return -1 }            # Escape
+            13 { $global:MenuNav = ''; Write-Host ""; return $currentIndex } # Enter
+            27 { $global:MenuNav = ''; Write-Host ""; return -1 }     # Escape（終了）
+            8  {
+                if ($global:MenuBackHandler) {
+                    $global:MenuNav = 'back'; Write-Host ""; return -2 # 戻る先が登録されている場合はCallerに任せる
+                }
+                # 戻る先が無い場合は同じメニューを再表示（キャンセルで終了しない）
+                $currentIndex = $DefaultIndex
+                continue
+            }
+            46 { $global:MenuNav = 'allback'; Write-Host ""; return -3 } # Delete（最初へ戻る）
         }
     }
 }
@@ -1858,36 +1874,43 @@ function Invoke-PlatformUploadSetup {
         "GitHub Release (上限: 2GB, ビットレート上限なし)",
         "カスタム       (上限サイズを自由に指定)"
     )
-    $platformIndex = Show-Menu -Title "アップロード先のプラットフォームを選択してください。" -Choices $platformChoices
-    if ($platformIndex -lt 0) { return $null }
+    # Backspace(-2) は一つ前の選択へ、Delete(-3) は最初へ、Escape(-1) は終了。
+    $stage = 0
+    :PlatformSetup while ($true) {
+        if ($stage -eq 0) {
+        $platformIndex = Show-Menu -Title "アップロード先のプラットフォームを選択してください。" -Choices $platformChoices
+        if ($platformIndex -eq -1 -or $platformIndex -eq -3) { return $null }
+        if ($platformIndex -eq -2) { continue PlatformSetup }
 
-    $platformConfig = switch ($platformIndex) {
-        0 { @{ Name = "Twitter"; MaxFileSizeMB = 512; MaxResolution = "720p"; ForcedCodec = "H.264"; AllowedCodecs = @("H.264"); Extension = "mp4"; NoMaxrate = $false } }
-        1 { @{ Name = "Discord"; MaxFileSizeMB = 20; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
-        2 { @{ Name = "catbox.moe"; MaxFileSizeMB = 200; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
-        3 { @{ Name = "uguu.se"; MaxFileSizeMB = 64; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
-        4 { @{ Name = "GitHub"; MaxFileSizeMB = 100; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
-        5 { @{ Name = "GitHub Release"; MaxFileSizeMB = 2048; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $true } }
-        6 {
-            $customSize = 0
-            while ($customSize -le 0) {
-                $input = Read-Host "ファイルサイズ上限をMB単位で入力してください (例: 50)"
-                if ([double]::TryParse($input, [ref]$customSize) -and $customSize -gt 0) { break }
-                Write-Host "  → 0より大きい数値を入力してください。" -ForegroundColor Yellow
+        $platformConfig = switch ($platformIndex) {
+            0 { @{ Name = "Twitter"; MaxFileSizeMB = 512; MaxResolution = "720p"; ForcedCodec = "H.264"; AllowedCodecs = @("H.264"); Extension = "mp4"; NoMaxrate = $false } }
+            1 { @{ Name = "Discord"; MaxFileSizeMB = 20; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
+            2 { @{ Name = "catbox.moe"; MaxFileSizeMB = 200; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
+            3 { @{ Name = "uguu.se"; MaxFileSizeMB = 64; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
+            4 { @{ Name = "GitHub"; MaxFileSizeMB = 100; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false } }
+            5 { @{ Name = "GitHub Release"; MaxFileSizeMB = 2048; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $true } }
+            6 {
                 $customSize = 0
+                while ($customSize -le 0) {
+                    $input = Read-Host "ファイルサイズ上限をMB単位で入力してください (例: 50)"
+                    if ([double]::TryParse($input, [ref]$customSize) -and $customSize -gt 0) { break }
+                    Write-Host "  → 0より大きい数値を入力してください。" -ForegroundColor Yellow
+                    $customSize = 0
+                }
+                @{ Name = "カスタム (${customSize}MB)"; MaxFileSizeMB = $customSize; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false }
             }
-            @{ Name = "カスタム (${customSize}MB)"; MaxFileSizeMB = $customSize; MaxResolution = $null; ForcedCodec = $null; AllowedCodecs = @("H.264", "H.265", "VP9", "AV1"); Extension = $null; NoMaxrate = $false }
         }
-    }
+        }
 
-    # --- 2. 簡単/詳細モード選択 ---
-    $setupModeIndex = Show-Menu -Title "$($platformConfig.Name) (上限: $($platformConfig.MaxFileSizeMB) MB)`n`nセットアップ方法を選択してください。" -Choices @(
-        "おまかせ (容量に収まるよう自動設定)",
-        "カスタマイズ (品質・コーデック等を自分で選択)"
-    )
-    if ($setupModeIndex -lt 0) { return $null }
+        # --- 2. 簡単/詳細モード選択 ---
+        $setupModeIndex = Show-Menu -Title "$($platformConfig.Name) (上限: $($platformConfig.MaxFileSizeMB) MB)`n`nセットアップ方法を選択してください。" -Choices @(
+            "おまかせ (容量に収まるよう自動設定)",
+            "カスタマイズ (品質・コーデック等を自分で選択)"
+        )
+        if ($setupModeIndex -eq -1 -or $setupModeIndex -eq -3) { return $null }
+        if ($setupModeIndex -eq -2) { $stage = 0; continue } # 一つ戻る: プラットフォーム選択
 
-    # Enterは従来の自動検出。任意のCFRを使いたい場合だけFPSを入力する。
+        # Enterは従来の自動検出。任意のCFRを使いたい場合だけFPSを入力する。
     $platformFrameRate = ""
     while ($true) {
         $fpsInput = (Read-Host "出力FPS (Enter=自動検出 / 例: 60, 59.94, 60000/1001)").Trim()
@@ -1910,10 +1933,18 @@ function Invoke-PlatformUploadSetup {
     $platformConfig.OutputFrameRate = $platformFrameRate
 
     if ($setupModeIndex -eq 0) {
-        return Invoke-PlatformAutoSetup -PlatformConfig $platformConfig
+        $result = Invoke-PlatformAutoSetup -PlatformConfig $platformConfig
     }
     else {
-        return Invoke-PlatformDetailedSetup -PlatformConfig $platformConfig
+        $result = Invoke-PlatformDetailedSetup -PlatformConfig $platformConfig
+    }
+    if (-not $result -and $global:MenuNav -eq 'back') {
+        # サブメニューからの Backspace は「一つ前」のセットアップ方法選択へ戻る
+        $global:MenuNav = ''
+        $stage = 1
+        continue
+    }
+    return $result
     }
 }
 
@@ -2557,8 +2588,14 @@ function Start-MainProcess {
 
     # --- 実行モード選択 ---
     $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "プラットフォーム向けアップロード (Twitter/Discord/catbox.moe)", "中間ファイル作成モード (高画質・MKV・音声設定可)", "チャプター/字幕分割モード (分割して再エンコード)", "外部音声同期・マルチトラック合成（映像の再エンコードなし）")
-    $selectedMode = Show-Menu -Title "実行モードを選択してください。" -Choices $modeChoices
-    if ($selectedMode -lt 0) { return }
+    # Delete は設定を最初（モード選択）まで戻すため、モード選択と設定全体をループする。
+    while ($true) {
+    while ($true) {
+        $selectedMode = Show-Menu -Title "実行モードを選択してください。" -Choices $modeChoices
+        if ($selectedMode -eq -1) { return }
+        if ($selectedMode -eq -2 -or $selectedMode -eq -3) { continue }
+        break
+    }
 
     if ($selectedMode -eq 5) {
         foreach ($inputFile in $Path) {
@@ -2584,14 +2621,32 @@ function Start-MainProcess {
     switch ($selectedMode) {
         0 { $config = Invoke-InteractiveSetup }
         1 { $config = Invoke-TemplateSelect }
-        2 { $config = Invoke-PlatformUploadSetup }
+        2 {
+            $global:MenuBackHandler = $true
+            $config = Invoke-PlatformUploadSetup
+            $global:MenuBackHandler = $false
+        }
         3 { $config = Invoke-IntermediateMode }
         4 { $config = Invoke-SplitModeSetup }
     }
-    if (-not $config) { Write-Log "設定がキャンセルされたため、処理を中断します。"; return }
+    if (-not $config) {
+        if ($global:MenuNav -eq 'allback') {
+            # Delete: 最初のモード選択へ戻る
+            $global:MenuNav = ''
+            continue
+        }
+        Write-Log "設定がキャンセルされたため、処理を中断します。"; return
+    }
     if (-not (Invoke-TemplateOptions -Config $config)) {
+        if ($global:MenuNav -eq 'allback') {
+            # Delete: モード選択まで戻る
+            $global:MenuNav = ''
+            continue
+        }
         Write-Log "テンプレート設定がキャンセルされました。"
         return
+    }
+    break
     }
 
     $fileCount = 0; $totalFiles = $Path.Count

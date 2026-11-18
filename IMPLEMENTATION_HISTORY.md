@@ -4,6 +4,19 @@
 
 このリポジトリの元になった素材は [git@gist.github.com:85e306167a7f1298d0ec93ea1081c5d3.git](https://gist.github.com/85e306167a7f1298d0ec93ea1081c5d3) 由来で、最初はそのファイル群を AI で最適化するところから始まっている。あわせて、このリポジトリ自体もその AI 最適化を行ったタイミングで git 管理を開始しているため、以後の履歴はその時点からの実装変遷として記録している。
 
+## 2026-11-18（メニュー操作改善・未コミット）
+
+- すべての対話メニュー（`re-encode-AIOptimus.ps1` / `get-ffmpegOptions.ps1` / `Record-MiraBox-Stable.ps1` の `Show-Menu`）でキー意味を整理した。
+  - `Backspace`（VK=8）: 一つ前の選択へ戻る（戻り値 `-2`、`$global:MenuNav='back'`）
+  - `Delete`（VK=46）: 設定の最初（モード選択）まで戻る（戻り値 `-3`、`$global:MenuNav='allback'`）
+  - `Esc`（VK=27）: 終了（`-1`）
+- プラットフォーム設定では、セットアップ方法のメニューから Backspace でプラットフォーム選択へ、サブメニューからは一つ前のセットアップ方法選択へ戻る。トップレベルでは Delete でモード選択へ戻る。
+- メニュー下部にキー操作のヒントを表示。レイアウト計算にも1行分を反映。
+- `Modules/TemplateManager.ps1` の `Invoke-TemplateOptions` が Backspace/Delete を `default` でキャンセル扱いしていた不具合を修正。Backspace はメニュー再表示（設定は保持）、Delete はモード選択まで戻る、Esc は終了に分流した。
+- キー入力を `Read-MenuKey` に分離し、`Tests/Test-MenuNavigation.ps1` でスタブ化して実コンソールなしに全キー動作を検証（13 PASS / 0 FAIL）。
+- 「使用するハードウェア」などサブメニューでも Backspace がキャンセルに落ちる問題を修正。`Show-Menu` は戻る先が未登録なら同じメニューを再表示して終了させない。プラットフォーム設定実行中のみ `MenuBackHandler` を登録し、サブメニューからの Backspace は「セットアップ方法選択」まで一つ戻る。
+- プラットフォーム設定の戻り処理で `continue` が外側ループの外にあり正常に戻せていなかった不具合を修正し、ループ構造を整理した。実キー列（Enter→Enter→Backspace→Esc）で KA 選択から一つ戻ることを検証済み。
+
 ## 2026-11-18（GPU 使用の実測と非対応化・未コミット）
 
 - ffmpeg verbose ログで各 HW 経路が実際に GPU を使うか確認した。QSV は oneVPL MFX、D3D12VA は `hwupload`+`pix_fmt=d3d12` のときだけ `Intel Iris Xe Graphics` を使用。MF 映像既定と `aac_mf` / `mp3_mf` はソフトウェア MFT で CPU 動作（`-hw_encoding 1` のときのみハードウェア MFT）。Vulkan 映像エンコーダーはこの環境で初期化失敗。
