@@ -168,13 +168,10 @@ try {
         catch {}
     }
     
-    foreach ($enc in $audioEncoders) {
-        try {
-            $null = & $ffmpegPath -hide_banner -f lavfi -i 'anoisesrc=d=0.5:c=2:r=48000' -c:a $enc -f null NUL 2>&1
-            if ($LASTEXITCODE -eq 0) { $info.AvailableEncoders += $enc }
-        }
-        catch {}
-    }
+    # 音声エンコーダーは AvailableEncoders（映像用）に含めない。
+    # 特に *_mf はソフトウェア MFT であり GPU を使用しないため、
+    # 「利用可能なハードウェアエンコーダー」として列出すのは誤り。
+    # 音声は qaac / nero / fdkaac 等を Get-ExternalEncoderAvailability で別途検出する。
 
     $info.HasNvidia = @($info.AvailableEncoders | Where-Object { $_ -match '_nvenc$' }).Count -gt 0
     $info.HasIntel = @($info.AvailableEncoders | Where-Object { $_ -match '_qsv$' }).Count -gt 0

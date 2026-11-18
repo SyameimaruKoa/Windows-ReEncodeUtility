@@ -984,8 +984,8 @@ function Select-QaacOptions {
         qaac音声品質選択メニューを表示し、Options/Description を含むハッシュテーブルを返す。
         キャンセル時は $null を返す。
     #>
-    $qaacChoices = @("AAC-LC TVBR 91 (~192kbps)", "AAC-LC TVBR 73 (~160kbps)", "AAC-LC TVBR 64 (~128kbps)", "HE-AAC CVBR 80kbps", "HE-AAC CVBR 64kbps", "HE-AAC CVBR 48kbps", "カスタム")
-    $qaacIndex = Show-Menu -Title "qaac品質を選択 (LC=TVBR / HE=CVBR)" -Choices $qaacChoices
+    $qaacChoices = @("AAC-LC TVBR 91 (~192kbps)", "AAC-LC TVBR 73 (~160kbps)", "AAC-LC TVBR 64 (~128kbps)", "HE-AAC CVBR 80kbps (約20ms遅延)", "HE-AAC CVBR 64kbps (約20ms遅延)", "HE-AAC CVBR 48kbps (約20ms遅延)", "カスタム")
+    $qaacIndex = Show-Menu -Title "qaac品質を選択 (LC=TVBR / HE=CVBR)`n※HE-AACは実測で約20msの音声遅延が発生します" -Choices $qaacChoices
     if ($qaacIndex -lt 0) { return $null }
     if ($qaacIndex -eq 6) {
         $profileChoices = @("AAC-LC (TVBR品質指定)", "HE-AAC (CVBRビットレート指定)")
@@ -997,7 +997,7 @@ function Select-QaacOptions {
         }
         else {
             $cvbrVal = [int](Read-Host "CVBRビットレートを入力 (kbps, 例: 64)")
-            return @{ Type = "qaac"; Options = "--he --cvbr $cvbrVal"; Description = "qaac HE-AAC CVBR ${cvbrVal}kbps" }
+            return @{ Type = "qaac"; Options = "--he --cvbr $cvbrVal"; Description = "qaac HE-AAC CVBR ${cvbrVal}kbps (約20ms遅延)" }
         }
     }
     elseif ($qaacIndex -le 2) {
@@ -1006,7 +1006,7 @@ function Select-QaacOptions {
     }
     else {
         $cvbrVal = @(80, 64, 48)[$qaacIndex - 3]
-        return @{ Type = "qaac"; Options = "--he --cvbr $cvbrVal"; Description = "qaac HE-AAC CVBR ${cvbrVal}kbps" }
+        return @{ Type = "qaac"; Options = "--he --cvbr $cvbrVal"; Description = "qaac HE-AAC CVBR ${cvbrVal}kbps (約20ms遅延)" }
     }
 }
 
@@ -1029,12 +1029,12 @@ function Select-FdkaacOptions {
     .SYNOPSIS
         fdkaac品質選択メニューを表示し、Options/Description を含むハッシュテーブルを返す。
     #>
-    $fdkChoices = @("最高品質 (VBR 5)", "高品質 (VBR 4)", "標準品質 (VBR 3)", "低品質 (VBR 2)", "カスタム")
-    $fdkIndex = Show-Menu -Title "fdkaac品質を選択 (≤VBR3:HE / ≥VBR4:LC 自動)" -Choices $fdkChoices
+    $fdkChoices = @("最高品質 (VBR 5)", "高品質 (VBR 4)", "標準品質 (VBR 3 / 約20ms遅延)", "低品質 (VBR 2 / 約20ms遅延)", "カスタム")
+    $fdkIndex = Show-Menu -Title "fdkaac品質を選択 (≤VBR3:HE / ≥VBR4:LC 自動)`n※HE-AACは実測で約20msの音声遅延が発生します" -Choices $fdkChoices
     if ($fdkIndex -lt 0) { return $null }
     $vbrVal = if ($fdkIndex -eq 4) { [int](Read-Host "VBR値を入力 (1 ~ 5)") } else { @(5, 4, 3, 2)[$fdkIndex] }
     $heFlag = if ($vbrVal -le 3) { "-p 5 " } else { "" }
-    $profileName = if ($vbrVal -le 3) { "HE-AAC" } else { "AAC-LC" }
+    $profileName = if ($vbrVal -le 3) { "HE-AAC (約20ms遅延)" } else { "AAC-LC" }
     return @{ Type = "fdkaac"; Options = "${heFlag}-m $vbrVal"; Description = "fdkaac $profileName VBR $vbrVal" }
 }
 
@@ -1430,8 +1430,10 @@ function Get-FilteredHwChoices {
     .OUTPUTS
         @{ Choices = [string[]]; Keys = [string[]]; OriginalIndices = [int[]] }
     #>
-    $allChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "Vulkan", "D3D12VA", "MediaFoundation (MF)", "CPU (Software)")
-    $allKeys = @("NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF", "CPU")
+    # Vulkan / D3D12VA / MF は通常・プラットフォームモードでは GPU 使用を保証できないため非表示。
+    # 正当な GPU 経路は中間ファイル作成モードのみ（hwupload / -hw_encoding 1 を使用）。
+    $allChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
+    $allKeys = @("NVIDIA", "Intel", "AMD", "CPU")
     $hwInfo = $global:HardwareInfo
 
     $filteredChoices = @()
@@ -1445,9 +1447,6 @@ function Get-FilteredHwChoices {
                 "NVIDIA" { $show = $hwInfo.HasNvidia }
                 "Intel" { $show = $hwInfo.HasIntel }
                 "AMD" { $show = $hwInfo.HasAMD }
-                "Vulkan" { $show = $hwInfo.HasVulkan }
-                "D3D12VA" { $show = $hwInfo.HasD3D12VA }
-                "MF" { $show = $hwInfo.HasMF }
                 "CPU" { $show = $true }
             }
         }
@@ -1476,9 +1475,6 @@ function Get-PlatformAvailableCodecs {
         "NVIDIA"  = @(@{Codec = "H.264"; Enc = "h264_nvenc" }, @{Codec = "H.265"; Enc = "hevc_nvenc" }, @{Codec = "AV1"; Enc = "av1_nvenc" })
         "Intel"   = @(@{Codec = "H.264"; Enc = "h264_qsv" }, @{Codec = "H.265"; Enc = "hevc_qsv" }, @{Codec = "VP9"; Enc = "vp9_qsv" }, @{Codec = "AV1"; Enc = "av1_qsv" })
         "AMD"     = @(@{Codec = "H.264"; Enc = "h264_amf" }, @{Codec = "H.265"; Enc = "hevc_amf" }, @{Codec = "AV1"; Enc = "av1_amf" })
-        "Vulkan"  = @(@{Codec = "H.264"; Enc = "h264_vulkan" }, @{Codec = "H.265"; Enc = "hevc_vulkan" }, @{Codec = "AV1"; Enc = "av1_vulkan" })
-        "D3D12VA" = @(@{Codec = "H.264"; Enc = "h264_d3d12va" }, @{Codec = "H.265"; Enc = "hevc_d3d12va" }, @{Codec = "AV1"; Enc = "av1_d3d12va" })
-        "MF"      = @(@{Codec = "H.264"; Enc = "h264_mf" }, @{Codec = "H.265"; Enc = "hevc_mf" }, @{Codec = "AV1"; Enc = "av1_mf" })
         "CPU"     = @(@{Codec = "H.264"; Enc = "libx264" }, @{Codec = "H.265"; Enc = "libx265" }, @{Codec = "VP9"; Enc = "libvpx-vp9" }, @{Codec = "AV1"; Enc = "libsvtav1" })
     }
     $hwInfo = $global:HardwareInfo
@@ -1621,9 +1617,8 @@ function Build-PlatformVideoOptions {
         "NVIDIA+H.264" = "h264_nvenc"; "NVIDIA+H.265" = "hevc_nvenc"; "NVIDIA+AV1" = "av1_nvenc"
         "Intel+H.264" = "h264_qsv"; "Intel+H.265" = "hevc_qsv"; "Intel+AV1" = "av1_qsv"; "Intel+VP9" = "vp9_qsv"
         "AMD+H.264" = "h264_amf"; "AMD+H.265" = "hevc_amf"; "AMD+AV1" = "av1_amf"
-        "Vulkan+H.264" = "h264_vulkan"; "Vulkan+H.265" = "hevc_vulkan"; "Vulkan+AV1" = "av1_vulkan"
-        "D3D12VA+H.264" = "h264_d3d12va"; "D3D12VA+H.265" = "hevc_d3d12va"; "D3D12VA+AV1" = "av1_d3d12va"
-        "MF+H.264" = "h264_mf"; "MF+H.265" = "hevc_mf"; "MF+AV1" = "av1_mf"
+        # Vulkan / D3D12VA / MF は GPU 使用を保証できないため通常・プラットフォームモードでは非対応。
+        # 中間ファイル作成モード (Modules/IntermediateHardware.ps1) のみで使用する。
         "CPU+H.264" = "libx264"; "CPU+H.265" = "libx265"; "CPU+VP9" = "libvpx-vp9"; "CPU+AV1" = "libsvtav1"
     }
     $encoder = $encoderMap["$HW+$Codec"]
@@ -1675,27 +1670,9 @@ function Build-PlatformVideoOptions {
             }
             $parts += "-quality $Preset"
         }
-        "Vulkan" {
-            switch ($QualityMode) {
-                "CRF" { $parts += "-b:v 8000k" } # 固有の品質指定が不確定なため固定ビットレート等で代替
-                "CRF+Maxrate" { $parts += "-b:v ${MaxrateKbps}k" }
-                "Bitrate" { $parts += "-b:v ${MaxrateKbps}k" }
-            }
-        }
-        "D3D12VA" {
-            switch ($QualityMode) {
-                "CRF" { $parts += "-b:v 8000k" } # 固有の品質指定が不確定なため固定ビットレート等で代替
-                "CRF+Maxrate" { $parts += "-b:v ${MaxrateKbps}k" }
-                "Bitrate" { $parts += "-b:v ${MaxrateKbps}k" }
-            }
-        }
-        "MF" {
-            switch ($QualityMode) {
-                "CRF" { $parts += "-b:v 8000k" } # 固有の品質指定が不確定なため固定ビットレート等で代替
-                "CRF+Maxrate" { $parts += "-b:v ${MaxrateKbps}k" }
-                "Bitrate" { $parts += "-b:v ${MaxrateKbps}k" }
-            }
-        }
+        "Vulkan" { return $null }   # 非対応（パラメータ変換なし）
+        "D3D12VA" { return $null }  # 非対応（パラメータ変換なし）
+        "MF" { return $null }       # 非対応（パラメータ変換なし。音声MFもソフトウェアMFTのためGPUではない）
         "CPU" {
             $isVPx = $Codec -match "VP"
             $isAV1 = $Codec -match "AV1"
@@ -1808,15 +1785,17 @@ function Get-PlatformAutoSettings {
     $needsAAC = ($extension -eq "mp4")
     if ($PlatformConfig.MaxFileSizeMB -le 50) {
         if ($needsAAC) {
-            # MP4コンテナ: 外部エンコーダー優先 (小容量向け低ビットレート → HE-AAC CVBR)
-            if ($extEnc.HasQaac) {
-                $audioSetting = @{ Type = "qaac"; Options = "--he --cvbr 64"; Description = "qaac HE-AAC CVBR 64kbps (自動)" }
+            # MP4コンテナ: 小容量向け低ビットレート。
+            # 実測により qaac/fdkaac の HE-AAC は約20msの音声遅延が生じるため自動選択では使用しない。
+            # 遅延のない Nero HE を優先し、無ければ qaac/fdkaac の AAC-LC（いずれも0ms）を選ぶ。
+            if ($extEnc.HasNero) {
+                $audioSetting = @{ Type = "nero"; Options = "-he -q 0.35"; Description = "Nero HE-AAC -q 0.35 (自動/同期優先)" }
+            }
+            elseif ($extEnc.HasQaac) {
+                $audioSetting = @{ Type = "qaac"; Options = "--tvbr 64"; Description = "qaac AAC-LC TVBR 64 (自動/同期優先)" }
             }
             elseif ($extEnc.HasFdkaac) {
-                $audioSetting = @{ Type = "fdkaac"; Options = "-p 5 -m 3"; Description = "fdkaac HE-AAC VBR 3 (自動)" }
-            }
-            elseif ($extEnc.HasNero) {
-                $audioSetting = @{ Type = "nero"; Options = "-he -q 0.35"; Description = "Nero HE-AAC -q 0.35 (自動)" }
+                $audioSetting = @{ Type = "fdkaac"; Options = "-m 4"; Description = "fdkaac AAC-LC VBR 4 (自動/同期優先)" }
             }
             else {
                 $audioSetting = @{ Type = "internal"; Options = "-c:a aac -b:a 96k"; Description = "AAC-LC 96kbps (自動/HE非対応)" }

@@ -263,8 +263,10 @@ function Get-EncoderSettings {
 
     # --- 2. 映像ハードウェア選択 (対応HWのみ表示/情報がなければすべて) ---
     $hwMenuTitle = "--- 映像エンコードに使用するハードウェア ---"
-    $allHwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "Vulkan", "D3D12VA", "MediaFoundation (MF)", "CPU (Software)")
-    $allHwKeys = @("NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF", "CPU")
+    # Vulkan / D3D12VA / MF は通常モードでは GPU を確実に使用できないため非表示。
+    # これらの GPU 経路は中間ファイル作成モード (Modules/IntermediateHardware.ps1) のみで使用する。
+    $allHwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
+    $allHwKeys = @("NVIDIA", "Intel", "AMD", "CPU")
     $hwChoices = @(); $hwKeys = @()
     for ($i = 0; $i -lt $allHwChoices.Length; $i++) {
         $show = $true
@@ -273,9 +275,6 @@ function Get-EncoderSettings {
                 "NVIDIA" { $show = $hwInfo.HasNvidia }
                 "Intel" { $show = $hwInfo.HasIntel }
                 "AMD" { $show = $hwInfo.HasAMD }
-                "Vulkan" { $show = $hwInfo.HasVulkan }
-                "D3D12VA" { $show = $hwInfo.HasD3D12VA }
-                "MF" { $show = $hwInfo.HasMF }
                 "CPU" { $show = $true }
             }
         }
@@ -327,18 +326,6 @@ function Get-EncoderSettings {
                     $codecChoices = @("H.264/AVC", "H.265/HEVC", "AV1")
                     $codecMap = @("h264_amf", "hevc_amf", "av1_amf")
                 }
-                "Vulkan" {
-                    $codecChoices = @("H.264/AVC", "H.265/HEVC", "AV1")
-                    $codecMap = @("h264_vulkan", "hevc_vulkan", "av1_vulkan")
-                }
-                "D3D12VA" {
-                    $codecChoices = @("H.264/AVC", "H.265/HEVC", "AV1")
-                    $codecMap = @("h264_d3d12va", "hevc_d3d12va", "av1_d3d12va")
-                }
-                "MF" {
-                    $codecChoices = @("H.264/AVC", "H.265/HEVC", "AV1")
-                    $codecMap = @("h264_mf", "hevc_mf", "av1_mf")
-                }
             }
         }
 
@@ -376,9 +363,9 @@ function Get-EncoderSettings {
             $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
         }
         else {
-            # Vulkan, D3D12VA, MF など
-            $qPresets = [ordered]@{ "高品質" = "-b:v 8000k"; "標準品質" = "-b:v 4000k"; "カスタムビットレート" = "-b:v {val}" }
-            $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets
+            # Vulkan / D3D12VA / MF は GPU 使用を保証できないため非対応（パラメータ変換は行わない）
+            Write-Host "このハードウェアは通常モードでは非対応です（GPU使用を保証できません）。" -ForegroundColor Red
+            return $null
         }
     }
     elseif ($selectedHW -eq "CPU") {
