@@ -22,6 +22,7 @@
 [CmdletBinding()]
 param (
     [switch]$QsvDefaultDepth,
+    [switch]$ClearEncodeCapabilityCache,
     [Alias('h', 'help')]
     [switch]$ShowHelp,
     [Parameter(ValueFromPipeline = $true, ValueFromRemainingArguments = $true, HelpMessage = "処理対象のファイルまたはフォルダのパスを入力せい。")]
@@ -121,6 +122,24 @@ Ensure-Directory -Path $global:Settings.TemplateDir
 Ensure-Directory -Path $global:Settings.EncodingTemplateDir
 Ensure-Directory -Path $global:Settings.FilterTemplateDir
 Ensure-Directory -Path $global:AppCacheDir
+
+# 一時ファイルは必ずプロジェクトフォルダ内（.cache\tmp）に作る。
+# プロジェクト外のパスに対して書き込み・削除を行わないための統一ルール。
+$global:AppTempDir = Join-Path $global:AppCacheDir 'tmp'
+Ensure-Directory -Path $global:AppTempDir
+
+# --- エンコード能力キャッシュ／フォールバック共通モジュール ---
+$encodeFallbackModulePath = Join-Path $global:ScriptDir 'Modules\EncodeFallback.ps1'
+if (Test-Path -LiteralPath $encodeFallbackModulePath) {
+    . $encodeFallbackModulePath
+    if ($ClearEncodeCapabilityCache) {
+        Clear-EncodeCapabilityCache
+        Write-Host "エンコード能力キャッシュをクリアしました。" -ForegroundColor Cyan
+    }
+}
+else {
+    Write-Host "[WARN] Modules\EncodeFallback.ps1 が見つからないため、拡張フォールバックを無効化します。" -ForegroundColor Yellow
+}
 
 # --- 依存スクリプトの確認 ---
 $optionsScriptPath = Join-Path $global:ScriptDir "get-ffmpegOptions.ps1"
@@ -332,8 +351,8 @@ function Invoke-ExternalProcess {
     )
     if ($Label) { Write-Log $Label }
     Write-Log "[CMD] `"$FilePath`" $Arguments" -Level "DEBUG"
-    $stderrFile = Join-Path ([System.IO.Path]::GetTempPath()) "re-enc-stderr-$([System.IO.Path]::GetRandomFileName())"
-    $stdoutFile = Join-Path ([System.IO.Path]::GetTempPath()) "re-enc-stdout-$([System.IO.Path]::GetRandomFileName())"
+    $stderrFile = Join-Path ($global:AppTempDir) "re-enc-stderr-$([System.IO.Path]::GetRandomFileName())"
+    $stdoutFile = Join-Path ($global:AppTempDir) "re-enc-stdout-$([System.IO.Path]::GetRandomFileName())"
     $monitor = $null
     try {
         $monitorEnabled = ($FilePath -eq $global:Settings.FfmpegPath) -and (Initialize-FFmpegUsageMonitor)
@@ -378,9 +397,9 @@ function Invoke-FfmpegEncode {
     )
     $ffmpegPath = $global:Settings.FfmpegPath
     Write-Log "[CMD] `"$ffmpegPath`" $Arguments" -Level "DEBUG"
-    $progressFile = Join-Path ([System.IO.Path]::GetTempPath()) "ffprogress-$([System.IO.Path]::GetRandomFileName())"
-    $stderrFile = Join-Path ([System.IO.Path]::GetTempPath()) "re-enc-stderr-$([System.IO.Path]::GetRandomFileName())"
-    $stdoutFile = Join-Path ([System.IO.Path]::GetTempPath()) "re-enc-stdout-$([System.IO.Path]::GetRandomFileName())"
+    $progressFile = Join-Path ($global:AppTempDir) "ffprogress-$([System.IO.Path]::GetRandomFileName())"
+    $stderrFile = Join-Path ($global:AppTempDir) "re-enc-stderr-$([System.IO.Path]::GetRandomFileName())"
+    $stdoutFile = Join-Path ($global:AppTempDir) "re-enc-stdout-$([System.IO.Path]::GetRandomFileName())"
     $monitorEnabled = Initialize-FFmpegUsageMonitor
     $monitor = $null
     $startTime = Get-Date
@@ -1236,9 +1255,11 @@ function Resolve-VideoFilterPipeline {
         [string]$HwAccelOption,
         [string]$VideoOptions,
         [string]$VideoFilter,
-        [hashtable]$EncoderSettings
+        [hashtable]$EncoderSettings,
+        [string]$InputPath = ''
     )
     $result = @{ HwAccelOption = $HwAccelOption; Filter = $VideoFilter }
+    $usingZeroCopyPath = $false
     $uploadDevice = [string]$EncoderSettings.IntermediateUploadDevice
     $pixelFormat = [string]$EncoderSettings.IntermediatePixelFormat
     if ($uploadDevice -in @('vulkan', 'd3d12va')) {
@@ -1291,6 +1312,18 @@ function Resolve-VideoFilterPipeline {
             Write-Log 'QSVスケーラー: scale_qsvが未搭載のためvpp_qsvを使用' -Level 'DEBUG'
         }
         if ($frameFormat -eq 'd3d11' -and $VideoOptions -match '-c:v\s+\S+_qsv\b') {
+            # 従来はここで CPU リサイズに強制していた。実能力をプローブし、
+            # 成功した場合のみ GPU フレームを維持する経路を採用する。
+            $zeroCopyFilter = $null
+            if (Get-Command Resolve-ZeroCopyScaleFilter -ErrorAction SilentlyContinue) {
+                $zeroCopyFilter = Resolve-ZeroCopyScaleFilter -InputPath $InputPath -FrameFormat $frameFormat `
+                    -Encoder 'qsv' -VideoFilter $VideoFilter -HwAccelOption $HwAccelOption -VideoOptions $VideoOptions
+            }
+            if ($zeroCopyFilter) {
+                $gpuFilter = $zeroCopyFilter
+                $usingZeroCopyPath = $true
+                Write-Log "D3D11VA→QSV ゼロコピー経路を採用: $zeroCopyFilter" -Level "DEBUG"
+            }
             $filterName = ''
         }
         if ($filterName -and (Test-FfmpegVideoFilter -Name $filterName)) {
@@ -1298,7 +1331,10 @@ function Resolve-VideoFilterPipeline {
             Write-Log "GPUリサイズ: $gpuFilter ($frameFormat)" -Level "DEBUG"
         }
         else {
-            if ($frameFormat -eq "d3d11" -and $VideoOptions -match '-c:v\s+\S+_qsv\b') {
+            if ($gpuFilter) {
+                # ゼロコピー経路を採用済みのため、CPUリサイズのログは出さない
+            }
+            elseif ($frameFormat -eq "d3d11" -and $VideoOptions -match '-c:v\s+\S+_qsv\b') {
                 Write-Log "D3D11VAデコードとQSVエンコードを維持し、検証済みのCPUリサイズを使用します" -Level "DEBUG"
             }
             elseif ($frameFormat -in @("dxva2", "dxva2_vld")) {
@@ -1311,6 +1347,12 @@ function Resolve-VideoFilterPipeline {
     }
 
     $needsCpuFrames = -not (Test-HwFrameEncoderCompatibility -FrameFormat $frameFormat -VideoOptions $VideoOptions)
+    if ($usingZeroCopyPath) {
+        # プローブ済みのゼロコピー経路でのみ GPU→CPU 転送を抑制する。
+        # 通常の scale_qsv 等の GPU フィルタでは encoder が非対応なら
+        # 従来どおり hwdownload を挿入する必要がある（MF エンコーダ等）。
+        $needsCpuFrames = $false
+    }
     if ($gpuFilter) {
         $result.Filter = $gpuFilter
         if ($tail -or $needsCpuFrames) {
@@ -2849,7 +2891,7 @@ function Invoke-SplitEncodeFile {
 
             # --- 映像エンコードと結合 ---
             $effectiveHwAccelOption = Get-EffectiveHwAccelOption -HwAccelOption $HwAccelOption -VideoOptions $Config.EncoderSettings.Video
-            $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $Config.EncoderSettings.Video -VideoFilter $Config.AdditionalVF -EncoderSettings $Config.EncoderSettings
+            $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $Config.EncoderSettings.Video -VideoFilter $Config.AdditionalVF -EncoderSettings $Config.EncoderSettings -InputPath $InputFile
             $effectiveHwAccelOption = $filterPipeline.HwAccelOption
             $ffmpegArgsList = @("-hide_banner", "-y")
             if ($effectiveHwAccelOption) { $ffmpegArgsList += $effectiveHwAccelOption.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) }
@@ -2887,19 +2929,15 @@ function Invoke-SplitEncodeFile {
             $ffmpegArgsList += "`"$outputFilePath`""
             $finalArgString = $ffmpegArgsList -join ' '
 
-            $result = Invoke-QsvEncodeWithDepthFallback -Arguments $finalArgString -DurationSeconds $segDuration
-            if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -match '-hwaccel\s+d3d11va\b' -and $finalArgString -match '-vf\s+"scale_d3d11=' -and (Test-HwAccelRelatedFailure $result.StdErr)) {
-                Write-Log "D3D11VAのGPUリサイズに失敗。GPUデコードを維持し、CPUリサイズで再試行します。(セグメント: $outputFileName)" -Level "WARN"
-                $d3d11FallbackArgs = Convert-D3D11ScaleToCpuScale $finalArgString
-                $result = Invoke-QsvEncodeWithDepthFallback -Arguments $d3d11FallbackArgs -DurationSeconds $segDuration
+            if (Get-Command Invoke-EncodeWithFallback -ErrorAction SilentlyContinue) {
+                $result = Invoke-EncodeWithFallback -Arguments $finalArgString -HwAccelOption $effectiveHwAccelOption `
+                    -VideoFilter $filterPipeline.Filter -VideoOptions $Config.EncoderSettings.Video `
+                    -DurationSeconds $segDuration -Label "セグメント: $outputFileName"
+                # HWアクセルを諦めた場合は後続セグメントにも反映する（従来動作を維持）
+                if ($result.Tier -eq 'NoHwAccel') { $HwAccelOption = "" }
             }
-
-            # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
-            if ($result.ExitCode -ne 0 -and ($effectiveHwAccelOption -match '-hwaccel\s+\S+') -and (Test-HwAccelRelatedFailure $result.StdErr)) {
-                Write-Log "HWアクセル関連エラーを検出。HWアクセルなしでリトライします。(セグメント: $outputFileName)" -Level "WARN"
-                $HwAccelOption = ""
-                $retryArgs = Remove-HwAccelFromArgs $finalArgString
-                $result = Invoke-QsvEncodeWithDepthFallback -Arguments $retryArgs -DurationSeconds $segDuration
+            else {
+                $result = Invoke-QsvEncodeWithDepthFallback -Arguments $finalArgString -DurationSeconds $segDuration
             }
 
             if ($result.ExitCode -ne 0) {
@@ -3148,9 +3186,9 @@ function Invoke-EncodeFile {
         # --- 2passモード (CPUのみ) ---
         $isDashInput = ([System.IO.Path]::GetExtension($InputFile).ToLowerInvariant() -eq ".mpd")
         if ($Config.PlatformMode -and $Config.TwoPassMode) {
-            $passLogBase = Join-Path ([System.IO.Path]::GetTempPath()) ("ff2pass-" + [System.IO.Path]::GetRandomFileName())
+            $passLogBase = Join-Path ($global:AppTempDir) ("ff2pass-" + [System.IO.Path]::GetRandomFileName())
             $pass1VideoOptions = "$currentVideoOptions -pass 1 -passlogfile $passLogBase"
-            $pass1Pipeline = Resolve-VideoFilterPipeline -HwAccelOption $HwAccelOption -VideoOptions $pass1VideoOptions -VideoFilter $Config.AdditionalVF -EncoderSettings $Config.EncoderSettings
+            $pass1Pipeline = Resolve-VideoFilterPipeline -HwAccelOption $HwAccelOption -VideoOptions $pass1VideoOptions -VideoFilter $Config.AdditionalVF -EncoderSettings $Config.EncoderSettings -InputPath $InputFile
             $pass1ArgsList = @("-hide_banner", "-y")
             if ($isDashInput) {
                 $pass1ArgsList += @("-fflags", "+genpts")
@@ -3168,25 +3206,18 @@ function Invoke-EncodeFile {
 
             Write-Log "========= 2pass: 1st pass 実行 =========" -NoTimestamp
             $pass1ArgString = $pass1ArgsList -join ' '
-            $pass1Result = Invoke-QsvEncodeWithDepthFallback -Arguments $pass1ArgString -DurationSeconds $inputDuration
-            if ($pass1Result.ExitCode -ne 0 -and $pass1Pipeline.HwAccelOption -match '-hwaccel\s+d3d11va\b' -and $pass1ArgString -match '-vf\s+"scale_d3d11=' -and (Test-HwAccelRelatedFailure $pass1Result.StdErr)) {
-                Write-Log "D3D11VAのGPUリサイズに失敗。GPUデコードを維持し、CPUリサイズで1st passを再試行します。" -Level "WARN"
-                $d3d11FallbackArgs = Convert-D3D11ScaleToCpuScale $pass1ArgString
-                $pass1Result = Invoke-QsvEncodeWithDepthFallback -Arguments $d3d11FallbackArgs -DurationSeconds $inputDuration
+            if (Get-Command Invoke-EncodeWithFallback -ErrorAction SilentlyContinue) {
+                $pass1Result = Invoke-EncodeWithFallback -Arguments $pass1ArgString -HwAccelOption $pass1Pipeline.HwAccelOption `
+                    -VideoFilter $pass1Pipeline.Filter -VideoOptions $pass1VideoOptions `
+                    -DurationSeconds $inputDuration -Label '2pass 1st pass'
+                if ($pass1Result.Tier -eq 'NoHwAccel') { $HwAccelOption = "" }
+            }
+            else {
+                $pass1Result = Invoke-QsvEncodeWithDepthFallback -Arguments $pass1ArgString -DurationSeconds $inputDuration
             }
             if ($pass1Result.ExitCode -ne 0) {
-                # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
-                if ($HwAccelOption -and (Test-HwAccelRelatedFailure $pass1Result.StdErr)) {
-                    Write-Log "HWアクセル関連エラーを検出。HWアクセルなしで1st passをリトライします。" -Level "WARN"
-                    $HwAccelOption = ""
-                    $retryArgs = Remove-HwAccelFromArgs ($pass1ArgsList -join ' ')
-                    Write-Log "========= 2pass: 1st pass リトライ (HWアクセルなし) =========" -NoTimestamp
-                    $pass1Result = Invoke-QsvEncodeWithDepthFallback -Arguments $retryArgs -DurationSeconds $inputDuration
-                }
-                if ($pass1Result.ExitCode -ne 0) {
-                    Write-Log "2pass 1st pass 失敗 (終了コード: $($pass1Result.ExitCode))" -Level "ERROR"
-                    return
-                }
+                Write-Log "2pass 1st pass 失敗 (終了コード: $($pass1Result.ExitCode))" -Level "ERROR"
+                return
             }
 
             $currentVideoOptions = "$currentVideoOptions -pass 2 -passlogfile $passLogBase"
@@ -3194,7 +3225,7 @@ function Invoke-EncodeFile {
         }
 
         # --- エンコード実行 ---
-        $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $currentVideoOptions -VideoFilter $Config.AdditionalVF -EncoderSettings $Config.EncoderSettings
+        $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $currentVideoOptions -VideoFilter $Config.AdditionalVF -EncoderSettings $Config.EncoderSettings -InputPath $InputFile
         $effectiveHwAccelOption = $filterPipeline.HwAccelOption
         $ffmpegArgsList = @("-hide_banner", "-y")
         $isHevcQvbrEncode = ($Config.PlatformMode -and $Config.HWEncoder -eq "Intel" -and $Config.CodecName -eq "H.265" -and $Config.QualityMode -eq "CRF+Maxrate")
@@ -3239,21 +3270,14 @@ function Invoke-EncodeFile {
         $finalArgString = $ffmpegArgsList -join ' '
 
         Write-Log "========= ffmpeg エンコード実行 =========" -NoTimestamp
-        $result = Invoke-QsvEncodeWithDepthFallback -Arguments $finalArgString -DurationSeconds $inputDuration
-        if ($result.ExitCode -ne 0 -and $effectiveHwAccelOption -match '-hwaccel\s+d3d11va\b' -and $finalArgString -match '-vf\s+"scale_d3d11=' -and (Test-HwAccelRelatedFailure $result.StdErr)) {
-            Write-Log "D3D11VAのGPUリサイズに失敗。GPUデコードを維持し、CPUリサイズで再試行します。" -Level "WARN"
-            $d3d11FallbackArgs = Convert-D3D11ScaleToCpuScale $finalArgString
-            Write-Log "========= ffmpeg エンコード リトライ (D3D11VAデコード維持) =========" -NoTimestamp
-            $result = Invoke-QsvEncodeWithDepthFallback -Arguments $d3d11FallbackArgs -DurationSeconds $inputDuration
+        if (Get-Command Invoke-EncodeWithFallback -ErrorAction SilentlyContinue) {
+            $result = Invoke-EncodeWithFallback -Arguments $finalArgString -HwAccelOption $effectiveHwAccelOption `
+                -VideoFilter $filterPipeline.Filter -VideoOptions $currentVideoOptions `
+                -DurationSeconds $inputDuration -Label '本エンコード'
+            if ($result.Tier -eq 'NoHwAccel') { $HwAccelOption = "" }
         }
-
-        # HWアクセル関連エラーの場合、HWアクセルなしでリトライ
-        if ($result.ExitCode -ne 0 -and ($effectiveHwAccelOption -match '-hwaccel\s+\S+') -and (Test-HwAccelRelatedFailure $result.StdErr)) {
-            Write-Log "HWアクセル関連エラーを検出。HWアクセルなしでリトライします。" -Level "WARN"
-            $HwAccelOption = ""
-            $retryArgs = Remove-HwAccelFromArgs $finalArgString
-            Write-Log "========= ffmpeg エンコード リトライ (HWアクセルなし) =========" -NoTimestamp
-            $result = Invoke-QsvEncodeWithDepthFallback -Arguments $retryArgs -DurationSeconds $inputDuration
+        else {
+            $result = Invoke-QsvEncodeWithDepthFallback -Arguments $finalArgString -DurationSeconds $inputDuration
         }
 
         if ($isHevcQvbrEncode) {
