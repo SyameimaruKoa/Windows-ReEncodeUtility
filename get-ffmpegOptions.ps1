@@ -334,25 +334,27 @@ function Get-EncoderSettings {
         $baseEncoder = "-c:v $($codecMap[$codecIndex])"
         
         if ($selectedHW -eq "NVIDIA") {
-            $qPresets = [ordered]@{ "高品質 (CQ:23)" = "-rc vbr -cq 23"; "中品質 (CQ:28)" = "-rc vbr -cq 28"; "高速 (CQ:32)" = "-rc vbr -cq 32"; "カスタム品質 (CQ)" = "-rc vbr -cq {val}"; "カスタムビットレート" = "-rc vbr -b:v {val}" }
+            # 実測基準: NVENC CQ 33 が CPU CRF28 と同等VMAF。標準を先頭にして既定選択にする。
+            $qPresets = [ordered]@{ "標準 (CQ:33)" = "-rc vbr -cq 33"; "高品質 (CQ:29)" = "-rc vbr -cq 29"; "高速 (CQ:37)" = "-rc vbr -cq 37"; "カスタム品質 (CQ)" = "-rc vbr -cq {val}"; "カスタムビットレート" = "-rc vbr -b:v {val}" }
             $pPresets = [ordered]@{ "P1 (最速)" = "-preset p1"; "P2" = "-preset p2"; "P3" = "-preset p3"; "P4 (標準)" = "-preset p4"; "P5" = "-preset p5"; "P6" = "-preset p6"; "P7 (最高品質)" = "-preset p7" }
             $tPresets = [ordered]@{ "HQ (高品質)" = "-tune hq"; "LL (低遅延)" = "-tune ll"; "ULL (超低遅延)" = "-tune ull" }
             $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets -TuneOptions $tPresets
         }
         elseif ($selectedHW -eq "Intel") {
             if ($codecMap[$codecIndex] -eq "vp9_qsv") {
-                $qPresets = [ordered]@{ "高品質 (Q:25)" = "-q:v 25"; "中品質 (Q:30)" = "-q:v 30"; "低品質 (Q:40)" = "-q:v 40"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
+                # 品質モードでは目標VMAFに届かないため、実測の3.3Mbpsを標準とする（例外）
+                $qPresets = [ordered]@{ "標準 (3.3Mbps)" = "-b:v 3300k"; "高品質 (5Mbps)" = "-b:v 5000k"; "低品質 (2Mbps)" = "-b:v 2000k"; "カスタムビットレート" = "-b:v {val}" }
             }
             elseif ($codecMap[$codecIndex] -eq "mjpeg_qsv") {
                 $qPresets = [ordered]@{ "高品質 (Q:5)" = "-q:v 5"; "標準品質 (Q:10)" = "-q:v 10"; "カスタム品質 (Q)" = "-q:v {val}" }
             }
             elseif ($codecMap[$codecIndex] -eq "mpeg2_qsv") {
-                # mpeg2_qsv は -global_quality 非対応 (Current profile is unsupported)。
-                # 量子化指定 (-q:v) またはビットレート指定のみ利用できる。
-                $qPresets = [ordered]@{ "高品質 (Q:5)" = "-q:v 5"; "中品質 (Q:10)" = "-q:v 10"; "低品質 (Q:20)" = "-q:v 20"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
+                # mpeg2_qsv は -global_quality 非対応。実測の Q25 を標準とする。
+                $qPresets = [ordered]@{ "標準 (Q:25)" = "-q:v 25"; "高品質 (Q:20)" = "-q:v 20"; "低品質 (Q:30)" = "-q:v 30"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
             }
             else {
-                $qPresets = [ordered]@{ "高品質 (GQ:20)" = "-global_quality 20"; "中品質 (GQ:25)" = "-global_quality 25"; "低品質 (GQ:30)" = "-global_quality 30"; "カスタム品質 (GQ)" = "-global_quality {val}"; "カスタムビットレート" = "-b:v {val}" }
+                # 実測基準: QSV global_quality 29 (H.264/H.265) が CPU CRF28 と同等VMAF。
+                $qPresets = [ordered]@{ "標準 (GQ:29)" = "-global_quality 29"; "高品質 (GQ:24)" = "-global_quality 24"; "低品質 (GQ:34)" = "-global_quality 34"; "カスタム品質 (GQ)" = "-global_quality {val}"; "カスタムビットレート" = "-b:v {val}" }
             }
             $pPresets = [ordered]@{ "veryslow (最高品質)" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "veryfast (最速)" = "-preset veryfast" }
             $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
@@ -376,19 +378,29 @@ function Get-EncoderSettings {
         $baseEncoder = "-c:v $($codecName.Split(' ')[1].Trim('()'))"
 
         if ($codecName -match "H.26") {
-            $qPresets = [ordered]@{ "高品質 (CRF:18)" = "-crf 18"; "中品質 (CRF:23)" = "-crf 23"; "低品質 (CRF:28)" = "-crf 28"; "カスタム品質 (CRF)" = "-crf {val}" }
+            # 実測基準: libx264 CRF29 / libx265 CRF31 が CPU 基準(CRF28)と同等VMAF。
+            $isX265 = $codecName -match "x265"
+            $stdCrf = if ($isX265) { 31 } else { 29 }
+            $hiCrf = $stdCrf - 4; $loCrf = $stdCrf + 4
+            $qPresets = [ordered]@{ "標準 (CRF:$stdCrf)" = "-crf $stdCrf"; "高品質 (CRF:$hiCrf)" = "-crf $hiCrf"; "低品質 (CRF:$loCrf)" = "-crf $loCrf"; "カスタム品質 (CRF)" = "-crf {val}" }
             $pPresets = [ordered]@{ "placebo (非推奨)" = "-preset placebo"; "veryslow" = "-preset veryslow"; "slower" = "-preset slower"; "slow" = "-preset slow"; "medium (標準)" = "-preset medium"; "fast" = "-preset fast"; "faster" = "-preset faster"; "superfast" = "-preset superfast"; "ultrafast (最速)" = "-preset ultrafast" }
             $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
         }
         elseif ($codecName -match "VP") {
-            $qPresets = [ordered]@{ "高品質 (CRF:30)" = "-crf 30 -b:v 0"; "中品質 (CRF:35)" = "-crf 35 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
+            # 実測基準: libvpx-vp9 CRF33。VP8はビットレート指定が必須のため1.675Mbpsを標準とする。
+            if ($codecName -match "vp9") {
+                $qPresets = [ordered]@{ "標準 (CRF:33)" = "-crf 33 -b:v 0"; "高品質 (CRF:29)" = "-crf 29 -b:v 0"; "低品質 (CRF:37)" = "-crf 37 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
+            }
+            else {
+                $qPresets = [ordered]@{ "標準 (1.675Mbps)" = "-b:v 1675k"; "高品質 (2.5Mbps)" = "-b:v 2500k"; "低品質 (1Mbps)" = "-b:v 1000k"; "カスタムビットレート" = "-b:v {val}" }
+            }
             $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-cpu-used 0"; "1 (高品質)" = "-cpu-used 1"; "2" = "-cpu-used 2"; "3 (バランス型)" = "-cpu-used 3"; "4 (標準)" = "-cpu-used 4"; "5 (やや速い)" = "-cpu-used 5"; "6 (速い)" = "-cpu-used 6"; "7 (かなり速い)" = "-cpu-used 7"; "8 (最速 / 品質低下)" = "-cpu-used 8" }
             $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
         }
         elseif ($codecName -match "AV1") {
             if ($codecName -match "svt") {
                 # libsvtav1: 高速AV1エンコーダー (自動マルチスレッド)
-                $qPresets = [ordered]@{ "高品質 (CRF:20)" = "-crf 20"; "中品質 (CRF:30)" = "-crf 30"; "カスタム品質 (CRF)" = "-crf {val}" }
+                $qPresets = [ordered]@{ "標準 (CRF:57)" = "-crf 57"; "高品質 (CRF:50)" = "-crf 50"; "低品質 (CRF:64)" = "-crf 64"; "カスタム品質 (CRF)" = "-crf {val}" }
                 $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-preset 0"; "2 (高品質寄り)" = "-preset 2"; "4 (標準)" = "-preset 4"; "6 (速い)" = "-preset 6"; "8 (かなり速い)" = "-preset 8"; "10 (最速寄り)" = "-preset 10"; "13 (最速 / 品質低下)" = "-preset 13" }
                 $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
             }
@@ -400,7 +412,7 @@ function Get-EncoderSettings {
                 Read-Host "  Enterキーで続行"
                 # マルチスレッド設定: 行ベース並列化 + タイル分割
                 $baseEncoder += " -row-mt 1 -tiles 2x2"
-                $qPresets = [ordered]@{ "高品質 (CRF:20)" = "-crf 20 -b:v 0"; "中品質 (CRF:30)" = "-crf 30 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
+                $qPresets = [ordered]@{ "標準 (CRF:53)" = "-crf 53 -b:v 0"; "高品質 (CRF:46)" = "-crf 46 -b:v 0"; "低品質 (CRF:60)" = "-crf 60 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
                 $pPresets = [ordered]@{ "0 (最高品質 / 極めて遅い)" = "-cpu-used 0"; "1 (高品質 / 非常に遅い)" = "-cpu-used 1"; "2 (高品質寄り / 遅い)" = "-cpu-used 2"; "3 (バランス型)" = "-cpu-used 3"; "4 (標準)" = "-cpu-used 4"; "5 (やや速い)" = "-cpu-used 5"; "6 (速い)" = "-cpu-used 6"; "8 (最速 / 品質低下)" = "-cpu-used 8" }
                 $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
             }
@@ -410,7 +422,7 @@ function Get-EncoderSettings {
                 Write-Host "  品質指定はQP (Quantizer Parameter: 0-255) を使用します。`n" -ForegroundColor Cyan
                 # マルチスレッド設定: タイル分割
                 $baseEncoder += " -tiles 4"
-                $qPresets = [ordered]@{ "高品質 (QP:80)" = "-qp 80"; "中品質 (QP:120)" = "-qp 120"; "低品質 (QP:160)" = "-qp 160"; "カスタム品質 (QP 0-255)" = "-qp {val}" }
+                $qPresets = [ordered]@{ "標準 (QP:140)" = "-qp 140"; "高品質 (QP:120)" = "-qp 120"; "低品質 (QP:160)" = "-qp 160"; "カスタム品質 (QP 0-255)" = "-qp {val}" }
                 $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-speed 0"; "2 (高品質寄り)" = "-speed 2"; "4 (バランス型)" = "-speed 4"; "6 (標準)" = "-speed 6"; "8 (速い)" = "-speed 8"; "10 (最速 / 品質低下)" = "-speed 10" }
                 $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
             }

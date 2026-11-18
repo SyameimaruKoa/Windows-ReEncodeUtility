@@ -1749,12 +1749,21 @@ function Get-PlatformAutoSettings {
     $codec = $Codec; $qualityValue = 0; $preset = ""; $audioSetting = $null; $scaleFilter = ""; $extension = ""
     if (-not $codec) { return $null }
 
-    # --- 品質値 (CRF/CQ/QP) --- maxrateが容量制限するため高品質ベースラインを使用
-    $qualityValue = switch ($codec) { 
-        "H.264" { 18 } 
-        "H.265" { 22 } 
-        "VP9" { 25 } 
-        "AV1" { 23 } 
+    # --- 品質値 (CRF/CQ/QP) --- 実測でCPU基準(CRF28)と同等VMAFになる値を使用
+    $qualityValue = switch ($HW) {
+        "NVIDIA" { 33 }
+        "Intel" { if ($codec -eq "VP9") { 25 } else { 29 } }
+        "AMD" { 28 } # 実測データなし：従来値を維持
+        "CPU" {
+            switch ($codec) {
+                "H.264" { 29 }
+                "H.265" { 31 }
+                "VP9" { 33 }
+                "AV1" { 57 }
+                default { 29 }
+            }
+        }
+        default { 29 }
     }
 
     # --- プリセット --- バランス型
@@ -2122,13 +2131,25 @@ function Invoke-PlatformDetailedSetup {
         }
     }
 
-    # --- 4. 品質値 (CRF) は容量に収まる範囲で最大品質を自動設定 ---
-    # maxrateが容量制限を保証するため、CRFは高品質ベースラインを使用
-    $qualityValue = switch ($selectedCodec) {
-        "H.264" { 18 }
-        "H.265" { 22 }
-        "VP9" { 25 }
-        "AV1" { if ($specificEncoder -eq "rav1e") { 100 } else { 23 } }
+    # --- 4. 品質値 (CRF/CQ/QP) --- 実測でCPU基準(CRF28)と同等VMAFになる値を使用
+    $qualityValue = switch ($selectedHW) {
+        "NVIDIA" { 33 }
+        "Intel" { if ($selectedCodec -eq "VP9") { 25 } else { 29 } }
+        "AMD" { 28 } # 実測データなし：従来値を維持
+        "CPU" {
+            switch ($selectedCodec) {
+                "H.264" { 29 }
+                "H.265" { 31 }
+                "VP9" { 33 }
+                "AV1" {
+                    if ($specificEncoder -eq "rav1e") { 140 }
+                    elseif ($specificEncoder -eq "libaom-av1") { 53 }
+                    else { 57 }
+                }
+                default { 29 }
+            }
+        }
+        default { 29 }
     }
 
     # --- 5. プリセット (エンコード速度) 選択 ---
