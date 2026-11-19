@@ -100,13 +100,22 @@ function Resolve-DeinterlaceFilter {
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
+$global:CtrlCRequested = $false
+
 # --- 設定ファイルの読み込み ---
-$configFilePath = Join-Path $global:ScriptDir "config.user.psd1"
+# Linux では専用設定があれば優先し、無ければ従来の config.user.psd1 を使う
+$configFileName = if ($IsWindows) { "config.user.psd1" } else { "config.user.linux.psd1" }
+$configFilePath = Join-Path $global:ScriptDir $configFileName
+if (-not (Test-Path $configFilePath) -and $configFileName -ne "config.user.psd1") {
+    $configFilePath = Join-Path $global:ScriptDir "config.user.psd1"
+    $configFileName = "config.user.psd1"
+}
 if (-not (Test-Path $configFilePath)) {
-    Write-Error "設定ファイル (config.user.psd1) が見つからぬ！話にならんわ！"
+    Write-Error "設定ファイル ($configFileName) が見つからぬ！話にならんわ！"
     Read-Host "何かキーを押して終了"; exit 1
 }
 $global:Settings = Import-PowerShellDataFile -Path $configFilePath
+if (-not $global:Settings.VaapiDevicePath) { $global:Settings.VaapiDevicePath = "/dev/dri/renderD128" }
 $global:Settings.TemplateDir = Join-Path $global:ScriptDir 'Profiles'
 $global:Settings.EncodingTemplateDir = Join-Path $global:Settings.TemplateDir 'Encoding'
 $global:Settings.FilterTemplateDir = Join-Path $global:Settings.TemplateDir 'Filters'
@@ -171,10 +180,11 @@ function Initialize-LogFile {
 ================================================================
   動画再エンコード ログ
   日時          : $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-  コンピューター: $env:COMPUTERNAME
-  ユーザー      : $env:USERNAME
+  コンピューター: $([System.Environment]::MachineName)
+  ユーザー      : $([System.Environment]::UserName)
   OS            : $([System.Environment]::OSVersion.VersionString)
   PowerShell    : $($PSVersionTable.PSVersion)
+  設定ファイル  : $configFileName
   ffmpeg        : $ffmpegVer
 ================================================================
 "@
@@ -317,6 +327,11 @@ function Test-IsInterlaced {
 #region プロセス実行・エンコード実行
 function Initialize-FFmpegUsageMonitor {
     if ($script:UsageMonitorInitialized) { return [bool]('ReEncodeUtility.FFmpegUsageMonitor' -as [type]) }
+    # FFmpegUsageMonitor は pdh.dll / kernel32.dll の P/Invoke に依存するため Windows 専用
+    if (-not $IsWindows) {
+        $script:UsageMonitorInitialized = $true
+        return $false
+    }
     $script:UsageMonitorInitialized = $true
     try {
         if (-not ('ReEncodeUtility.FFmpegUsageMonitor' -as [type])) {
@@ -395,6 +410,10 @@ function Invoke-ExternalProcess {
         return @{ ExitCode = $proc.ExitCode; StdOut = $stdout; StdErr = $stderr }
     }
     finally {
+        # Ctrl+C 等で中断された場合、別プロセスの ffmpeg が残らぬよう終了させる
+        if ($proc -and -not $proc.HasExited) {
+            try { $proc.Kill($true) } catch {}
+        }
         if ($monitor) { $monitor.Dispose() }
         Remove-Item -LiteralPath $stderrFile, $stdoutFile -Force -ErrorAction SilentlyContinue
     }
@@ -777,6 +796,10 @@ function Invoke-FfmpegEncode {
         return @{ ExitCode = $proc.ExitCode; StdOut = $stdout; StdErr = $stderr }
     }
     finally {
+        # Ctrl+C 等で中断された場合、別プロセスの ffmpeg が残らぬよう終了させる
+        if ($proc -and -not $proc.HasExited) {
+            try { $proc.Kill($true) } catch {}
+        }
         if ($monitor) { $monitor.Dispose() }
         Remove-Item -LiteralPath $stderrFile, $stdoutFile, $progressFile -Force -ErrorAction SilentlyContinue
     }
@@ -786,19 +809,70 @@ function Invoke-FfmpegEncode {
 #region UIユーティリティ
 # キー読み取りを分離しておく（テストから差し替え可能にするため）
 function Read-MenuKey {
+    param([switch]$CatchControlC)
+    if ($CatchControlC -and -not $IsWindows) {
+        # Linux では Ctrl+C をシグナルではなくキー入力として受け取り、
+        # メニュー側で Esc と同じキャンセル扱いにする。
+        [Console]::TreatControlCAsInput = $true
+        try {
+            return $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        }
+        finally {
+            [Console]::TreatControlCAsInput = $false
+        }
+    }
     return $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
+
+function Test-IsControlCKey {
+    param($Key)
+    if (-not $Key) { return $false }
+    # Ctrl+C は VirtualKeyCode=67('C') + Control 修飾、または文字コード 3
+    return ([int]$Key.Character -eq 3) -or
+           ($Key.VirtualKeyCode -eq 67 -and ($Key.ControlKeyState -band
+               [System.ConsoleModifiers]::Control))
+}
+
+function Clear-Screen {
+    <#
+    .SYNOPSIS
+        画面をクリアする。Windows では従来どおり Clear-Host するが、
+        Linux では画面全体を上書きせず末尾に空行を入れるだけにする。
+    #>
+    if (-not $IsWindows) { Write-Host ""; return }
+    Clear-Host
+}
+
+function Clear-MenuLines {
+    <#
+    .SYNOPSIS
+        メニューの再描画前に、直前に描画した行だけを消す。
+        Windows では従来どおり Clear-Host するが、Linux では画面全体を消さない。
+    #>
+    param ([int]$Lines)
+    if ($IsWindows -or $Lines -le 0) { return }
+    for ($i = 0; $i -lt $Lines; $i++) {
+        [Console]::Write("`e[1A`e[2K")
+    }
+    [Console]::Write("`e[G")
 }
 
 function Show-Menu {
     param ([string]$Title, [string[]]$Choices, [int]$DefaultIndex = 0, [switch]$NoClear)
     
-    if (-not $NoClear) { Clear-Host }
+    if (-not $NoClear) {
+        if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) {
+            Clear-Screen
+        }
+        elseif ($IsWindows) { Clear-Host }
+    }
     
     $currentIndex = $DefaultIndex
     
     $titleLines = ($Title -split "`r?`n").Count + 1
     $menuLines = $Choices.Length
     $totalLines = $titleLines + $menuLines + 1 # 操作ヒント1行分
+    $drawnLines = $titleLines + $menuLines + 2 # 操作ヒント前の空行とヒント行分
 
     try {
         $startY = $Host.UI.RawUI.CursorPosition.Y
@@ -826,20 +900,32 @@ function Show-Menu {
     }
     $padTarget = $maxLen + 6 # " > " などの余白分
 
+    # Ctrl+C で中断されたときは finally で選択行を消し、カーソルを安全な行へ移す。
+    # Linux では ReadKey が Ctrl+C でブロックしたままになり、
+    # 別キーを押すまで画面が更新されないため、ここで強制的に整える。
+    $menuInterrupted = $false
+    try {
     while ($true) {
         if (-not $firstDraw) {
-            if ($NoClear) {
-                # スキャン結果を消さない指定では、従来どおりメニュー領域を再描画する
-                try {
-                    $Host.UI.RawUI.CursorPosition = $startPos
+            if ($IsWindows) {
+                # Windows は従来どおり画面をクリアして全角文字の重複を防ぐ
+                if ($NoClear) {
+                    try {
+                        $Host.UI.RawUI.CursorPosition = $startPos
+                    }
+                    catch {
+                        Clear-Host
+                    }
                 }
-                catch {
+                else {
                     Clear-Host
                 }
             }
             else {
-                # 全角文字や折り返しでカーソル位置がずれ、文字が重複することを防ぐ
-                Clear-Host
+                # Linux では画面全体を消さず、直前のメニュー行だけを書き換える
+                if (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue) {
+                    Clear-MenuLines -Lines $drawnLines
+                }
             }
         }
         $firstDraw = $false
@@ -867,7 +953,21 @@ function Show-Menu {
 
         Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
 
-        $key = Read-MenuKey
+        $key = $null
+        try {
+            $key = Read-MenuKey -CatchControlC
+        }
+        catch {
+            # Ctrl+C 等で ReadKey が例外になった場合は中断として扱う
+            if (-not $IsWindows) { $menuInterrupted = $true }
+            throw
+        }
+        if ($null -eq $key) { $menuInterrupted = $true; break }
+        # Ctrl+C はメニューをキャンセルしてスクリプト全体を終了する
+        if (-not $IsWindows -and (Get-Command -Name 'Test-IsControlCKey' -CommandType Function -ErrorAction SilentlyContinue) -and (Test-IsControlCKey -Key $key)) {
+            $global:CtrlCRequested = $true
+            $global:MenuNav = ''; Write-Host ""; return -1
+        }
         switch ($key.VirtualKeyCode) {
             38 { if ($currentIndex -gt 0) { $currentIndex-- } }       # UpArrow
             40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } } # DownArrow
@@ -882,6 +982,17 @@ function Show-Menu {
                 continue
             }
             46 { $global:MenuNav = 'allback'; Write-Host ""; return -3 } # Delete（最初へ戻る）
+        }
+    }
+    }
+    finally {
+        if ($menuInterrupted -and -not $IsWindows) {
+            # 選択ハイライト行を消し、カーソルをメニュー末尾へ移して描画を確定させる
+            if (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue) {
+                Clear-MenuLines -Lines $drawnLines
+            }
+            Write-Host ""
+            [Console]::Out.Flush()
         }
     }
 }
@@ -1213,18 +1324,36 @@ function Get-EffectiveHwAccelOption {
         $isCudaDecode = $result -match '-hwaccel\s+cuda\b'
         $isQsvDecode = $result -match '-hwaccel\s+qsv\b'
         $isAmfDecode = $result -match '-hwaccel\s+amf\b'
+        $isVaapiDecode = $result -match '-hwaccel\s+vaapi\b'
         $isNvencEncode = $VideoOptions -match '-c:v\s+\S+_nvenc\b'
         $isQsvEncode = $VideoOptions -match '-c:v\s+\S+_qsv\b'
         $isAmfEncode = $VideoOptions -match '-c:v\s+\S+_amf\b'
+        $isVaapiEncode = $VideoOptions -match '-c:v\s+\S+_vaapi\b'
 
         # 同じGPU系の入出力なら、初回から extra_hw_frames を付けず、必要時のみ再試行に回す
-        $shouldSkipExtraFrames = ($isCudaDecode -and $isNvencEncode) -or ($isQsvDecode -and $isQsvEncode) -or ($isAmfDecode -and $isAmfEncode)
+        # VAAPI は extra_hw_frames を付けると初期化に失敗することがあるため常に抑制する
+        $shouldSkipExtraFrames = ($isCudaDecode -and $isNvencEncode) -or ($isQsvDecode -and $isQsvEncode) -or ($isAmfDecode -and $isAmfEncode) -or $isVaapiDecode -or $isVaapiEncode
         if (-not $shouldSkipExtraFrames) {
             $result += " -extra_hw_frames 64"
         }
     }
 
     return $result
+}
+function Get-VaapiDeviceOption {
+    <#
+    .SYNOPSIS
+        VAAPI エンコーダを使うときに必要な -vaapi_device を返す（HW デコード側で既に指定されていれば空）。
+    #>
+    param(
+        [string]$HwAccelOption,
+        [string]$VideoOptions
+    )
+    if (($VideoOptions -match '-c:v(?::\w+)?\s+\S+_vaapi\b') -and ($HwAccelOption -notmatch '-vaapi_device')) {
+        $device = if ($global:Settings -and $global:Settings.VaapiDevicePath) { $global:Settings.VaapiDevicePath } else { "/dev/dri/renderD128" }
+        return "-vaapi_device $device"
+    }
+    return ""
 }
 # helper: set or replace -hwaccel_output_format in an arg string
 function Set-HwAccelOutputFormat {
@@ -1288,6 +1417,7 @@ function Resolve-VideoFilterPipeline {
     $usingZeroCopyPath = $false
     $uploadDevice = [string]$EncoderSettings.IntermediateUploadDevice
     $pixelFormat = [string]$EncoderSettings.IntermediatePixelFormat
+    $isVaapiEncode = ($VideoOptions -match '-c:v(?::\w+)?\s+\S+_vaapi\b')
     if ($uploadDevice -in @('vulkan', 'd3d12va')) {
         # GPUフレーム必須のAPIはフィルター処理後に選択した形式でアップロードする。
         if ($HwAccelOption) {
@@ -1310,6 +1440,12 @@ function Resolve-VideoFilterPipeline {
             Write-Log '16-bit RGBフィルター: 8-bitへの変換を防ぐためCPUデコードを使用' -Level 'DEBUG'
         }
         $result.HwAccelOption = ''
+        return $result
+    }
+    if ($isVaapiEncode -and -not $HwAccelOption) {
+        # VAAPI エンコーダは VAAPI surface のみを受け付ける。CPU デコード時は最後にアップロードする
+        $uploadFilter = "format=nv12,hwupload"
+        $result.Filter = if ($VideoFilter) { "$VideoFilter,$uploadFilter" } else { $uploadFilter }
         return $result
     }
     if (-not $HwAccelOption -or $HwAccelOption -notmatch '-hwaccel_output_format\s+(\S+)') { return $result }
@@ -1395,6 +1531,10 @@ function Resolve-VideoFilterPipeline {
     elseif ($needsCpuFrames -and $VideoFilter -notmatch 'hwdownload') {
         $result.Filter = if ($VideoFilter) { "$VideoFilter,hwdownload,format=nv12" } else { "hwdownload,format=nv12" }
     }
+    if ($isVaapiEncode -and $result.Filter -match 'hwdownload' -and $result.Filter -notmatch 'hwupload') {
+        # CPU 側フィルターを通したフレームを VAAPI surface へ戻す
+        $result.Filter += ",format=nv12,hwupload"
+    }
     if ((Get-Command Resolve-HardwareFilterGraph -ErrorAction SilentlyContinue) -and $result.Filter -and $frameFormat -and $result.Filter -notmatch 'hwdownload') {
         $hwResolved = Resolve-HardwareFilterGraph -Filter $result.Filter -FrameFormat $frameFormat `
             -HwAccelOption $HwAccelOption -VideoOptions $VideoOptions -InputPath $InputPath
@@ -1470,6 +1610,10 @@ function Get-FilteredHwChoices {
     # 正当な GPU 経路は中間ファイル作成モードのみ（hwupload / -hw_encoding 1 を使用）。
     $allChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
     $allKeys = @("NVIDIA", "Intel", "AMD", "CPU")
+    if (-not $IsWindows) {
+        $allChoices += "VAAPI (Linux)"
+        $allKeys += "VAAPI"
+    }
     $hwInfo = $global:HardwareInfo
 
     $filteredChoices = @()
@@ -1483,6 +1627,7 @@ function Get-FilteredHwChoices {
                 "NVIDIA" { $show = $hwInfo.HasNvidia }
                 "Intel" { $show = $hwInfo.HasIntel }
                 "AMD" { $show = $hwInfo.HasAMD }
+                "VAAPI" { $show = $hwInfo.HasVAAPI }
                 "CPU" { $show = $true }
             }
         }
@@ -1511,6 +1656,7 @@ function Get-PlatformAvailableCodecs {
         "NVIDIA"  = @(@{Codec = "H.264"; Enc = "h264_nvenc" }, @{Codec = "H.265"; Enc = "hevc_nvenc" }, @{Codec = "AV1"; Enc = "av1_nvenc" })
         "Intel"   = @(@{Codec = "H.264"; Enc = "h264_qsv" }, @{Codec = "H.265"; Enc = "hevc_qsv" }, @{Codec = "VP9"; Enc = "vp9_qsv" }, @{Codec = "AV1"; Enc = "av1_qsv" })
         "AMD"     = @(@{Codec = "H.264"; Enc = "h264_amf" }, @{Codec = "H.265"; Enc = "hevc_amf" }, @{Codec = "AV1"; Enc = "av1_amf" })
+        "VAAPI"   = @(@{Codec = "H.264"; Enc = "h264_vaapi" }, @{Codec = "H.265"; Enc = "hevc_vaapi" })
         "CPU"     = @(@{Codec = "H.264"; Enc = "libx264" }, @{Codec = "H.265"; Enc = "libx265" }, @{Codec = "VP9"; Enc = "libvpx-vp9" }, @{Codec = "AV1"; Enc = "libsvtav1" })
     }
     $hwInfo = $global:HardwareInfo
@@ -1641,7 +1787,7 @@ function Get-TargetBitrateKbps {
 
 function Build-PlatformVideoOptions {
     param(
-        [string]$HW,              # "NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF", "CPU"
+        [string]$HW,              # "NVIDIA", "Intel", "AMD", "VAAPI", "Vulkan", "D3D12VA", "MF", "CPU"
         [string]$Codec,           # "H.264", "H.265", "VP9", "AV1"
         [string]$QualityMode,     # "CRF", "CRF+Maxrate", "Bitrate"
         [int]$QualityValue,       # CRF/CQ/QP値
@@ -1653,6 +1799,7 @@ function Build-PlatformVideoOptions {
         "NVIDIA+H.264" = "h264_nvenc"; "NVIDIA+H.265" = "hevc_nvenc"; "NVIDIA+AV1" = "av1_nvenc"
         "Intel+H.264" = "h264_qsv"; "Intel+H.265" = "hevc_qsv"; "Intel+AV1" = "av1_qsv"; "Intel+VP9" = "vp9_qsv"
         "AMD+H.264" = "h264_amf"; "AMD+H.265" = "hevc_amf"; "AMD+AV1" = "av1_amf"
+        "VAAPI+H.264" = "h264_vaapi"; "VAAPI+H.265" = "hevc_vaapi"
         # Vulkan / D3D12VA / MF は GPU 使用を保証できないため通常・プラットフォームモードでは非対応。
         # 中間ファイル作成モード (Modules/IntermediateHardware.ps1) のみで使用する。
         "CPU+H.264" = "libx264"; "CPU+H.265" = "libx265"; "CPU+VP9" = "libvpx-vp9"; "CPU+AV1" = "libsvtav1"
@@ -1705,6 +1852,13 @@ function Build-PlatformVideoOptions {
                 "Bitrate" { $parts += "-rc vbr_peak -b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k" }
             }
             $parts += "-quality $Preset"
+        }
+        "VAAPI" {
+            switch ($QualityMode) {
+                "CRF" { $parts += "-q:v $QualityValue" }
+                "CRF+Maxrate" { $parts += "-q:v $QualityValue -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k" }
+                "Bitrate" { $parts += "-b:v ${MaxrateKbps}k -maxrate ${MaxrateKbps}k -bufsize $($MaxrateKbps * 2)k" }
+            }
         }
         "Vulkan" { return $null }   # 非対応（パラメータ変換なし）
         "D3D12VA" { return $null }  # 非対応（パラメータ変換なし）
@@ -1807,6 +1961,7 @@ function Get-PlatformAutoSettings {
         "NVIDIA" { "p4" }
         "Intel" { "medium" }
         "AMD" { "balanced" }
+        "VAAPI" { "" }
         "Vulkan" { "" }
         "D3D12VA" { "" }
         "MF" { "" }
@@ -2037,7 +2192,7 @@ function Invoke-PlatformAutoSetup {
     # --- 確認画面 ---
     $qualityDesc = if ($PlatformConfig.NoMaxrate) { "CRF (品質優先・ビットレート上限なし)" } elseif ($selectedHW -eq "Intel" -and $auto.Codec -eq "VP9") { "QSV VBR (容量上限から自動計算)" } elseif ($selectedHW -eq "Intel" -and $auto.Codec -eq "H.265") { "QSV QVBR (品質目標・容量予算を併用)" } else { "CRF+Maxrate (容量内で最大品質を自動確保)" }
     $sizeDisp = if ($PlatformConfig.MaxFileSizeMB -ge 1024) { "$([math]::Round($PlatformConfig.MaxFileSizeMB / 1024, 1)) GB" } else { "$($PlatformConfig.MaxFileSizeMB) MB" }
-    Clear-Host
+    if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
     Write-Host "============= おまかせ自動設定 ============="
     Write-Host "  プラットフォーム : $($PlatformConfig.Name) (上限: $sizeDisp)"
     Write-Host "  品質方式         : $qualityDesc"
@@ -2098,7 +2253,7 @@ function Invoke-PlatformAutoSetup {
 function Invoke-PlatformDetailedSetup {
     param([hashtable]$PlatformConfig)
 
-    Clear-Host
+    if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
     Write-Host "  プラットフォーム     : $($PlatformConfig.Name)"
     Write-Host "  ファイルサイズ上限   : $($PlatformConfig.MaxFileSizeMB) MB"
     if ($PlatformConfig.MaxResolution) { Write-Host "  最大解像度           : $($PlatformConfig.MaxResolution)" }
@@ -2227,6 +2382,7 @@ function Invoke-PlatformDetailedSetup {
             if ($pIndex -lt 0) { return $null }
             $presetValue = $presetMap[$pIndex]
         }
+        "VAAPI" { $presetValue = "" }
         "Vulkan" { $presetValue = "" }
         "D3D12VA" { $presetValue = "" }
         "MF" { $presetValue = "" }
@@ -2415,7 +2571,7 @@ function Invoke-PlatformDetailedSetup {
     }
     $sizeDisp = if ($PlatformConfig.MaxFileSizeMB -ge 1024) { "$([math]::Round($PlatformConfig.MaxFileSizeMB / 1024, 1)) GB" } else { "$($PlatformConfig.MaxFileSizeMB) MB" }
     $encoderDisp = if ($specificEncoder) { "$selectedCodec ($specificEncoder)" } else { $selectedCodec }
-    Clear-Host
+    if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
     Write-Host "============= プラットフォームアップロード設定 ============="
     Write-Host "  プラットフォーム : $($PlatformConfig.Name) (上限: $sizeDisp)"
     Write-Host "  品質方式         : $qualityDesc"
@@ -2573,8 +2729,16 @@ function Start-MainProcess {
         @{ Label = "AMD (amf)"; Accel = "amf" },
         @{ Label = "推奨・Windows標準 (d3d11va)"; Accel = "d3d11va" },
         @{ Label = "Windows汎用 (dxva2)"; Accel = "dxva2" },
-        @{ Label = "Vulkan (vulkan)"; Accel = "vulkan" }
+        @{ Label = "Vulkan (vulkan)"; Accel = "vulkan" },
+        @{ Label = "VAAPI (vaapi)"; Accel = "vaapi" }
     )
+    # Windows 専用 API と Linux 専用 VAAPI を OS ごとに絞る
+    $allAccelChoices = @($allAccelChoices | Where-Object {
+        $_.Accel -eq "" -or
+        $_.Accel -in @("cuda", "qsv", "amf", "vulkan") -or
+        ($IsWindows -and $_.Accel -in @("d3d11va", "dxva2")) -or
+        (-not $IsWindows -and $_.Accel -eq "vaapi")
+    })
     $hwInfo = $global:HardwareInfo
     $filteredAccel = @()
     foreach ($entry in $allAccelChoices) {
@@ -2625,6 +2789,10 @@ function Start-MainProcess {
         if ($selectedHwAccel -eq "vulkan") {
             $hwAccelOption = Set-HwAccelOutputFormat -ArgString $hwAccelOption -Format 'vulkan'
         }
+        # Linux の VAAPI はデバイス指定が必須。VAAPI surface を維持して後段の scale_vaapi に渡す
+        if ($selectedHwAccel -eq "vaapi") {
+            $hwAccelOption = "-vaapi_device $($global:Settings.VaapiDevicePath) -hwaccel vaapi -hwaccel_output_format vaapi"
+        }
     }
 
     # --- 実行モード選択 ---
@@ -2633,6 +2801,7 @@ function Start-MainProcess {
     while ($true) {
     while ($true) {
         $selectedMode = Show-Menu -Title "実行モードを選択してください。" -Choices $modeChoices
+        if ($global:CtrlCRequested) { return }
         if ($selectedMode -eq -1) { return }
         if ($selectedMode -eq -2 -or $selectedMode -eq -3) { continue }
         break
@@ -2671,6 +2840,7 @@ function Start-MainProcess {
         4 { $config = Invoke-SplitModeSetup }
     }
     if (-not $config) {
+        if ($global:CtrlCRequested) { return }
         if ($global:MenuNav -eq 'allback') {
             # Delete: 最初のモード選択へ戻る
             $global:MenuNav = ''
@@ -2694,7 +2864,7 @@ function Start-MainProcess {
     foreach ($inputFile in $Path) {
         $inputFile = $inputFile.Trim('"')
         $fileCount++
-        Clear-Host
+        if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
         Write-Log "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" -NoTimestamp
         Write-Log " [ $fileCount / $totalFiles 個目のファイル処理開始 ]"
         Write-Log " ファイル名: $(Split-Path -Leaf $inputFile)"
@@ -2730,7 +2900,9 @@ function Invoke-InteractiveSetup {
         $outputMode = "Fixed"
     }
     
-    $afterProcessAction = @("None", "Shutdown", "Reboot", "Hibernate")[(Show-Menu -Title "エンコード完了後どうしますか？" -Choices @("何もしない", "シャットダウン", "再起動", "休止"))]
+    $powerActions = if ($IsWindows) { @("None", "Shutdown", "Reboot", "Hibernate") } else { @("None") }
+    $powerLabels = if ($IsWindows) { @("何もしない", "シャットダウン", "再起動", "休止") } else { @("何もしない") }
+    $afterProcessAction = $powerActions[(Show-Menu -Title "エンコード完了後どうしますか？" -Choices $powerLabels)]
     $extension = @("mp4", "mov", "mkv", "webm")[(Show-Menu -Title "出力ファイルの拡張子を選択してください。" -Choices @("mp4", "mov", "mkv", "webm"))]
     $cut = @("No", "Yes")[(Show-Menu -Title "動画をカットしますか？ (LosslessCutを使用)" -Choices @("いいえ", "はい"))]
     $metadata = @("ExifTool", "Ffmpeg", "None")[(Show-Menu -Title "動画のメタデータ(撮影日時など)を保持しますか？" -Choices @("ExifToolで全コピー", "ffmpeg形式で一部保持", "保持しない"))]
@@ -2794,7 +2966,9 @@ function Invoke-SplitModeSetup {
     $namingStyle = @("Text", "Number")[(Show-Menu -Title "分割後のファイル名規則を選択してください" -Choices @("チャプター/字幕のテキストを使用 (例: 元名_チャプター名.mp4)", "連番のみを使用 (例: 元名_01.mp4)"))]
 
     $extension = @("mp4", "mov", "mkv", "webm")[(Show-Menu -Title "出力ファイルの拡張子を選択してください。" -Choices @("mp4", "mov", "mkv", "webm"))]
-    $afterProcessAction = @("None", "Shutdown", "Reboot", "Hibernate")[(Show-Menu -Title "エンコード完了後どうしますか？" -Choices @("何もしない", "シャットダウン", "再起動", "休止"))]
+    $powerActions = if ($IsWindows) { @("None", "Shutdown", "Reboot", "Hibernate") } else { @("None") }
+    $powerLabels = if ($IsWindows) { @("何もしない", "シャットダウン", "再起動", "休止") } else { @("何もしない") }
+    $afterProcessAction = $powerActions[(Show-Menu -Title "エンコード完了後どうしますか？" -Choices $powerLabels)]
 
     return @{
         IsSplitMode        = $true
@@ -2970,6 +3144,8 @@ function Invoke-SplitEncodeFile {
             $effectiveHwAccelOption = $filterPipeline.HwAccelOption
             $ffmpegArgsList = @("-hide_banner", "-y")
             if ($effectiveHwAccelOption) { $ffmpegArgsList += $effectiveHwAccelOption.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) }
+            $vaapiDeviceOption = Get-VaapiDeviceOption -HwAccelOption $effectiveHwAccelOption -VideoOptions $Config.EncoderSettings.Video
+            if ($vaapiDeviceOption) { $ffmpegArgsList += $vaapiDeviceOption.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) }
             
             $ffmpegArgsList += @("-ss", "$($seg.Start)", "-to", "$($seg.End)")
             $ffmpegArgsList += @("-i", "`"$InputFile`"")
@@ -3088,7 +3264,12 @@ function Invoke-EncodeFile {
         $effectiveHwAccelOption = Get-EffectiveHwAccelOption -HwAccelOption $HwAccelOption -VideoOptions $Config.EncoderSettings.Video
 
         if ($Config.Cut -eq "Yes") {
-            Write-Log "LosslessCutを起動します..."; Start-Process $global:Settings.LosslessCutPath -ArgumentList "`"$InputFile`""
+            if ($global:Settings.LosslessCutPath) {
+                Write-Log "LosslessCutを起動します..."; Start-Process $global:Settings.LosslessCutPath -ArgumentList "`"$InputFile`""
+            }
+            else {
+                Write-Log "LosslessCut のパスが未設定のため、対話入力のみでカット位置を指定する。" -Level "WARN"
+            }
             $cutStart = Read-Host "開始位置 (例:00:01:15.000)"; $cutEnd = Read-Host "終了位置 (例:00:03:30.500)"
             if ($cutStart -and $cutEnd) { $cutInfo = "-ss $cutStart -to $cutEnd"; Write-Log "カット情報: 開始 $cutStart, 終了 $cutEnd" }
             else { Write-Log "カット位置が未入力のため、カットしません。" -Level "WARN" }
@@ -3269,6 +3450,8 @@ function Invoke-EncodeFile {
                 $pass1ArgsList += @("-fflags", "+genpts")
             }
             if ($pass1Pipeline.HwAccelOption) { $pass1ArgsList += $pass1Pipeline.HwAccelOption.Split(' ', $splitOptions) }
+            $pass1VaapiDevice = Get-VaapiDeviceOption -HwAccelOption $pass1Pipeline.HwAccelOption -VideoOptions $pass1VideoOptions
+            if ($pass1VaapiDevice) { $pass1ArgsList += $pass1VaapiDevice.Split(' ', $splitOptions) }
             $pass1ArgsList += $cutInfo.Split(' ', $splitOptions)
             $pass1ArgsList += @("-i", "`"$InputFile`"")
             if ($cutInfo) { $pass1ArgsList += @("-ss", "0") }
@@ -3277,7 +3460,7 @@ function Invoke-EncodeFile {
             if ($pass1Pipeline.Filter) { $pass1ArgsList += @("-vf", ('"{0}"' -f $pass1Pipeline.Filter)) }
             if ($Config.AdditionalArgs) { $pass1ArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
             $pass1ArgsList = Add-PreservedFrameRateOption -Arguments $pass1ArgsList -VideoOptions $pass1VideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $pass1Pipeline.Filter -ForceCfr ([bool]$Config.PlatformMode) -SourceFrameRate $platformSourceFrameRate
-            $pass1ArgsList += @("-an", "-f", "null", "NUL")
+            $pass1ArgsList += @("-an", "-f", "null", "-")
 
             Write-Log "========= 2pass: 1st pass 実行 =========" -NoTimestamp
             $pass1ArgString = $pass1ArgsList -join ' '
@@ -3324,6 +3507,8 @@ function Invoke-EncodeFile {
             $ffmpegArgsList += @("-fflags", "+genpts")
         }
         if ($effectiveHwAccelOption) { $ffmpegArgsList += $effectiveHwAccelOption.Split(' ', $splitOptions) }
+        $vaapiDeviceOption = Get-VaapiDeviceOption -HwAccelOption $effectiveHwAccelOption -VideoOptions $currentVideoOptions
+        if ($vaapiDeviceOption) { $ffmpegArgsList += $vaapiDeviceOption.Split(' ', $splitOptions) }
         $ffmpegArgsList += $cutInfo.Split(' ', $splitOptions)
         $ffmpegArgsList += @("-i", "`"$InputFile`"")
 
@@ -3459,6 +3644,10 @@ function Invoke-EncodeFile {
 #region 後処理アクション
 function Invoke-AfterProcessAction {
     param ([string]$Action)
+    if (-not $IsWindows -and $Action -ne "None") {
+        Write-Log "電源アクションは Windows 専用のため Linux ではスキップする。" -Level "WARN"
+        return
+    }
     switch ($Action) {
         "Shutdown" { Write-Host "60秒後にシャットダウン..."; Start-Sleep -Seconds 60; shutdown.exe -s -t 1 }
         "Reboot" { Write-Host "60秒後に再起動..."; Start-Sleep -Seconds 60; shutdown.exe -r -t 1 }
@@ -3481,6 +3670,7 @@ catch {
     Write-Log "  スタックトレース: $($_.ScriptStackTrace)" -Level "ERROR"
 }
 finally {
+    if ($global:CtrlCRequested) { Write-Log "Ctrl+C によりメニューをキャンセルして終了しました。" -Level "WARN" }
     Write-Log "処理を終了します。"
     if ($global:LogFilePath) { Write-Log "ログファイル: $($global:LogFilePath)" }
     Read-Host "何かキーを押して終了"

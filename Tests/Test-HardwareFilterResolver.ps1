@@ -97,7 +97,7 @@ Assert-Equal 'scale=1280:720' $none.Filter 'HW形式なしでは変更しない'
 $cachePath = Get-HwFilterCachePath
 $invalid = [pscustomobject]@{
     SchemaVersion   = 1
-    MachineName     = $env:COMPUTERNAME
+    MachineName     = [Environment]::MachineName
     SavedAt         = Get-Date
     FfmpegSignature = 'invalid-signature'
     Results         = @{ 'old' = $true }

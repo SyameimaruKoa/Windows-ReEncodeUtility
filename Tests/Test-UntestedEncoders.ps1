@@ -24,10 +24,10 @@ $ffprobe = $global:Settings.FfprobePath
 
 $script:Results = [System.Collections.Generic.List[object]]::new()
 function Add-Result {
-    param([string]$Category, [string]$Name, [bool]$Success, [string]$Detail = '')
-    $script:Results.Add([pscustomobject]@{ Category = $Category; Name = $Name; Success = $Success; Detail = $Detail })
-    $mark = if ($Success) { 'PASS' } else { 'FAIL' }
-    Write-Host ("  [{0}] {1} :: {2}" -f $mark, $Name, $Detail)
+    param([string]$Category, [string]$Name, [bool]$Success, [string]$Detail = '', [switch]$Skip)
+    $result = if ($Skip) { 'SKIP' } elseif ($Success) { 'PASS' } else { 'FAIL' }
+    $script:Results.Add([pscustomobject]@{ Category = $Category; Name = $Name; Result = $result; Success = $Success; Detail = $Detail })
+    Write-Host ("  [{0}] {1} :: {2}" -f $result, $Name, $Detail)
 }
 
 function Invoke-Probe {
@@ -58,7 +58,7 @@ function Test-EncoderOption {
 }
 
 # --- 入力素材（実動画があればそれを短く切り出し、無ければ合成） ---
-$sourceVideo = 'C:\Users\kouki\Documents\MyApp\Windows-ReEncodeUtility\.cache\Azahar 2126.2 _ SUPER MARIO 3D LAND 2026-11-16 19-03-51.mp4'
+$sourceVideo = Join-Path $rootDir '.cache\Azahar 2126.2 _ SUPER MARIO 3D LAND 2026-11-16 19-03-51.mp4'
 $clip = Join-Path $global:AppTempDir 'src.mkv'
 if (Test-Path -LiteralPath $sourceVideo -PathType Leaf) {
     $null = & $ffmpeg -hide_banner -loglevel error -y -ss 0 -t 2 -i $sourceVideo -c copy $clip 2>&1
@@ -78,73 +78,79 @@ foreach ($enc in @('h264_vulkan', 'hevc_vulkan', 'av1_vulkan', 'ffv1_vulkan', 'p
     # (a) 通常の CPU フレーム入力
     $r = Invoke-Probe -Arguments @($ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
         '-f', 'lavfi', '-i', 'color=c=black:s=256x256:r=25:d=0.4', '-frames:v', '2', '-an',
-        '-c:v', $enc, '-b:v', '2000k', '-f', 'null', 'NUL')
+        '-c:v', $enc, '-b:v', '2000k', '-f', 'null', '-')
     Add-Result -Category 'Vulkan' -Name "$enc / CPU入力" -Success $r.Success -Detail $r.Error
 
     # (b) Vulkan デバイスを初期化し、hwupload で GPU フレームを渡す
     $r2 = Invoke-Probe -Arguments @($ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
         '-init_hw_device', 'vulkan=vk', '-filter_hw_device', 'vk',
         '-f', 'lavfi', '-i', 'color=c=black:s=256x256:r=25:d=0.4', '-frames:v', '2', '-an',
-        '-vf', 'format=nv12,hwupload', '-pix_fmt', 'vulkan', '-c:v', $enc, '-b:v', '2000k', '-f', 'null', 'NUL')
+        '-vf', 'format=nv12,hwupload', '-pix_fmt', 'vulkan', '-c:v', $enc, '-b:v', '2000k', '-f', 'null', '-')
     Add-Result -Category 'Vulkan' -Name "$enc / hwupload+pix_fmt=vulkan" -Success $r2.Success -Detail $r2.Error
 
     # (c) Vulkan ハードウェアデコード → Vulkan エンコード
     $r3 = Invoke-Probe -Arguments @($ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
         '-hwaccel', 'vulkan', '-hwaccel_output_format', 'vulkan', '-i', $clip,
-        '-frames:v', '2', '-an', '-c:v', $enc, '-b:v', '2000k', '-f', 'null', 'NUL')
+        '-frames:v', '2', '-an', '-c:v', $enc, '-b:v', '2000k', '-f', 'null', '-')
     Add-Result -Category 'Vulkan' -Name "$enc / vulkanデコード" -Success $r3.Success -Detail $r3.Error
 }
 
 # ============================================================
 Write-Host "`n===== [2/4] D3D12VA 映像エンコーダー ====="
 # ============================================================
-foreach ($enc in @('h264_d3d12va', 'hevc_d3d12va', 'av1_d3d12va')) {
+$d3d12Encoders = if ($IsWindows) { @('h264_d3d12va', 'hevc_d3d12va', 'av1_d3d12va') } else { @() }
+foreach ($enc in $d3d12Encoders) {
     $r = Invoke-Probe -Arguments @($ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
         '-f', 'lavfi', '-i', 'color=c=black:s=256x256:r=25:d=0.4', '-frames:v', '2', '-an',
-        '-c:v', $enc, '-b:v', '2000k', '-f', 'null', 'NUL')
+        '-c:v', $enc, '-b:v', '2000k', '-f', 'null', '-')
     Add-Result -Category 'D3D12VA' -Name "$enc / CPU入力" -Success $r.Success -Detail $r.Error
 
     $r2 = Invoke-Probe -Arguments @($ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
         '-init_hw_device', 'd3d12va=d3d', '-filter_hw_device', 'd3d',
         '-f', 'lavfi', '-i', 'color=c=black:s=256x256:r=25:d=0.4', '-frames:v', '2', '-an',
-        '-vf', 'format=nv12,hwupload', '-pix_fmt', 'd3d12', '-c:v', $enc, '-b:v', '2000k', '-f', 'null', 'NUL')
+        '-vf', 'format=nv12,hwupload', '-pix_fmt', 'd3d12', '-c:v', $enc, '-b:v', '2000k', '-f', 'null', '-')
     Add-Result -Category 'D3D12VA' -Name "$enc / hwupload+pix_fmt=d3d12" -Success $r2.Success -Detail $r2.Error
 }
+if (-not $IsWindows) { Add-Result -Category 'D3D12VA' -Name 'D3D12VA 映像エンコーダー' -Success $false -Detail 'Linux では D3D12VA は利用不可' -Skip }
 
 # ============================================================
 Write-Host "`n===== [3/4] 未テストの MediaFoundation 映像エンコーダー ====="
 # ============================================================
-foreach ($enc in @('hevc_mf', 'av1_mf')) {
+$mfVideoEncoders = if ($IsWindows) { @('hevc_mf', 'av1_mf') } else { @() }
+foreach ($enc in $mfVideoEncoders) {
     $r = Invoke-Probe -Arguments @($ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
         '-f', 'lavfi', '-i', 'color=c=black:s=256x256:r=25:d=0.4', '-frames:v', '2', '-an',
-        '-c:v', $enc, '-b:v', '2000k', '-f', 'null', 'NUL')
+        '-c:v', $enc, '-b:v', '2000k', '-f', 'null', '-')
     Add-Result -Category 'MF-Video' -Name "$enc / 基本" -Success $r.Success -Detail $r.Error
 
     if (Test-EncoderOption -Encoder $enc -Option 'hw_encoding') {
         $r2 = Invoke-Probe -Arguments @($ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
             '-f', 'lavfi', '-i', 'color=c=black:s=256x256:r=25:d=0.4', '-frames:v', '2', '-an',
-            '-c:v', $enc, '-hw_encoding', '1', '-b:v', '2000k', '-f', 'null', 'NUL')
+            '-c:v', $enc, '-hw_encoding', '1', '-b:v', '2000k', '-f', 'null', '-')
         Add-Result -Category 'MF-Video' -Name "$enc / hw_encoding=1" -Success $r2.Success -Detail $r2.Error
     }
     else {
         Add-Result -Category 'MF-Video' -Name "$enc / hw_encoding=1" -Success $false -Detail 'hw_encoding オプション非対応'
     }
 }
+if (-not $IsWindows) { Add-Result -Category 'MF-Video' -Name 'MediaFoundation 映像エンコーダー' -Success $false -Detail 'Linux では MediaFoundation は利用不可' -Skip }
 
 # ============================================================
 Write-Host "`n===== [4/4] 音声エンコーダー ====="
 # ============================================================
-foreach ($enc in @('aac_mf', 'ac3_mf', 'mp3_mf')) {
+$mfAudioEncoders = if ($IsWindows) { @('aac_mf', 'ac3_mf', 'mp3_mf') } else { @() }
+foreach ($enc in $mfAudioEncoders) {
     $r = Invoke-Probe -Arguments @($ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
-        '-i', $wav, '-vn', '-frames:a', '2', '-c:a', $enc, '-b:a', '128k', '-f', 'null', 'NUL')
+        '-i', $wav, '-vn', '-frames:a', '2', '-c:a', $enc, '-b:a', '128k', '-f', 'null', '-')
     Add-Result -Category 'MF-Audio' -Name "$enc / 基本" -Success $r.Success -Detail $r.Error
 
     if (Test-EncoderOption -Encoder $enc -Option 'hw_encoding') {
         $r2 = Invoke-Probe -Arguments @($ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
-            '-i', $wav, '-vn', '-frames:a', '2', '-c:a', $enc, '-hw_encoding', '1', '-b:a', '128k', '-f', 'null', 'NUL')
+            '-i', $wav, '-vn', '-frames:a', '2', '-c:a', $enc, '-hw_encoding', '1', '-b:a', '128k', '-f', 'null', '-')
         Add-Result -Category 'MF-Audio' -Name "$enc / hw_encoding=1" -Success $r2.Success -Detail $r2.Error
     }
 }
+if (-not $IsWindows) { Add-Result -Category 'MF-Audio' -Name 'MediaFoundation 音声エンコーダー' -Success $false -Detail 'Linux では MediaFoundation は利用不可' -Skip }
 
 # 外部音声エンコーダー（アプリと同じ引数形式）
 $external = @(
@@ -165,7 +171,7 @@ $external = @(
 foreach ($e in $external) {
     $exe = $e.Exe
     if (-not $exe -or -not (Get-Command $exe -ErrorAction SilentlyContinue)) {
-        Add-Result -Category 'External-Audio' -Name "$($e.Type)" -Success $false -Detail '実行ファイルが見つからない'
+        Add-Result -Category 'External-Audio' -Name "$($e.Type)" -Success $false -Detail '実行ファイルが見つからない' -Skip
         continue
     }
     foreach ($case in $e.Cases) {
@@ -193,20 +199,22 @@ foreach ($e in $external) {
 # --- 結果保存 ---
 $report = [ordered]@{
     GeneratedAt = (Get-Date).ToString('o')
-    MachineName = $env:COMPUTERNAME
+    MachineName = [Environment]::MachineName
     Results     = @($script:Results)
 }
 $jsonPath = Join-Path $global:AppCacheDir 'untested-encoders.json'
 try { $report | ConvertTo-Json -Depth 6 | Out-File -LiteralPath $jsonPath -Encoding utf8 -Force }
 catch { Write-Host "結果保存失敗: $_" -ForegroundColor Red }
 
-$ok = @($script:Results | Where-Object { $_.Success }).Count
+$ok = @($script:Results | Where-Object { $_.Result -eq 'PASS' }).Count
+$failed = @($script:Results | Where-Object { $_.Result -eq 'FAIL' }).Count
+$skipped = @($script:Results | Where-Object { $_.Result -eq 'SKIP' }).Count
 Write-Host "`n================ サマリー ================"
-Write-Host "PASS=$ok / FAIL=$($script:Results.Count - $ok)"
+Write-Host "PASS=$ok / FAIL=$failed / SKIP=$skipped"
 Write-Host "詳細: $jsonPath"
-if ($script:Results.Count - $ok -gt 0) {
+if ($failed -gt 0) {
     Write-Host "`n--- 失敗一覧 ---" -ForegroundColor Red
-    $script:Results | Where-Object { -not $_.Success } | ForEach-Object {
+    $script:Results | Where-Object { $_.Result -eq 'FAIL' } | ForEach-Object {
         Write-Host "  [$($_.Category)] $($_.Name) :: $($_.Detail)" -ForegroundColor Red
     }
 }

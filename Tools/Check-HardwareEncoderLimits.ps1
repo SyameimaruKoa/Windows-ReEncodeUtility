@@ -123,7 +123,7 @@ foreach ($enc in $encoderSet) {
     # 1. 基本利用可否
     $baseArgs = @('-hide_banner', '-loglevel', 'error', '-y',
         '-f', 'lavfi', '-i', 'color=c=black:s=256x256:r=25:d=0.4',
-        '-frames:v', '2', '-an', '-c:v', $enc, '-b:v', '2000k', '-f', 'null', 'NUL')
+        '-frames:v', '2', '-an', '-c:v', $enc, '-b:v', '2000k', '-f', 'null', '-')
     $base = Invoke-LimitProbe -Arguments $baseArgs
     $probeCount++
     $entry.Available = $base.Success
@@ -139,7 +139,7 @@ foreach ($enc in $encoderSet) {
     foreach ($q in $qualityCandidates) {
         $a = @('-hide_banner', '-loglevel', 'error', '-y',
             '-f', 'lavfi', '-i', 'color=c=black:s=256x256:r=25:d=0.4',
-            '-frames:v', '2', '-an', '-c:v', $enc) + $q.Args + @('-f', 'null', 'NUL')
+            '-frames:v', '2', '-an', '-c:v', $enc) + $q.Args + @('-f', 'null', '-')
         $r = Invoke-LimitProbe -Arguments $a
         $probeCount++
         if ($r.Success) { $entry.QualityOptions += $q.Name }
@@ -152,7 +152,7 @@ foreach ($enc in $encoderSet) {
             $a = @('-hide_banner', '-loglevel', 'error', '-y',
                 '-f', 'lavfi', '-i', 'color=c=black:s=256x256:r=25:d=0.4',
                 '-frames:v', '2', '-an', '-vf', "format=$pf", '-pix_fmt', $pf,
-                '-c:v', $enc, '-b:v', '2000k', '-f', 'null', 'NUL')
+                '-c:v', $enc, '-b:v', '2000k', '-f', 'null', '-')
             $r = Invoke-LimitProbe -Arguments $a
             $probeCount++
             if ($r.Success) { $entry.PixelFormats += $pf }
@@ -163,7 +163,7 @@ foreach ($enc in $encoderSet) {
         foreach ($res in $resolutions) {
             $a = @('-hide_banner', '-loglevel', 'error', '-y',
                 '-f', 'lavfi', '-i', "color=c=black:s=$($res.W)x$($res.H):r=25:d=0.2",
-                '-frames:v', '2', '-an', '-c:v', $enc, '-b:v', '3000k', '-f', 'null', 'NUL')
+                '-frames:v', '2', '-an', '-c:v', $enc, '-b:v', '3000k', '-f', 'null', '-')
             $r = Invoke-LimitProbe -Arguments $a
             $probeCount++
             if ($r.Success) {
@@ -190,7 +190,7 @@ foreach ($enc in $encoderSet) {
                 $a = @('-hide_banner', '-loglevel', 'error', '-y', '-hwaccel', $accel)
                 if ($of) { $a += @('-hwaccel_output_format', $of) }
                 $a += @('-i', $probeInput, '-frames:v', '2', '-an', '-vf', 'hwdownload,format=nv12,scale=320:180',
-                    '-c:v', $enc, '-b:v', '2000k', '-f', 'null', 'NUL')
+                    '-c:v', $enc, '-b:v', '2000k', '-f', 'null', '-')
                 $r = Invoke-LimitProbe -Arguments $a
                 $probeCount++
                 $entry.HwDecodePaths += [pscustomobject]@{

@@ -56,6 +56,12 @@ if ($global:Settings -and $global:Settings.FfmpegPath) {
     $ffmpegPath = $global:Settings.FfmpegPath
 }
 
+# VAAPI はデバイスファイルを明示指定しないと初期化に失敗する環境がある
+$vaapiDevicePath = "/dev/dri/renderD128"
+if ($global:Settings -and $global:Settings.VaapiDevicePath) {
+    $vaapiDevicePath = $global:Settings.VaapiDevicePath
+}
+
 function Get-FfmpegSignature {
     param([string]$FfPath)
     $resolvedPath = $FfPath
@@ -84,8 +90,8 @@ function Load-HardwareCache {
     if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) { return $null }
     try { $cached = Import-Clixml -Path $cachePath } catch { return $null }
 
-    if (-not $cached -or $cached.SchemaVersion -ne 3) { return $null }
-    if ($cached.MachineName -ne $env:COMPUTERNAME) { return $null }
+    if (-not $cached -or $cached.SchemaVersion -ne 4) { return $null }
+    if ($cached.MachineName -ne [System.Environment]::MachineName) { return $null }
     if ($cached.FfmpegSignature -ne (Get-FfmpegSignature -FfPath $ffmpegPath)) { return $null }
     if (-not $cached.ScanCompleted) { return $null }
     return $cached
@@ -95,8 +101,8 @@ function Save-HardwareCache {
     param([object]$HardwareInfo)
     $cachePath = Get-HardwareCachePath
     $cacheObject = [pscustomobject]@{
-        SchemaVersion     = 3
-        MachineName       = $env:COMPUTERNAME
+        SchemaVersion     = 4
+        MachineName       = [System.Environment]::MachineName
         SavedAt           = Get-Date
         FfmpegSignature   = Get-FfmpegSignature -FfPath $ffmpegPath
         AvailableEncoders = @($HardwareInfo.AvailableEncoders)
@@ -105,6 +111,7 @@ function Save-HardwareCache {
         HasIntel          = [bool]$HardwareInfo.HasIntel
         HasAMD            = [bool]$HardwareInfo.HasAMD
         HasVulkan         = [bool]$HardwareInfo.HasVulkan
+        HasVAAPI          = [bool]$HardwareInfo.HasVAAPI
         HasD3D12VA        = [bool]$HardwareInfo.HasD3D12VA
         HasMF             = [bool]$HardwareInfo.HasMF
         ScanCompleted     = [bool]$HardwareInfo.ScanCompleted
@@ -137,6 +144,7 @@ $info = @{
     HasIntel          = $false
     HasAMD            = $false
     HasVulkan         = $false
+    HasVAAPI          = $false
     HasD3D12VA        = $false
     HasMF             = $false
     ScanCompleted     = $false
@@ -146,7 +154,7 @@ try {
     $encodersList = & $ffmpegPath -hide_banner -encoders 2>&1 | Out-String
     $videoEncoders = @(); $audioEncoders = @()
     
-    $regex = [regex] '(?m)^\s*([VA])[.\w]+\s+(\w+_(nvenc|qsv|amf|vulkan|mf|d3d12va))\s+'
+    $regex = [regex] '(?m)^\s*([VA])[.\w]+\s+(\w+_(nvenc|qsv|amf|vulkan|mf|d3d12va|vaapi))\s+'
     $matches = $regex.Matches($encodersList)
     
     foreach ($match in $matches) {
@@ -158,12 +166,18 @@ try {
 
     foreach ($enc in $videoEncoders) {
         try {
-            $null = & $ffmpegPath -hide_banner -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 1 -c:v $enc -f null NUL 2>&1
+            if ($enc -match '_vaapi$') {
+                # VAAPI エンコーダは VAAPI surface のみを受け付けるため、CPU フレームを hwupload する
+                $null = & $ffmpegPath -hide_banner -vaapi_device $vaapiDevicePath -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -vf 'format=nv12,hwupload' -frames:v 1 -c:v $enc -f null - 2>&1
+            }
+            else {
+                $null = & $ffmpegPath -hide_banner -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 1 -c:v $enc -f null - 2>&1
+            }
             if ($LASTEXITCODE -eq 0) {
                 $info.AvailableEncoders += $enc
             }
-            else {
-                $null = & $ffmpegPath -hide_banner -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 1 -pix_fmt yuv420p -c:v $enc -f null NUL 2>&1
+            elseif ($enc -notmatch '_vaapi$') {
+                $null = & $ffmpegPath -hide_banner -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 1 -pix_fmt yuv420p -c:v $enc -f null - 2>&1
                 if ($LASTEXITCODE -eq 0) { $info.AvailableEncoders += $enc }
             }
         }
@@ -179,6 +193,7 @@ try {
     $info.HasIntel = @($info.AvailableEncoders | Where-Object { $_ -match '_qsv$' }).Count -gt 0
     $info.HasAMD = @($info.AvailableEncoders | Where-Object { $_ -match '_amf$' }).Count -gt 0
     $info.HasVulkan = @($info.AvailableEncoders | Where-Object { $_ -match '_vulkan$' }).Count -gt 0
+    $info.HasVAAPI = @($info.AvailableEncoders | Where-Object { $_ -match '_vaapi$' }).Count -gt 0
     $info.HasD3D12VA = @($info.AvailableEncoders | Where-Object { $_ -match '_d3d12va$' }).Count -gt 0
     $info.HasMF = @($info.AvailableEncoders | Where-Object { $_ -match '_mf$' }).Count -gt 0
 
@@ -186,10 +201,17 @@ try {
     try {
         $null = & $ffmpegPath -hide_banner -y -f lavfi -i 'color=c=black:s=256x256:d=0.5:r=25' -frames:v 5 -pix_fmt yuv420p -c:v libx264 -preset ultrafast "$testClipPath" 2>&1
         if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $testClipPath)) {
-            $hwaccelList = @('cuda', 'qsv', 'amf', 'd3d11va', 'dxva2', 'vulkan')
+            $hwaccelList = @('cuda', 'qsv', 'amf', 'vulkan')
+            if ($IsWindows) { $hwaccelList += @('d3d11va', 'dxva2') }
+            if (-not $IsWindows -and (Test-Path -LiteralPath $vaapiDevicePath)) { $hwaccelList += 'vaapi' }
             foreach ($accel in $hwaccelList) {
                 try {
-                    $testOut = & $ffmpegPath -hide_banner -hwaccel $accel -i "$testClipPath" -frames:v 1 -f null - 2>&1
+                    if ($accel -eq 'vaapi') {
+                        $testOut = & $ffmpegPath -hide_banner -vaapi_device $vaapiDevicePath -hwaccel vaapi -i "$testClipPath" -frames:v 1 -f null - 2>&1
+                    }
+                    else {
+                        $testOut = & $ffmpegPath -hide_banner -hwaccel $accel -i "$testClipPath" -frames:v 1 -f null - 2>&1
+                    }
                     if ($LASTEXITCODE -eq 0) {
                         $hasInitError = ($testOut | Out-String) -match 'Failed setup|initialisation returned error|Device does not support|No device available|Hardware device setup failed|Error creating a MFX session'
                         if (-not $hasInitError) {
@@ -213,7 +235,7 @@ try {
 
     $info.ScanCompleted = $true
 
-    Write-LogFallback "テスト結果: NVIDIA=$($info.HasNvidia) Intel=$($info.HasIntel) AMD=$($info.HasAMD) Vulkan=$($info.HasVulkan) D3D12VA=$($info.HasD3D12VA) MF=$($info.HasMF)" -Level "DEBUG"
+    Write-LogFallback "テスト結果: NVIDIA=$($info.HasNvidia) Intel=$($info.HasIntel) AMD=$($info.HasAMD) Vulkan=$($info.HasVulkan) VAAPI=$($info.HasVAAPI) D3D12VA=$($info.HasD3D12VA) MF=$($info.HasMF)" -Level "DEBUG"
     Write-LogFallback "  エンコーダー: [$($info.AvailableEncoders -join ', ')]" -Level "DEBUG"
     Write-LogFallback "  HWアクセル  : [$($info.AvailableHwAccels -join ', ')]" -Level "DEBUG"
 }
