@@ -36,6 +36,7 @@ for d in (CACHE, SEGMENTS, ENCODED, ANALYSIS, REPORTS):
     d.mkdir(parents=True, exist_ok=True)
 
 FFMPEG = os.environ.get("QB_FFMPEG", "ffmpeg")
+ENCODE_FFMPEG = os.environ.get("QB_ENCODE_FFMPEG", FFMPEG)
 FFPROBE = os.environ.get("QB_FFPROBE", "ffprobe")
 
 SOURCES = {
@@ -200,11 +201,9 @@ def cmd_baseline(args):
             print(f"[FAIL] {name}: {log[-500:]}")
             continue
         metrics = measure_vmaf(out, seg)
-        # Also store the 5s tuning target so other machines can reuse it without
-        # needing the encoded baseline file (paths are platform-specific).
-        ref_t = trim_clip(seg, SEGMENTS / f"{name}-tune-ref.mkv")
-        enc_t = trim_clip(out, ENCODED / f"baseline-{name}-tune.mkv")
-        tune_metrics = measure_vmaf(enc_t, ref_t)
+        # Use the full segment VMAF as the tuning target so every machine can
+        # match the baseline without needing the encoded baseline file.
+        tune_metrics = metrics
         results[name] = {
             "target_vmaf": metrics["vmaf"],
             "tune_vmaf": tune_metrics["vmaf"],
@@ -269,7 +268,7 @@ def cmd_detect(args):
     print("[DONE] encoders.json")
 
 
-def trim_clip(src, out_path, seconds=5.0):
+def trim_clip(src, out_path, seconds=10.0):
     """Make a short copy for tuning. Segments are FFV1 with g=1 so copy is exact."""
     rc, out = run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
                    "-i", str(src), "-t", f"{seconds:.3f}", "-c", "copy", str(out_path)])
@@ -387,7 +386,7 @@ def has_cu_assist(encoder):
 
 
 def encode_and_vmaf(seg, out_path, options):
-    rc, log = run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+    rc, log = run([ENCODE_FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
                    "-i", str(seg)] + options + [str(out_path)])
     if rc != 0:
         return None, log[-500:]
