@@ -51,10 +51,29 @@ if ($HwScanMode -ne "Off") {
     }
 }
 
+# --- 画面クリア関数 ---
+# グローバルスコープに Clear-Screen が無い場合のみローカルで定義する
+if (-not (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue)) {
+    function Clear-Screen {
+        if (-not $IsWindows) { Write-Host ""; return }
+        Clear-Host
+    }
+}
+
 # --- 対話メニュー関数 ---
 # グローバルスコープに Show-Menu が定義されていない場合のみローカルで定義する
 # (re-encode-AIOptimus.ps1 から呼ばれる場合は既にグローバルに存在する)
 if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue)) {
+        function Clear-MenuLines {
+            param ([int]$Lines)
+            if ($IsWindows -or $Lines -le 0) { return }
+            for ($i = 0; $i -lt $Lines; $i++) {
+                [Console]::Write("`e[1A`e[2K")
+            }
+            [Console]::Write("`e[G")
+        }
+    }
     function Show-Menu {
         param (
             [string]$Title,
@@ -62,8 +81,18 @@ if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction Silen
             [int]$DefaultIndex = 0
         )
         $currentIndex = $DefaultIndex
+        $drawnLines = ($Title -split "`r?`n").Count + 1 + $Choices.Length + 2
+        $firstDraw = $true
         while ($true) {
-            Clear-Host
+            if ($IsWindows) {
+                Clear-Screen
+            }
+            elseif (-not $firstDraw) {
+                if (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue) {
+                    Clear-MenuLines -Lines $drawnLines
+                }
+            }
+            $firstDraw = $false
             Write-Host "$Title`n"
             for ($i = 0; $i -lt $Choices.Length; $i++) {
                 if ($i -eq $currentIndex) {
@@ -442,7 +471,7 @@ function Get-EncoderSettings {
 
     if (-not $videoSetting) { return $null } # 途中でキャンセルされた場合
 
-    Clear-Host
+    if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
     Write-Host "--- 最終確認 ---"
     Write-Host "映像: $videoSetting"
     Write-Host "音声: $($audioSetting.Description)"
@@ -594,7 +623,7 @@ function Get-IntermediateSettings {
         }
     }
 
-    Clear-Host
+    if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
     Write-Host "--- 最終確認 ---"
     Write-Host "映像: $videoSetting"
     Write-Host "音声: $($audioSetting.Description)"

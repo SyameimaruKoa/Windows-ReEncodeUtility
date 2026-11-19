@@ -802,16 +802,46 @@ function Read-MenuKey {
     return $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 }
 
+function Clear-Screen {
+    <#
+    .SYNOPSIS
+        画面をクリアする。Windows では従来どおり Clear-Host するが、
+        Linux では画面全体を上書きせず末尾に空行を入れるだけにする。
+    #>
+    if (-not $IsWindows) { Write-Host ""; return }
+    Clear-Host
+}
+
+function Clear-MenuLines {
+    <#
+    .SYNOPSIS
+        メニューの再描画前に、直前に描画した行だけを消す。
+        Windows では従来どおり Clear-Host するが、Linux では画面全体を消さない。
+    #>
+    param ([int]$Lines)
+    if ($IsWindows -or $Lines -le 0) { return }
+    for ($i = 0; $i -lt $Lines; $i++) {
+        [Console]::Write("`e[1A`e[2K")
+    }
+    [Console]::Write("`e[G")
+}
+
 function Show-Menu {
     param ([string]$Title, [string[]]$Choices, [int]$DefaultIndex = 0, [switch]$NoClear)
     
-    if (-not $NoClear) { Clear-Host }
+    if (-not $NoClear) {
+        if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) {
+            Clear-Screen
+        }
+        elseif ($IsWindows) { Clear-Host }
+    }
     
     $currentIndex = $DefaultIndex
     
     $titleLines = ($Title -split "`r?`n").Count + 1
     $menuLines = $Choices.Length
     $totalLines = $titleLines + $menuLines + 1 # 操作ヒント1行分
+    $drawnLines = $titleLines + $menuLines + 2 # 操作ヒント前の空行とヒント行分
 
     try {
         $startY = $Host.UI.RawUI.CursorPosition.Y
@@ -841,18 +871,25 @@ function Show-Menu {
 
     while ($true) {
         if (-not $firstDraw) {
-            if ($NoClear) {
-                # スキャン結果を消さない指定では、従来どおりメニュー領域を再描画する
-                try {
-                    $Host.UI.RawUI.CursorPosition = $startPos
+            if ($IsWindows) {
+                # Windows は従来どおり画面をクリアして全角文字の重複を防ぐ
+                if ($NoClear) {
+                    try {
+                        $Host.UI.RawUI.CursorPosition = $startPos
+                    }
+                    catch {
+                        Clear-Host
+                    }
                 }
-                catch {
+                else {
                     Clear-Host
                 }
             }
             else {
-                # 全角文字や折り返しでカーソル位置がずれ、文字が重複することを防ぐ
-                Clear-Host
+                # Linux では画面全体を消さず、直前のメニュー行だけを書き換える
+                if (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue) {
+                    Clear-MenuLines -Lines $drawnLines
+                }
             }
         }
         $firstDraw = $false
@@ -2085,7 +2122,7 @@ function Invoke-PlatformAutoSetup {
     # --- 確認画面 ---
     $qualityDesc = if ($PlatformConfig.NoMaxrate) { "CRF (品質優先・ビットレート上限なし)" } elseif ($selectedHW -eq "Intel" -and $auto.Codec -eq "VP9") { "QSV VBR (容量上限から自動計算)" } elseif ($selectedHW -eq "Intel" -and $auto.Codec -eq "H.265") { "QSV QVBR (品質目標・容量予算を併用)" } else { "CRF+Maxrate (容量内で最大品質を自動確保)" }
     $sizeDisp = if ($PlatformConfig.MaxFileSizeMB -ge 1024) { "$([math]::Round($PlatformConfig.MaxFileSizeMB / 1024, 1)) GB" } else { "$($PlatformConfig.MaxFileSizeMB) MB" }
-    Clear-Host
+    if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
     Write-Host "============= おまかせ自動設定 ============="
     Write-Host "  プラットフォーム : $($PlatformConfig.Name) (上限: $sizeDisp)"
     Write-Host "  品質方式         : $qualityDesc"
@@ -2146,7 +2183,7 @@ function Invoke-PlatformAutoSetup {
 function Invoke-PlatformDetailedSetup {
     param([hashtable]$PlatformConfig)
 
-    Clear-Host
+    if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
     Write-Host "  プラットフォーム     : $($PlatformConfig.Name)"
     Write-Host "  ファイルサイズ上限   : $($PlatformConfig.MaxFileSizeMB) MB"
     if ($PlatformConfig.MaxResolution) { Write-Host "  最大解像度           : $($PlatformConfig.MaxResolution)" }
@@ -2452,7 +2489,7 @@ function Invoke-PlatformDetailedSetup {
     }
     $sizeDisp = if ($PlatformConfig.MaxFileSizeMB -ge 1024) { "$([math]::Round($PlatformConfig.MaxFileSizeMB / 1024, 1)) GB" } else { "$($PlatformConfig.MaxFileSizeMB) MB" }
     $encoderDisp = if ($specificEncoder) { "$selectedCodec ($specificEncoder)" } else { $selectedCodec }
-    Clear-Host
+    if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
     Write-Host "============= プラットフォームアップロード設定 ============="
     Write-Host "  プラットフォーム : $($PlatformConfig.Name) (上限: $sizeDisp)"
     Write-Host "  品質方式         : $qualityDesc"
@@ -2743,7 +2780,7 @@ function Start-MainProcess {
     foreach ($inputFile in $Path) {
         $inputFile = $inputFile.Trim('"')
         $fileCount++
-        Clear-Host
+        if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
         Write-Log "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" -NoTimestamp
         Write-Log " [ $fileCount / $totalFiles 個目のファイル処理開始 ]"
         Write-Log " ファイル名: $(Split-Path -Leaf $inputFile)"

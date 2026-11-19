@@ -15,6 +15,7 @@
 - ffmpeg の自前ビルドはしない。libfdk_aac 込み ffmpeg のビルドも見送り（将来 FFmpeg 9.1 の内蔵 AAC 改善を様子見）。qaac は Windows のまま最良と判断。
 - 一時ファイルは従来どおり `.cache/` 配下。録画スクリプト `Record-MiraBox-Stable.ps1` は Windows 専用（dshow 依存）で対象外。
 - GPU 使用率ログは Windows の PDH 依存のため Linux では N/A（CPU/GPU 監視は無効化）。
+- 画面描画: `Clear-Screen` / `Clear-MenuLines` を追加。Windows は従来どおり `Clear-Host` で全画面クリア、Linux はメニュー行だけを ANSI エスケープで書き換え、確認画面はクリアせず追記表示する（Issue #15 の要望）。`Test-MenuNavigation.ps1` はヘルパー未定義時も動作するようガードを追加。
 
 ## 2026-11-19（HWフィルター自動置換・未コミット）
 

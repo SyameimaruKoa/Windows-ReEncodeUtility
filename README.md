@@ -256,6 +256,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 - 設定は `config.user.linux.psd1`（`$IsLinux` 時に自動読み込み。Windows は従来の `config.user.psd1`）。
 - HW は VAAPI を追加（`-vaapi_device` は `VaapiDevicePath`、既定 `/dev/dri/renderD128`）。NVENC/QSV は FFmpeg の実Detectに任せる。MF / D3D11VA / D3D12VA / DXVA2 は Linux では選択肢に出さない。Vulkan は従来どおり制限付き。
 - GPU 使用率ログは Windows の PDH 依存のため Linux では N/A（CPU/GPU 監視は無効化）。
+- 設定画面の描画: Windows は従来どおり画面全体をクリアするが、Linux では `Clear-Host` を使わず、メニュー行だけを ANSI エスケープで書き換える（画面全体を上書きしない）。確認画面も Linux ではクリアせず追記表示する。
 
 ---
 
