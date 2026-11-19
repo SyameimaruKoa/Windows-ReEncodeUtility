@@ -1,1 +1,8 @@
 .cache/
+__pycache__/
+ffmpeg-*/
+*.tar.xz
+handover-*.tar.gz
+nnedi3_weights.bin
+qb-op3040.sh
+bin/
