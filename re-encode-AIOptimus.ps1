@@ -408,6 +408,10 @@ function Invoke-ExternalProcess {
         return @{ ExitCode = $proc.ExitCode; StdOut = $stdout; StdErr = $stderr }
     }
     finally {
+        # Ctrl+C 等で中断された場合、別プロセスの ffmpeg が残らぬよう終了させる
+        if ($proc -and -not $proc.HasExited) {
+            try { $proc.Kill($true) } catch {}
+        }
         if ($monitor) { $monitor.Dispose() }
         Remove-Item -LiteralPath $stderrFile, $stdoutFile -Force -ErrorAction SilentlyContinue
     }
@@ -790,6 +794,10 @@ function Invoke-FfmpegEncode {
         return @{ ExitCode = $proc.ExitCode; StdOut = $stdout; StdErr = $stderr }
     }
     finally {
+        # Ctrl+C 等で中断された場合、別プロセスの ffmpeg が残らぬよう終了させる
+        if ($proc -and -not $proc.HasExited) {
+            try { $proc.Kill($true) } catch {}
+        }
         if ($monitor) { $monitor.Dispose() }
         Remove-Item -LiteralPath $stderrFile, $stdoutFile, $progressFile -Force -ErrorAction SilentlyContinue
     }

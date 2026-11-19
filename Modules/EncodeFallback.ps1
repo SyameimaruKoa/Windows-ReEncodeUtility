@@ -286,6 +286,10 @@ function Invoke-ProbeFfmpeg {
         return @{ ExitCode = -1; StdErr = $_.Exception.Message }
     }
     finally {
+        # Ctrl+C 等で中断された場合、別プロセスの ffmpeg が残らぬよう終了させる
+        if ($proc -and -not $proc.HasExited) {
+            try { $proc.Kill($true) } catch {}
+        }
         Remove-Item -LiteralPath $stderrFile, $stdoutFile -Force -ErrorAction SilentlyContinue
     }
 }
