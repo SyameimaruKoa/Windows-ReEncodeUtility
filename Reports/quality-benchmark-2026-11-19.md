@@ -34,11 +34,11 @@ CBR と VBR でほぼ同じ VMAF（差 0.01〜0.09）。
 | 1355U | Windows | Iris Xe / QSV v8 | h264/hevc/vp9/mpeg2 QSV、全 SW（2秒基準） | AV1 QSV 不可、mjpeg は品質非効、MF/Vulkan/D3D12VA 除外 |
 | PS4 Pro | Linux 7.3.3 | VCE / VAAPI | h264_vaapi（10秒基準。VRAM 4GB 化で実測可能） | AMF ランタイム無し、HEVC VAAPI 不可、Vulkan 拡張無し。DVD-anime のみ QP を上げても VMAF が頭打ち |
 | Switch v1 | Linux L4T | Tegra X1 nvv4l2 | h264_nvv4l2（BD のみ） | HEVC 候補不正、DVD 系は出力不正で VMAF 破綻 |
-| pi335 (N3350) | Linux | Apollo Lake QSV | h264/hevc QSV | mpeg2 QSV 候補不正 |
+| pi335 (N3350) | Linux | Apollo Lake QSV | h264/hevc QSV（10秒基準、ドライバ有効化でホスト ffmpeg から直接動作） | mpeg2 QSV 候補不正 |
 | op3040 (6500T) | Linux | Skylake QSV | h264/hevc/mpeg2 QSV（10秒基準、iHD ドライバ有効化でホスト ffmpeg から直接動作） | コンテナラッパーは不要 |
 | q508 (Z8700) | Linux | Cherry Trail VAAPI | h264_vaapi（10秒基準、ドライバ変更＋profile main） | QSV 初期化不可、mjpeg/mpeg2/vp8 は比較対象外 |
 | tbook (7530U) | Bazzite 44 | VCN 3 / VAAPI | h264/hevc VAAPI（10秒基準） | AMF はランタイム `libamfrt64.so.1` 未導入で不可。VRAM 64MB→2GB 変更後も品質値・VMAF は同一 |
-| 8750H + RTX2070 | Linux | Coffee Lake QSV / Turing NVENC | h264/hevc NVENC（10秒基準）、h264/hevc/mpeg2 QSV（2秒基準） | AV1 NVENC 不可、QSV の10秒は未実施 |
+| 8750H + RTX2070 | Linux | Coffee Lake QSV / Turing NVENC | h264/hevc NVENC、h264/hevc/mpeg2 QSV（ともに10秒基準） | AV1 NVENC 不可 |
 | 6300U | Linux | Skylake QSV | h264/hevc/mpeg2 QSV | 上記ホストの別ハードウェアとして計測 |
 | HD 5450 | 未接続 | Cedar | なし | HW エンコーダー無し |
 
@@ -52,9 +52,9 @@ CBR と VBR でほぼ同じ VMAF（差 0.01〜0.09）。
 | hevc_qsv (1355U, chip) | 28(+0.43) / 34(-0.50) / 31(-0.23) / 33(-0.33) | 31 | 0.23 |
 | mpeg2_qsv (1355U, normal/chip) | 15 / 27 / 17 / 25 | 21 / 25 | 3.89 / 0.05 |
 | vp9_qsv (1355U, 例外ビットレート) | 1.55 / 3.3 / 0.237 / 1.05 Mbps | 3.3 Mbps | 0.15 |
-| h264_qsv (8750H) | 29 / 29 / 29 / 29 | 29 | 0.66 |
-| hevc_qsv (8750H) | 29 / 29 / 29 / 29 | 29 | 1.56 |
-| mpeg2_qsv (8750H) | 15 / 27 / 17 / 25 | 21 | 3.89 |
+| h264_qsv (8750H, 10秒) | 29 / 29 / 27 / 29 | 29 | 0.99 |
+| hevc_qsv (8750H, 10秒) | 27 / 29 / 31 / 29 | 29 | 0.81 |
+| mpeg2_qsv (8750H, 10秒) | 15 / 25 / 23 / 25 | 23 | 0.57 |
 | h264_nvenc (RTX2070, 10秒) | 33 / 33 / − / − | 33 | 0.84（BD） |
 | hevc_nvenc (RTX2070, 10秒) | 33 / 35 / 31 / 33 | 33 | 1.27 |
 | h264_qsv (op3040 6500T, 10秒) | 29 / 29 / 28 / 29 | 29 | 0.52 |
@@ -63,8 +63,8 @@ CBR と VBR でほぼ同じ VMAF（差 0.01〜0.09）。
 | h264_qsv (6300U) | 27 / 29 / 25 / 29 | 29 | 1.50 |
 | hevc_qsv (6300U) | 27 / 29 / 25 / 29 | 29 | 1.69 |
 | mpeg2_qsv (6300U) | 15 / 25 / 15 / 25 | 21 | 3.02 |
-| h264_qsv (pi335) | 29 / 29 / 29 / 29 | 29 | 0.62 |
-| hevc_qsv (pi335) | 29 / 29 / 29 / 29 | 29 | 0.87 |
+| h264_qsv (pi335, 10秒) | 29 / 29 / 27 / 29 | 29 | 1.00 |
+| hevc_qsv (pi335, 10秒) | 27 / 29 / 31 / 29 | 29 | 0.81 |
 | h264_vaapi (PS4, 10秒・VRAM4GB) | 27 / 38 / 41 / 30 | 30 | 4.61（DVD-anime は VMAF 頭打ち） |
 | h264_vaapi (q508, 10秒) | 27 / 31 / 29 / 31 | 29 | 3.65 |
 | h264_vaapi (tbook, 10秒) | 27 / 33 / 29 / 33 | 31 | 4.49 |
