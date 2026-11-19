@@ -380,6 +380,8 @@ AV1:
 
 未対応のハードウェア・コーデックは自動除外。
 
+HWデコード／HWエンコード使用時は、利用中のHWで使えるフィルターも自動選択する。`scale` を `scale_qsv` / `scale_cuda` / `vpp_amf` などへ、`yadif` / `bwdif` を `yadif_cuda` / `deinterlace_qsv` などへ置換する。FFmpegが公開していることに加え、短い実エンコードで成功した候補だけを採用する。判定結果は `.cache/hardware-filter-cache.clixml` にFFmpegシグネチャ付きで保存され、FFmpeg更新時や7日経過時に再判定する。等価なHWフィルターがない `lenscorrection` などはCPUのまま実行する。
+
 ### 2. インターレース自動検出・解除
 
 古い映像形式（MPEG2、NTSC/PAL映像、ビデオカメラ）の逆テレシネ・デインターレース：

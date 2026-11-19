@@ -142,6 +142,15 @@ else {
     Write-Host "[WARN] Modules\EncodeFallback.ps1 が見つからないため、拡張フォールバックを無効化します。" -ForegroundColor Yellow
 }
 
+# --- HWフィルター自動置換モジュール ---
+$hwFilterResolverPath = Join-Path $global:ScriptDir 'Modules\HardwareFilterResolver.ps1'
+if (Test-Path -LiteralPath $hwFilterResolverPath) {
+    . $hwFilterResolverPath
+}
+else {
+    Write-Host "[WARN] Modules\HardwareFilterResolver.ps1 が見つからないため、HWフィルター自動置換を無効化します。" -ForegroundColor Yellow
+}
+
 # --- 依存スクリプトの確認 ---
 $optionsScriptPath = Join-Path $global:ScriptDir "get-ffmpegOptions.ps1"
 if (-not (Test-Path $optionsScriptPath)) {
@@ -1385,6 +1394,16 @@ function Resolve-VideoFilterPipeline {
     }
     elseif ($needsCpuFrames -and $VideoFilter -notmatch 'hwdownload') {
         $result.Filter = if ($VideoFilter) { "$VideoFilter,hwdownload,format=nv12" } else { "hwdownload,format=nv12" }
+    }
+    if ((Get-Command Resolve-HardwareFilterGraph -ErrorAction SilentlyContinue) -and $result.Filter -and $frameFormat -and $result.Filter -notmatch 'hwdownload') {
+        $hwResolved = Resolve-HardwareFilterGraph -Filter $result.Filter -FrameFormat $frameFormat `
+            -HwAccelOption $HwAccelOption -VideoOptions $VideoOptions -InputPath $InputPath
+        $result.Filter = $hwResolved.Filter
+        if ($hwResolved.Replacements.Count -gt 0) {
+            foreach ($replacement in $hwResolved.Replacements) {
+                Write-Log "[HWフィルター置換] $replacement" -Level 'DEBUG'
+            }
+        }
     }
     return $result
 }
