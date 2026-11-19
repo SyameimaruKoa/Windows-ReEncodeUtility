@@ -165,7 +165,7 @@ X向けのMP4/H.264等の出力形式は、プラットフォームモードで�
 | ----------------------- | -------------------- | ------------------------------------------------------------------------- |
 | **FFmpeg**              | 動画エンコーディング | [ffmpeg.org](https://ffmpeg.org/download.html) または PATH 環境変数に登録 |
 | **FFprobe**             | 動画情報取得         | FFmpeg に付属                                                             |
-| **PowerShell 5.1 以上** | スクリプト実行       | Windows 10/11 に含まれる                                                  |
+| **PowerShell 7 以上**   | スクリプト実行       | [インストール](https://learn.microsoft.com/ja-jp/powershell/scripting/install/installing-powershell-on-windows) |
 
 ### オプション（外部音声エンコーダー）
 
@@ -183,6 +183,8 @@ X向けのMP4/H.264等の出力形式は、プラットフォームモードで�
 | --------------- | ------------------ | ------------------------------------------------------------- | -------------------------------------- |
 | **exiftool**    | メタデータ処理     | [exiftool.org](https://exiftool.org/)                         | 低（メタデータ保持機能を使う場合のみ） |
 | **LosslessCut** | ビジュアル編集補助 | [MaCleaner 12 / GitHub](https://github.com/mifi/lossless-cut) | 低（設定例のみ）                       |
+
+Windows PowerShell 5.1（`powershell.exe`）には非対応です。`pwsh.exe` を使用してください。
 
 ---
 
@@ -228,7 +230,7 @@ ffprobe -version
 ### 3. 実行権限の確認（必要に応じて）
 
 ```powershell
-# PowerShell を 管理者 で起動後：
+# PowerShell 7 (pwsh) で実行
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
@@ -504,7 +506,7 @@ HW アクセルでエラー発生
 利用可能な映像エンコーダーについて、短い合成映像で**実能力を自動プローブ**します。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Tools\Check-HardwareEncoderLimits.ps1
+pwsh -ExecutionPolicy Bypass -File .\Tools\Check-HardwareEncoderLimits.ps1
 # -Force でスキャンキャッシュを無視、 -Quick で利用可否と品質オプションのみ
 ```
 
@@ -568,13 +570,14 @@ MiraBox等のキャプチャデバイスから映像を取り込み、**ゼロ�
 
 ### Q1. PowerShell スクリプトが実行できない
 
-**A:** 以下で実行権限を許可してください：
+**A:** PowerShell 7 が入っているか確認し、必要なら実行権限を許可してください。
 
 ```powershell
-# PowerShell を【管理者実行】で開く
+pwsh -v
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-
 ```
+
+`powershell.exe`（Windows PowerShell 5.1）ではなく `pwsh.exe` を使ってください。
 
 ### Q2. FFmpeg / FFprobe が見つからない
 

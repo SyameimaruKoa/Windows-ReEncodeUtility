@@ -4,6 +4,8 @@
 .PARAMETER WithVideo
     実動画を使った事前検証プローブの実行も行う（既定のテスト動画を使用）。
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param(
     [switch]$WithVideo,

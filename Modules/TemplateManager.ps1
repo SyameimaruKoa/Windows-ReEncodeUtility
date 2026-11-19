@@ -1,4 +1,6 @@
-﻿#region 共通テンプレート
+﻿#requires -Version 7.0
+
+#region 共通テンプレート
 function Get-SettingsTemplate {
     param([ValidateSet('Encoding', 'Filter')][string]$Kind)
     $folder = if ($Kind -eq 'Encoding') { $global:Settings.EncodingTemplateDir } else { $global:Settings.FilterTemplateDir }

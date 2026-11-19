@@ -37,6 +37,8 @@
 .EXAMPLE
     .\Sync-ExternalAudio.ps1 -Video .\video.mkv -Audio .\microphone.wav -ManualOffsetSeconds -0.32
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param(
     [string]$Video,

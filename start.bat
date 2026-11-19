@@ -8,7 +8,15 @@ if "%~1"=="/?" goto :show_help
 if /I "%~1"=="-h" goto :show_help
 if /I "%~1"=="--help" goto :show_help
 
-powershell -ExecutionPolicy Bypass -File "%~dp0re-encode-AIOptimus.ps1" %*
+where pwsh >nul 2>&1
+if errorlevel 1 (
+    echo PowerShell 7 (pwsh) が見つかりません。
+    echo https://aka.ms/powershell からインストールしてください。
+    pause
+    exit /b 1
+)
+
+pwsh -ExecutionPolicy Bypass -File "%~dp0re-encode-AIOptimus.ps1" %*
 goto :eof
 
 :show_help
@@ -22,6 +30,7 @@ echo  start.bat [-QsvDefaultDepth] ^<動画ファイル^> [動画ファイル2] 
 echo.
 echo 説明:
 echo  FFmpegを利用して、動画ファイルを一括で再エンコードします。
+echo  PowerShell 7 (pwsh) が必要です。
 echo  ドラッグ＆ドロップで動画ファイルを渡すか、コマンドラインから
 echo  ファイルパスを指定してください。
 echo.

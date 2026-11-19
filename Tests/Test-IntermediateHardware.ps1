@@ -7,8 +7,10 @@
 .PARAMETER ShowHelp
     使い方を表示する。
 .EXAMPLE
-    powershell -File .\Tests\Test-IntermediateHardware.ps1
+    pwsh -File .\Tests\Test-IntermediateHardware.ps1
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param(
     [Alias('h', 'help')]

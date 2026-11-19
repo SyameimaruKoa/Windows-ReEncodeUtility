@@ -8,6 +8,8 @@
 .EXAMPLE
     .\Record-MiraBox.ps1
 #>
+#requires -Version 7.0
+
 param([switch]$h, [switch]$help)
 if ($h -or $help) { Get-Help $MyInvocation.MyCommand.Path -Detailed; exit }
 

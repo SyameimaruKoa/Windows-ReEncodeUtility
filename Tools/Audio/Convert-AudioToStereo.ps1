@@ -18,6 +18,8 @@
 .EXAMPLE
     .\Convert-AudioToStereo.ps1 -Input .\PSCam4Win-mic.wav
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param(
     [Alias("Input")][string]$InputPath,
