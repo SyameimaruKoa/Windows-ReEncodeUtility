@@ -286,6 +286,24 @@ function Resolve-HardwareFilterGraph {
     return $result
 }
 
+function Add-HwDownloadToFilterComplex {
+    <#
+    .SYNOPSIS
+        HWデコード時のHWフレームをCPU用フィルターへ渡すため、filter_complexの入力にhwdownloadを挿入する。
+    #>
+    param([string]$ArgsString, [string]$FrameFormat = '')
+    if (-not $ArgsString -or -not $FrameFormat) { return $ArgsString }
+    $match = [regex]::Match($ArgsString, '(?i)-filter_complex\s+"(?<graph>[^"]*)"')
+    if (-not $match.Success) { return $ArgsString }
+    $graph = $match.Groups['graph'].Value
+    if ($graph -match 'hwdownload') { return $ArgsString }
+    if ($graph -notmatch '(?i)\b(split|crop|pad|blend|hstack|vstack|xstack|lenscorrection|yadif|bwdif|nnedi|fieldmatch|decimate|setsar)\b') {
+        return $ArgsString
+    }
+    $newGraph = [regex]::Replace($graph, '(\[\d+:v(?::\d+)?\])', '${1}hwdownload,format=nv12,')
+    return $ArgsString.Replace($graph, $newGraph)
+}
+
 function Clear-HwFilterProbeCache {
     $cachePath = Get-HwFilterCachePath
     if ($cachePath -and (Test-Path -LiteralPath $cachePath -PathType Leaf)) {

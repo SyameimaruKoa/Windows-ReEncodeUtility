@@ -12,6 +12,12 @@
 - `Resolve-VideoFilterPipeline` の最終段で置換を実行。`hwdownload` を含むCPUフレーム経路、16-bit RGB回避、ゼロコピー経路は対象外として維持した。
 - `Tests/Test-HardwareFilterResolver.ps1` を追加（20 PASS）。既存の `Test-IntermediateHardware.ps1` / `Test-EncodeFallback.ps1` も成功。実環境では QSV の `scale` → `scale_qsv` 置換を確認。CUDA/D3D11 はこの環境でHWが使えずプローブ失敗のためCPUフィルターを維持。
 
+### 追記: QSVデコード＋CPU用filter_complexの失敗を修正
+
+- 「各目16：9パッド」テンプレートをQSVデコードと併用すると、`split` / `crop` にQSVのHWフレームが渡り `Error reinitializing filters` で失敗していた。
+- `Add-HwDownloadToFilterComplex` を追加し、CPU専用フィルターを含む `-filter_complex` の `[0:v]` 直後に `hwdownload,format=nv12` を挿入する。`hwdownload` 済みのグラフには二重挿入しない。
+- 実入力の先頭2フレームで QSVデコード＋`hevc_qsv` のエンコードが成功することを確認。テストは23 PASS。
+
 ## 2026-11-19（SBS 16:9 パッドフィルター・未コミット）
 
 - `Profiles/Filters/SBS 2D - 各目16：9パッド.psd1` を追加。各目が16:9でないSBSを縮小せず、左右または上下に黒帯を追加して各目を16:9（SBS全体で32:9）にする。

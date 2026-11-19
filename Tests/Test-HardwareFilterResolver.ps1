@@ -83,6 +83,13 @@ $qsv = Resolve-HardwareFilterGraph -Filter 'scale=1280:720' -FrameFormat 'qsv' `
     -HwAccelOption $qsvOpt -VideoOptions $qsvVo
 Assert-Equal 'vpp_qsv=w=1280:h=720' $qsv.Filter '第1候補失敗時に第2候補へ切り替え'
 
+Write-Host '== filter_complex のHWフレームダウンロード =='
+$complexArgs = '-filter_complex "[0:v]split=2[a][b];[a]crop=iw/2:ih:0:0[a2];[b]crop=iw/2:ih:iw/2:0[b2];[a2][b2]hstack[v]" -map "[v]"'
+$downloaded = Add-HwDownloadToFilterComplex -ArgsString $complexArgs -FrameFormat 'qsv'
+Assert-True ($downloaded -match '\[0:v\]hwdownload,format=nv12,split=2') 'CPUフィルター前にhwdownloadを挿入'
+Assert-Equal $complexArgs (Add-HwDownloadToFilterComplex -ArgsString $complexArgs -FrameFormat '') 'HW形式なしでは変更しない'
+Assert-Equal $downloaded (Add-HwDownloadToFilterComplex -ArgsString $downloaded -FrameFormat 'qsv') '二重挿入しない'
+
 Write-Host '== HW形式なし／キャッシュ無効化 =='
 $none = Resolve-HardwareFilterGraph -Filter 'scale=1280:720' -FrameFormat '' -SkipProbe
 Assert-Equal 'scale=1280:720' $none.Filter 'HW形式なしでは変更しない'

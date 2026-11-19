@@ -3281,6 +3281,20 @@ function Invoke-EncodeFile {
         # --- エンコード実行 ---
         $filterPipeline = Resolve-VideoFilterPipeline -HwAccelOption $effectiveHwAccelOption -VideoOptions $currentVideoOptions -VideoFilter $Config.AdditionalVF -EncoderSettings $Config.EncoderSettings -InputPath $InputFile
         $effectiveHwAccelOption = $filterPipeline.HwAccelOption
+
+        # HWデコードのフレームをCPU用filter_complexへ渡す場合はhwdownloadを挿入する
+        $effectiveAdditionalArgs = $Config.AdditionalArgs
+        if ($effectiveHwAccelOption -and $effectiveAdditionalArgs -and (Get-Command Add-HwDownloadToFilterComplex -ErrorAction SilentlyContinue)) {
+            $frameFormatMatch = [regex]::Match($effectiveHwAccelOption, '-hwaccel_output_format\s+(\S+)')
+            if ($frameFormatMatch.Success) {
+                $convertedArgs = Add-HwDownloadToFilterComplex -ArgsString $effectiveAdditionalArgs -FrameFormat $frameFormatMatch.Groups[1].Value
+                if ($convertedArgs -ne $effectiveAdditionalArgs) {
+                    Write-Log 'HWフレームをCPUフィルターへ渡すため filter_complex に hwdownload を挿入' -Level 'DEBUG'
+                    $effectiveAdditionalArgs = $convertedArgs
+                }
+            }
+        }
+
         $ffmpegArgsList = @("-hide_banner", "-y")
         $isHevcQvbrEncode = ($Config.PlatformMode -and $Config.HWEncoder -eq "Intel" -and $Config.CodecName -eq "H.265" -and $Config.QualityMode -eq "CRF+Maxrate")
         if ($isHevcQvbrEncode) { $ffmpegArgsList += @("-loglevel", "verbose") }
@@ -3298,7 +3312,7 @@ function Invoke-EncodeFile {
         $ffmpegArgsList += $currentVideoOptions.Split(' ', $splitOptions)
 
         if ($filterPipeline.Filter) { $ffmpegArgsList += @("-vf", ('"{0}"' -f $filterPipeline.Filter)) }
-        if ($Config.AdditionalArgs) { $ffmpegArgsList += $Config.AdditionalArgs.Split(' ', $splitOptions) }
+        if ($effectiveAdditionalArgs) { $ffmpegArgsList += $effectiveAdditionalArgs.Split(' ', $splitOptions) }
 
         $inputCount = 1; $audioInputIndex = 0; $metadataInputIndex = 0
         if ($tempAudioOutFile) { $audioInputIndex = $inputCount; $inputCount++ }
@@ -3319,7 +3333,7 @@ function Invoke-EncodeFile {
         }
         
         if ($useFfmpegMetadata) { $ffmpegArgsList += @("-map_metadata", "$metadataInputIndex") }
-        $ffmpegArgsList = Add-PreservedFrameRateOption -Arguments $ffmpegArgsList -VideoOptions $currentVideoOptions -ExtraArguments $Config.AdditionalArgs -VideoFilter $filterPipeline.Filter -ForceCfr ([bool]$Config.PlatformMode) -SourceFrameRate $platformSourceFrameRate
+        $ffmpegArgsList = Add-PreservedFrameRateOption -Arguments $ffmpegArgsList -VideoOptions $currentVideoOptions -ExtraArguments $effectiveAdditionalArgs -VideoFilter $filterPipeline.Filter -ForceCfr ([bool]$Config.PlatformMode) -SourceFrameRate $platformSourceFrameRate
         $ffmpegArgsList += "`"$outputFile`""
         $finalArgString = $ffmpegArgsList -join ' '
 
