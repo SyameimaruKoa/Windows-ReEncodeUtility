@@ -5,6 +5,8 @@
 .PARAMETER VideoPath
     検証に使う実動画。既定は資料用のテスト動画。
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param(
     [string]$VideoPath = 'C:\Users\kouki\Documents\MyApp\Windows-ReEncodeUtility\.cache\Azahar 2126.2 _ SUPER MARIO 3D LAND 2026-11-16 19-03-51.mp4'

@@ -14,6 +14,8 @@
 .PARAMETER Quick
     解像度・ピクセル形式のプローブを省略し、利用可否と品質オプションのみ確認する。
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param(
     [switch]$Force,

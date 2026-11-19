@@ -4,6 +4,14 @@
 
 このリポジトリの元になった素材は [git@gist.github.com:85e306167a7f1298d0ec93ea1081c5d3.git](https://gist.github.com/85e306167a7f1298d0ec93ea1081c5d3) 由来で、最初はそのファイル群を AI で最適化するところから始まっている。あわせて、このリポジトリ自体もその AI 最適化を行ったタイミングで git 管理を開始しているため、以後の履歴はその時点からの実装変遷として記録している。
 
+## 2026-11-19（PowerShell 7 への更新・未コミット）
+
+- Issue #13 に対応し、全 `.ps1` に `#requires -Version 7.0` を追加。Windows PowerShell 5.1 (`powershell.exe`) での実行を不可とした。
+- `start.bat` は `pwsh` でメインスクリプトを起動するよう変更し、`pwsh` が見つからない場合はインストール先を案内して終了するようにした。ヘルプにも PowerShell 7 必須を明記。
+- `README.md` / `Tools/Audio/README.md` / `Tests/Test-IntermediateHardware.ps1` のヘルプを PowerShell 7 前提へ更新。`powershell -File` の記述を `pwsh -File` に変更。
+- PS 5.1 固有の不具合回避を前提としたコメントのみ、現在の意図が分かる表現へ修正。コードの挙動は変更していない。
+- PowerShell 7.6.10 で各スクリプトのヘルプ表示、モジュールのドットソース、`Test-EncodeFallback.ps1`（28 PASS）、`Test-IntermediateHardware.ps1`、`Check-HardwareEncoderLimits.ps1 -Quick`（48件）を実行し動作を確認。
+
 ## 2026-11-18（メニュー操作改善・未コミット）
 
 - すべての対話メニュー（`re-encode-AIOptimus.ps1` / `get-ffmpegOptions.ps1` / `Record-MiraBox-Stable.ps1` の `Show-Menu`）でキー意味を整理した。

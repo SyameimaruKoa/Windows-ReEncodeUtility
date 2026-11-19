@@ -19,6 +19,8 @@
     このスクリプトの実行には、ffmpeg, ffprobe や各種外部エンコーダーが必要じゃ。
     `config.user.psd1` に各ツールのパスを正しく設定しておくのじゃぞ。
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param (
     [switch]$QsvDefaultDepth,
@@ -36,8 +38,7 @@ if ($ShowHelp -or $args -contains "-h" -or $args -contains "--help" -or -not $Pa
 }
 #endregion
 
-# [PS 5.1 バグ回避] 万一カレントディレクトリに [ ] が含まれているとStart-Processがクラッシュするため、
-# 先に入力パスを絶対パス化してから、安全なスクリプト自身のフォルダにカレントディレクトリを移動する
+# 入力パスを先に絶対パス化してから、スクリプト自身のフォルダへカレントディレクトリを移動する
 $Path = @($Path | ForEach-Object {
         $p = $_.Trim('"', "'")
         if (-not [string]::IsNullOrWhiteSpace($p)) {
@@ -45,7 +46,7 @@ $Path = @($Path | ForEach-Object {
         }
     })
 
-# PSScriptRootの確実な取得 (PS 5.1 の Split-Path -LiteralPath バグ回避)
+# PSScriptRootの確実な取得
 $global:ScriptDir = $PSScriptRoot
 if ([string]::IsNullOrEmpty($global:ScriptDir)) {
     if ($MyInvocation.MyCommand.Path) {
@@ -409,7 +410,7 @@ function Invoke-FfmpegEncode {
             -PassThru -NoNewWindow `
             -RedirectStandardOutput $stdoutFile `
             -RedirectStandardError $stderrFile
-        # PS 5.1ではハンドルを事前にキャッシュしないと終了後にExitCodeがnullになる
+        # 終了後にExitCodeを確実に取得するためハンドルをキャッシュする
         $null = $proc.Handle
         if ($monitorEnabled) { $monitor = Start-FFmpegUsageMonitor -Process $proc }
         $startPos = $null

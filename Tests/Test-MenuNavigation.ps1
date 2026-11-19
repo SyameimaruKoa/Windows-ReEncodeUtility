@@ -3,6 +3,8 @@
     対話メニューのキー操作（Enter / Backspace / Delete / Esc）を検証する。
     Read-MenuKey をスタブ化して実コンソール入力なしでテストする。
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param()
 

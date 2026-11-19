@@ -7,6 +7,8 @@
     最終出力のビープ音位置を実測してオフセット(ms)を求める。
     一時ファイルはすべて git 対象外の .cache 配下に作る。
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param()
 

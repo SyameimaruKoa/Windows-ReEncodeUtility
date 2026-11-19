@@ -16,6 +16,8 @@
     System.Collections.Hashtable
     選択された映像・音声のエンコード設定を含むハッシュテーブルを返す。
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param (
     [switch]$Intermediate,

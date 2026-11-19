@@ -5,6 +5,8 @@
     キャッシュを使用して不要な再スキャンを防ぎつつ、利用可能なHWエンコーダーのリストを $global:HardwareInfo に格納する。
     他のスクリプトからドットソースで読み込まれることを想定しておるぞ。
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param(
     [switch]$ForceScan

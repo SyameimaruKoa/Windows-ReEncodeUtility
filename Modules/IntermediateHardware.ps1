@@ -1,4 +1,6 @@
-﻿#region 中間ファイル用ハードウェアエンコード
+﻿#requires -Version 7.0
+
+#region 中間ファイル用ハードウェアエンコード
 function Get-IntermediateEncoderHelp {
     param([string]$Encoder, [string]$Ffmpeg)
     return ((& $Ffmpeg -hide_banner -h "encoder=$Encoder" 2>&1 | Out-String))
