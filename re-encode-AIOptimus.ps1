@@ -1759,7 +1759,7 @@ function Get-PlatformAutoSettings {
                 "H.264" { 29 }
                 "H.265" { 31 }
                 "VP9" { 33 }
-                "AV1" { 57 }
+                "AV1" { 58 }
                 default { 29 }
             }
         }
@@ -2143,8 +2143,8 @@ function Invoke-PlatformDetailedSetup {
                 "VP9" { 33 }
                 "AV1" {
                     if ($specificEncoder -eq "rav1e") { 140 }
-                    elseif ($specificEncoder -eq "libaom-av1") { 53 }
-                    else { 57 }
+                    elseif ($specificEncoder -eq "libaom-av1") { 54 }
+                    else { 58 }
                 }
                 default { 29 }
             }

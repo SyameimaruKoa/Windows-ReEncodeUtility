@@ -2,31 +2,42 @@
 
 ## 目的と方法
 
-- CPU 基準は `libx264 -preset medium -crf 28`。4素材の2秒代表クリップ（動＋静止）で目標 VMAF を算出。
+- CPU 基準は `libx264 -preset medium -crf 28`。4素材の**10秒代表クリップ**（静止5秒＋動き5秒）で目標 VMAF を算出。
 - 各 HW エンコーダーは品質パラメータを二分探索し、VMAF が CPU 基準に一致する値を素材別に決定。共通値は全素材の最大偏差が最小の値。
 - VMAF 目標許容差は ±0.2。範囲外／不正出力は「偏差大・不可」として記録。
 - コーデック間比較は生ビットレートではなく、同一 VMAF 到達点の bpp（bits/pixel）と速度で行う。
 
-## 基準点（2秒クリップ）
+## 基準点（10秒クリップ）
 
 | 素材 | 目標 VMAF (CRF28) | SSIM | PSNR |
 |---|---:|---:|---:|
-| BD-anime | 95.45 | 0.9880 | 45.11 |
-| BD-movie | 87.21 | 0.9468 | 36.73 |
-| DVD-anime | 93.58 | 0.9922 | 46.81 |
-| DVD-movie | 89.24 | 0.9551 | 34.24 |
+| BD-anime | 94.44 | 0.9878 | 44.82 |
+| BD-movie | 73.39 | 0.9348 | 30.22 |
+| DVD-anime | 88.22 | 0.9772 | 38.40 |
+| DVD-movie | 91.95 | 0.9624 | 36.07 |
+
+## CBR / VBR の VMAF ベース
+
+| 素材 | 到達ビットレート | CBR VMAF | VBR VMAF |
+|---|---:|---:|---:|
+| BD-anime | 2248k | 94.39 | 94.44 |
+| BD-movie | 3549k | 73.40 | 73.44 |
+| DVD-anime | 815k | 88.27 | 88.36 |
+| DVD-movie | 912k | 91.84 | 91.94 |
+
+CBR と VBR でほぼ同じ VMAF（差 0.01〜0.09）。
 
 ## デバイス別 可否
 
 | デバイス | OS | GPU / 系統 | 利用可 | 不可・制約 |
 |---|---|---|---|---|
-| 1355U (現 PC) | Windows | Iris Xe / QSV v8 | h264/hevc/vp9/mpeg2 QSV、全 SW | AV1 QSV 不可、mjpeg は品質非効、MF/Vulkan/D3D12VA 除外 |
-| PS4 Pro | Linux 7.3.3 | VCE / VAAPI | h264_vaapi（VRAM 2GB 化後） | AMF ランタイム無し、HEVC VAAPI 不可、Vulkan 拡張無し |
+| 1355U | Windows | Iris Xe / QSV v8 | h264/hevc/vp9/mpeg2 QSV、全 SW（2秒基準） | AV1 QSV 不可、mjpeg は品質非効、MF/Vulkan/D3D12VA 除外 |
+| PS4 Pro | Linux 7.3.3 | VCE / VAAPI | h264_vaapi（2秒のみ。VRAM 2GB でも10秒は `bo pin failed`） | AMF ランタイム無し、HEVC VAAPI 不可、Vulkan 拡張無し |
 | Switch v1 | Linux L4T | Tegra X1 nvv4l2 | h264_nvv4l2（BD のみ） | HEVC 候補不正、DVD 系は出力不正で VMAF 破綻 |
 | pi335 (N3350) | Linux | Apollo Lake QSV | h264/hevc QSV | mpeg2 QSV 候補不正 |
-| op3040 (6500T) | Linux | Skylake QSV | h264/hevc/mpeg2 QSV | jellyfin コンテナ内 ffmpeg 経由 |
-| q508 (Z8700) | Linux | Cherry Trail VAAPI | h264_vaapi（ドライバ変更＋profile main） | QSV 初期化不可、mjpeg/mpeg2/vp8 は比較対象外 |
-| tbook (7530U) | Bazzite 44 | VCN 3 / VAAPI | h264/hevc VAAPI | AMF はランタイム `libamfrt64.so.1` 未導入で不可。VRAM 64MB→2GB 変更後も品質値・VMAF は同一 |
+| op3040 (6500T) | Linux | Skylake QSV | h264 QSV（jellyfin コンテナ経由、2秒基準） | 10秒はコンテナラッパーでフレーム欠落し VMAF 不正、hevc/mpeg2 も10秒未計測 |
+| q508 (Z8700) | Linux | Cherry Trail VAAPI | h264_vaapi（10秒基準、ドライバ変更＋profile main） | QSV 初期化不可、mjpeg/mpeg2/vp8 は比較対象外 |
+| tbook (7530U) | Bazzite 44 | VCN 3 / VAAPI | h264/hevc VAAPI（10秒基準） | AMF はランタイム `libamfrt64.so.1` 未導入で不可。VRAM 64MB→2GB 変更後も品質値・VMAF は同一 |
 | 8750H + RTX2070 | Linux (停止前) | Coffee Lake QSV / Turing NVENC | h264/hevc/mpeg2 QSV、h264/hevc NVENC | AV1 NVENC 不可、QSV は oneVPL GPU ランタイム導入後に解決 |
 | 6300U | Linux | Skylake QSV | h264/hevc/mpeg2 QSV | 上記ホストの別ハードウェアとして計測 |
 | HD 5450 | 未接続 | Cedar | なし | HW エンコーダー無し |
@@ -51,18 +62,18 @@
 | mpeg2_qsv (6300U) | 15 / 25 / 15 / 25 | 21 | 3.02 |
 | h264_qsv (pi335) | 29 / 29 / 29 / 29 | 29 | 0.62 |
 | hevc_qsv (pi335) | 29 / 29 / 29 / 29 | 29 | 0.87 |
-| h264_vaapi (PS4) | 25 / 31 / 29 / 31 | 29 | 4.69 |
-| h264_vaapi (q508) | 27 / 33 / 25 / 33 | 29 | 4.90 |
-| h264_vaapi (tbook) | 27 / 33 / 23 / 33 | 29 | 6.08 |
-| hevc_vaapi (tbook) | 27 / 33 / 23 / 33 | 29 | 5.62 |
-| h264_nvv4l2 (NS, BD のみ) | 5.0 / 8.0 Mbps（DVD 不可） | 3.0 Mbps | 93.04（DVD を含む） |
-| libx264 (medium) | 30 / 29 / 30 / 29 | 29 | 0.65 |
-| libx265 (medium) | 30 / 30 / 29 / 30 | 31 | 0.52 |
-| libsvtav1 | 48 / 48 / 57 / 52 | 57 | 0.03 |
-| libaom-av1 | 48 / 45 / 53 / 46 | 53 | 0.01 |
-| librav1e | 126 / 140 / 121 / 127 | 140 | 0.05 |
-| libvpx-vp9 | 33 / 46 / 43 / 45 | 33 | 0.19 |
-| libvpx (VP8, 例外ビットレート) | 2.8 / 5.55 / 0.113 / 1.675 Mbps | 1.675 Mbps | 0.04 |
+| h264_vaapi (PS4, 2秒のみ) | 25 / 31 / 29 / 31 | 29 | 4.69（10秒は VCE `bo pin failed` で不可） |
+| h264_vaapi (q508, 10秒) | 27 / 31 / 29 / 31 | 29 | 3.65 |
+| h264_vaapi (tbook, 10秒) | 27 / 33 / 29 / 33 | 31 | 4.49 |
+| hevc_vaapi (tbook, 10秒) | 27 / 33 / 29 / 33 | 29 | 4.29 |
+| h264_nvv4l2 (NS, 10秒・BD のみ) | 5.0 / 8.0 Mbps（DVD は出力不正） | 8.0 Mbps | 0.51（BD） |
+| libx264 (medium, 10秒) | 30 / 29 / 30 / 29 | 29 | 0.72 |
+| libx265 (medium, 10秒) | 31 / 30 / 29 / 30 | 31 | 0.45 |
+| libsvtav1 (10秒) | 47 / 48 / 58 / 51 | 58 | 0.00 |
+| libaom-av1 (10秒) | 46 / 48 / 54 / 49 | 54 | 0.10 |
+| librav1e (10秒) | 126 / 140 / 121 / 127 | 140 | 0.10 |
+| libvpx-vp9 (10秒) | 34 / 46 / 43 / 45 | 45 | 0.21 |
+| libvpx (VP8, 例外ビットレート, 10秒) | 2.362 / 4.675 / 0.113 / 1.425 Mbps | 2.362 Mbps | 0.09 |
 | mjpeg_qsv | 品質指定が VMAF にほぼ影響せず | 25 | 27.47 |
 
 素材別の値は BD-anime / BD-movie / DVD-anime / DVD-movie の順。単位は特記なければ品質パラメータ値。

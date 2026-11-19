@@ -400,7 +400,7 @@ function Get-EncoderSettings {
         elseif ($codecName -match "AV1") {
             if ($codecName -match "svt") {
                 # libsvtav1: 高速AV1エンコーダー (自動マルチスレッド)
-                $qPresets = [ordered]@{ "標準 (CRF:57)" = "-crf 57"; "高品質 (CRF:50)" = "-crf 50"; "低品質 (CRF:64)" = "-crf 64"; "カスタム品質 (CRF)" = "-crf {val}" }
+                $qPresets = [ordered]@{ "標準 (CRF:58)" = "-crf 58"; "高品質 (CRF:51)" = "-crf 51"; "低品質 (CRF:65)" = "-crf 65"; "カスタム品質 (CRF)" = "-crf {val}" }
                 $pPresets = [ordered]@{ "0 (最高品質 / 非常に遅い)" = "-preset 0"; "2 (高品質寄り)" = "-preset 2"; "4 (標準)" = "-preset 4"; "6 (速い)" = "-preset 6"; "8 (かなり速い)" = "-preset 8"; "10 (最速寄り)" = "-preset 10"; "13 (最速 / 品質低下)" = "-preset 13" }
                 $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
             }
@@ -412,7 +412,7 @@ function Get-EncoderSettings {
                 Read-Host "  Enterキーで続行"
                 # マルチスレッド設定: 行ベース並列化 + タイル分割
                 $baseEncoder += " -row-mt 1 -tiles 2x2"
-                $qPresets = [ordered]@{ "標準 (CRF:53)" = "-crf 53 -b:v 0"; "高品質 (CRF:46)" = "-crf 46 -b:v 0"; "低品質 (CRF:60)" = "-crf 60 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
+                $qPresets = [ordered]@{ "標準 (CRF:54)" = "-crf 54 -b:v 0"; "高品質 (CRF:47)" = "-crf 47 -b:v 0"; "低品質 (CRF:61)" = "-crf 61 -b:v 0"; "カスタム品質 (CRF)" = "-crf {val} -b:v 0" }
                 $pPresets = [ordered]@{ "0 (最高品質 / 極めて遅い)" = "-cpu-used 0"; "1 (高品質 / 非常に遅い)" = "-cpu-used 1"; "2 (高品質寄り / 遅い)" = "-cpu-used 2"; "3 (バランス型)" = "-cpu-used 3"; "4 (標準)" = "-cpu-used 4"; "5 (やや速い)" = "-cpu-used 5"; "6 (速い)" = "-cpu-used 6"; "8 (最速 / 品質低下)" = "-cpu-used 8" }
                 $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
             }
