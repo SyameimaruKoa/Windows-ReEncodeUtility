@@ -162,9 +162,9 @@ function Get-EncoderSettings {
     }
     else {
         try {
-            $ffmpegOutput = ffmpeg -hide_banner -encoders 2>$null
+            $ffmpegOutput = & $global:Settings.FfmpegPath -hide_banner -encoders 2>$null
             foreach ($line in $ffmpegOutput) {
-                if ($line -match "^\s*[VA][\w\.]+\s+([a-zA-Z0-9_]+_(nvenc|qsv|amf|vulkan|d3d12va|mf))(\s+|$)") {
+                if ($line -match "^\s*[VA][\w\.]+\s+([a-zA-Z0-9_]+_(nvenc|qsv|amf|vulkan|d3d12va|mf|vaapi))(\s+|$)") {
                     $availableEncoders += $Matches[1]
                 }
             }
@@ -276,6 +276,10 @@ function Get-EncoderSettings {
     # これらの GPU 経路は中間ファイル作成モード (Modules/IntermediateHardware.ps1) のみで使用する。
     $allHwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
     $allHwKeys = @("NVIDIA", "Intel", "AMD", "CPU")
+    if (-not $IsWindows) {
+        $allHwChoices += "VAAPI (Linux)"
+        $allHwKeys += "VAAPI"
+    }
     $hwChoices = @(); $hwKeys = @()
     for ($i = 0; $i -lt $allHwChoices.Length; $i++) {
         $show = $true
@@ -284,6 +288,7 @@ function Get-EncoderSettings {
                 "NVIDIA" { $show = $hwInfo.HasNvidia }
                 "Intel" { $show = $hwInfo.HasIntel }
                 "AMD" { $show = $hwInfo.HasAMD }
+                "VAAPI" { $show = $hwInfo.HasVAAPI }
                 "CPU" { $show = $true }
             }
         }
@@ -294,11 +299,12 @@ function Get-EncoderSettings {
     $selectedHW = $hwKeys[$hwIndex]
 
     $videoSetting = ""
-    if ($selectedHW -in @("NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF")) {
+    if ($selectedHW -in @("NVIDIA", "Intel", "AMD", "VAAPI", "Vulkan", "D3D12VA", "MF")) {
         $suffix = switch ($selectedHW) {
             "NVIDIA" { "_nvenc" }
             "Intel" { "_qsv" }
             "AMD" { "_amf" }
+            "VAAPI" { "_vaapi" }
             "Vulkan" { "_vulkan" }
             "D3D12VA" { "_d3d12va" }
             "MF" { "_mf" }
@@ -335,6 +341,10 @@ function Get-EncoderSettings {
                     $codecChoices = @("H.264/AVC", "H.265/HEVC", "AV1")
                     $codecMap = @("h264_amf", "hevc_amf", "av1_amf")
                 }
+                "VAAPI" {
+                    $codecChoices = @("H.264/AVC", "H.265/HEVC")
+                    $codecMap = @("h264_vaapi", "hevc_vaapi")
+                }
             }
         }
 
@@ -370,6 +380,10 @@ function Get-EncoderSettings {
             $qPresets = [ordered]@{ "高品質 (QP:22)" = "-rc cqp -qp_i 22 -qp_p 22 -qp_b 22"; "中品質 (QP:28)" = "-rc cqp -qp_i 28 -qp_p 28 -qp_b 28"; "低品質 (QP:35)" = "-rc cqp -qp_i 35 -qp_p 35 -qp_b 35"; "カスタム品質 (QP)" = "-rc cqp -qp_i {val} -qp_p {val} -qp_b {val}"; "カスタムビットレート" = "-rc vbr_peak -b:v {val}" }
             $pPresets = [ordered]@{ "Quality (高品質)" = "-quality quality"; "Balanced (標準)" = "-quality balanced"; "Speed (速度優先)" = "-quality speed" }
             $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
+        }
+        elseif ($selectedHW -eq "VAAPI") {
+            $qPresets = [ordered]@{ "高品質 (Q:20)" = "-q:v 20"; "標準品質 (Q:25)" = "-q:v 25"; "低品質 (Q:30)" = "-q:v 30"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
+            $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets
         }
         else {
             # Vulkan / D3D12VA / MF は GPU 使用を保証できないため非対応（パラメータ変換は行わない）
@@ -448,9 +462,9 @@ function Get-IntermediateSettings {
     }
     else {
         try {
-            $ffmpegOutput = ffmpeg -hide_banner -encoders 2>$null
+            $ffmpegOutput = & $global:Settings.FfmpegPath -hide_banner -encoders 2>$null
             foreach ($line in $ffmpegOutput) {
-                if ($line -match "^\s*[VA][\w\.]+\s+([a-zA-Z0-9_]+_(nvenc|qsv|amf|vulkan|d3d12va|mf))(\s+|$)") {
+                if ($line -match "^\s*[VA][\w\.]+\s+([a-zA-Z0-9_]+_(nvenc|qsv|amf|vulkan|d3d12va|mf|vaapi))(\s+|$)") {
                     $availableEncoders += $Matches[1]
                 }
             }

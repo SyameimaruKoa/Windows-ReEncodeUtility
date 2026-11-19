@@ -55,8 +55,8 @@ function Load-HwFilterProbeCache {
     $cachePath = Get-HwFilterCachePath
     if (-not $cachePath -or -not (Test-Path -LiteralPath $cachePath -PathType Leaf)) { return $null }
     try { $cached = Import-Clixml -LiteralPath $cachePath -ErrorAction Stop } catch { return $null }
-    if (-not $cached -or $cached.SchemaVersion -ne 1) { return $null }
-    if ($cached.MachineName -ne $env:COMPUTERNAME) { return $null }
+    if (-not $cached -or $cached.SchemaVersion -ne 2) { return $null }
+    if ($cached.MachineName -ne [System.Environment]::MachineName) { return $null }
     if ($Signature -and $cached.FfmpegSignature -ne $Signature) { return $null }
     if ($cached.SavedAt -and ((Get-Date) - [datetime]$cached.SavedAt).TotalDays -gt 7) { return $null }
     return $cached
@@ -68,8 +68,8 @@ function Save-HwFilterProbeCache {
     if (-not $cachePath) { return $false }
     try {
         $cacheObject = [pscustomobject]@{
-            SchemaVersion   = 1
-            MachineName     = $env:COMPUTERNAME
+            SchemaVersion   = 2
+            MachineName     = [System.Environment]::MachineName
             SavedAt         = Get-Date
             FfmpegSignature = Get-HwFilterSignature
             Results         = $Results
@@ -110,6 +110,11 @@ function Test-HwFilterProbe {
     $argList.Add('error')
     $argList.Add('-y')
     if ($HwAccelOption) { foreach ($part in ($HwAccelOption -split '\s+')) { if ($part) { $argList.Add($part) } } }
+    if (($HwAccelOption -match 'vaapi') -or ($VideoOptions -match '_vaapi\b')) {
+        $vaapiDevice = if ($global:Settings -and $global:Settings.VaapiDevicePath) { $global:Settings.VaapiDevicePath } else { '/dev/dri/renderD128' }
+        $argList.Add('-vaapi_device')
+        $argList.Add($vaapiDevice)
+    }
     $argList.Add('-ss')
     $argList.Add('0')
     $argList.Add('-t')
@@ -124,13 +129,13 @@ function Test-HwFilterProbe {
     $argList.Add('-an')
     $argList.Add('-f')
     $argList.Add('null')
-    $argList.Add('NUL')
+    $argList.Add('-')
 
     $null = & (Get-HwFilterFFmpegPath) @argList 2>&1
     $ok = ($LASTEXITCODE -eq 0)
 
     if (-not $cache) {
-        $cache = [pscustomobject]@{ SchemaVersion = 1; MachineName = $env:COMPUTERNAME; SavedAt = Get-Date; FfmpegSignature = $signature; Results = @{} }
+        $cache = [pscustomobject]@{ SchemaVersion = 2; MachineName = [System.Environment]::MachineName; SavedAt = Get-Date; FfmpegSignature = $signature; Results = @{} }
     }
     $cache.Results[$key] = $ok
     $script:HwFilterProbeCache = $cache

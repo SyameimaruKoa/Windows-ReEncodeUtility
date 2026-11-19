@@ -4,6 +4,18 @@
 
 このリポジトリの元になった素材は [git@gist.github.com:85e306167a7f1298d0ec93ea1081c5d3.git](https://gist.github.com/85e306167a7f1298d0ec93ea1081c5d3) 由来で、最初はそのファイル群を AI で最適化するところから始まっている。あわせて、このリポジトリ自体もその AI 最適化を行ったタイミングで git 管理を開始しているため、以後の履歴はその時点からの実装変遷として記録している。
 
+## 2026-11-19（Linux 対応・未コミット）
+
+- ブランチ `OptiPlex-3040-MFF_20261119` にて Issue #15 の Linux 対応を実装。
+- PowerShell 7 / FFmpeg / ffprobe は従来どおり必須。Windows PowerShell 5.1 は非対応のまま。
+- Linux では `start.sh`（引数なし / `-h` / `--help` でヘルプ）で起動。`sudo ./SETUP.SH -i` で `/usr/local/bin` に `ReEncode_*.sh` のシンボリックリンクを張り、`-u` で解除。PATH は `/usr/local/bin` または `~/.local/bin`。
+- Linux 用設定 `config.user.linux.psd1` を `$IsLinux` 時に自動読み込み。Windows は従来の `config.user.psd1` のまま。
+- 外部音声エンコーダー: Linux では qaac / Nero は未設定、fdkaac は Linux ネイティブ CLI（`apt install fdkaac`）を使用し `Get-Command` で自動検出。未検出時は FFmpeg 内蔵 AAC/Opus へフォールバック（従来どおり）。
+- HW: Linux で VAAPI を追加（`-vaapi_device` は config の `VaapiDevicePath`、既定 `/dev/dri/renderD128`）。NVENC/QSV は FFmpeg の実Detectに任せる。MF / D3D11VA / D3D12VA / DXVA2 は Linux では選択肢に出さない。Vulkan は従来どおり制限付き。
+- ffmpeg の自前ビルドはしない。libfdk_aac 込み ffmpeg のビルドも見送り（将来 FFmpeg 9.1 の内蔵 AAC 改善を様子見）。qaac は Windows のまま最良と判断。
+- 一時ファイルは従来どおり `.cache/` 配下。録画スクリプト `Record-MiraBox-Stable.ps1` は Windows 専用（dshow 依存）で対象外。
+- GPU 使用率ログは Windows の PDH 依存のため Linux では N/A（CPU/GPU 監視は無効化）。
+
 ## 2026-11-19（HWフィルター自動置換・未コミット）
 
 - Issue #19 に対応し、`Modules/HardwareFilterResolver.ps1` を追加。HWデコード/エンコード時に、そのHWファミリで使えるフィルターへ `-vf` のフィルターを自動置換する。

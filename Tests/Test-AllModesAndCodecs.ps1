@@ -9,7 +9,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$VideoPath = 'C:\Users\kouki\Documents\MyApp\Windows-ReEncodeUtility\.cache\Azahar 2126.2 _ SUPER MARIO 3D LAND 2026-11-16 19-03-51.mp4'
+    [string]$VideoPath = (Join-Path (Split-Path -Parent $PSScriptRoot) '.cache\Azahar 2126.2 _ SUPER MARIO 3D LAND 2026-11-16 19-03-51.mp4')
 )
 
 # 'Stop' にすると ffmpeg の stderr が ErrorRecord 化して副作用判定が壊れるため 'Continue' を使う
@@ -381,7 +381,7 @@ PartB
 }
 finally {
     # 安全装置: .cache\test-work 配下の自分専用ディレクトリ以外は絶対に削除しない
-    if ($global:AppCacheDir -and $global:AppCacheDir.StartsWith($workRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($global:AppCacheDir -and $global:AppCacheDir.StartsWith($workRoot + [IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $global:AppCacheDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     else {
