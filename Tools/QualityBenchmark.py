@@ -293,6 +293,8 @@ BITRATE_EXCEPTION_ENCODERS = {"vp9_qsv", "libvpx", "h264_nvv4l2", "hevc_nvv4l2"}
 def quality_range(encoder):
     """Per-encoder search range for quality values (some codecs need >35)."""
     ranges = {
+        "h264_vaapi": (15, 50),
+        "hevc_vaapi": (15, 50),
         "libsvtav1": (20, 63),
         "libaom-av1": (20, 60),
         "librav1e": (20, 200),
