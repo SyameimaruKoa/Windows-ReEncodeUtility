@@ -17,6 +17,7 @@
 - GPU 使用率ログは Windows の PDH 依存のため Linux では N/A（CPU/GPU 監視は無効化）。
 - 画面描画: `Clear-Screen` / `Clear-MenuLines` を追加。Windows は従来どおり `Clear-Host` で全画面クリア、Linux はメニュー行だけを ANSI エスケープで書き換え、確認画面はクリアせず追記表示する（Issue #15 の要望）。`Test-MenuNavigation.ps1` はヘルパー未定義時も動作するようガードを追加。
 - Ctrl+C 中断: `Invoke-ExternalProcess` / `Invoke-FfmpegEncode` / `Invoke-ProbeFfmpeg` の `finally` で、まだ終了していない ffmpeg 子プロセスを `Kill($true)` するよう修正。Linux で SIGINT を送ると子プロセスが終了し、pwsh も正常終了することを実機確認。書きかけの出力ファイルは残る。
+- メニューの Ctrl+C: Linux では ReadKey が Ctrl+C でブロックし、別キーを押すまで画面が更新されなかった。[Console]::TreatControlCAsInput で Ctrl+C をキー入力として受け取り、`Test-IsControlCKey` で検出して Esc と同じくメニューをキャンセル、`$global:CtrlCRequested` を立ててスクリプト全体を終了する。`Show-Menu` に try/finally を追加し、中断時に選択行を消して描画を確定。`get-ffmpegOptions.ps1` のローカル Show-Menu も同样。
 
 ## 2026-11-19（HWフィルター自動置換・未コミット）
 

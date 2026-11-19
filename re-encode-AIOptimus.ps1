@@ -100,6 +100,8 @@ function Resolve-DeinterlaceFilter {
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
+$global:CtrlCRequested = $false
+
 # --- 設定ファイルの読み込み ---
 # Linux では専用設定があれば優先し、無ければ従来の config.user.psd1 を使う
 $configFileName = if ($IsWindows) { "config.user.psd1" } else { "config.user.linux.psd1" }
@@ -807,7 +809,28 @@ function Invoke-FfmpegEncode {
 #region UIユーティリティ
 # キー読み取りを分離しておく（テストから差し替え可能にするため）
 function Read-MenuKey {
+    param([switch]$CatchControlC)
+    if ($CatchControlC -and -not $IsWindows) {
+        # Linux では Ctrl+C をシグナルではなくキー入力として受け取り、
+        # メニュー側で Esc と同じキャンセル扱いにする。
+        [Console]::TreatControlCAsInput = $true
+        try {
+            return $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        }
+        finally {
+            [Console]::TreatControlCAsInput = $false
+        }
+    }
     return $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
+
+function Test-IsControlCKey {
+    param($Key)
+    if (-not $Key) { return $false }
+    # Ctrl+C は VirtualKeyCode=67('C') + Control 修飾、または文字コード 3
+    return ([int]$Key.Character -eq 3) -or
+           ($Key.VirtualKeyCode -eq 67 -and ($Key.ControlKeyState -band
+               [System.ConsoleModifiers]::Control))
 }
 
 function Clear-Screen {
@@ -877,6 +900,11 @@ function Show-Menu {
     }
     $padTarget = $maxLen + 6 # " > " などの余白分
 
+    # Ctrl+C で中断されたときは finally で選択行を消し、カーソルを安全な行へ移す。
+    # Linux では ReadKey が Ctrl+C でブロックしたままになり、
+    # 別キーを押すまで画面が更新されないため、ここで強制的に整える。
+    $menuInterrupted = $false
+    try {
     while ($true) {
         if (-not $firstDraw) {
             if ($IsWindows) {
@@ -925,7 +953,21 @@ function Show-Menu {
 
         Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
 
-        $key = Read-MenuKey
+        $key = $null
+        try {
+            $key = Read-MenuKey -CatchControlC
+        }
+        catch {
+            # Ctrl+C 等で ReadKey が例外になった場合は中断として扱う
+            if (-not $IsWindows) { $menuInterrupted = $true }
+            throw
+        }
+        if ($null -eq $key) { $menuInterrupted = $true; break }
+        # Ctrl+C はメニューをキャンセルしてスクリプト全体を終了する
+        if (-not $IsWindows -and (Get-Command -Name 'Test-IsControlCKey' -CommandType Function -ErrorAction SilentlyContinue) -and (Test-IsControlCKey -Key $key)) {
+            $global:CtrlCRequested = $true
+            $global:MenuNav = ''; Write-Host ""; return -1
+        }
         switch ($key.VirtualKeyCode) {
             38 { if ($currentIndex -gt 0) { $currentIndex-- } }       # UpArrow
             40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } } # DownArrow
@@ -940,6 +982,17 @@ function Show-Menu {
                 continue
             }
             46 { $global:MenuNav = 'allback'; Write-Host ""; return -3 } # Delete（最初へ戻る）
+        }
+    }
+    }
+    finally {
+        if ($menuInterrupted -and -not $IsWindows) {
+            # 選択ハイライト行を消し、カーソルをメニュー末尾へ移して描画を確定させる
+            if (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue) {
+                Clear-MenuLines -Lines $drawnLines
+            }
+            Write-Host ""
+            [Console]::Out.Flush()
         }
     }
 }
@@ -2727,6 +2780,7 @@ function Start-MainProcess {
     while ($true) {
     while ($true) {
         $selectedMode = Show-Menu -Title "実行モードを選択してください。" -Choices $modeChoices
+        if ($global:CtrlCRequested) { return }
         if ($selectedMode -eq -1) { return }
         if ($selectedMode -eq -2 -or $selectedMode -eq -3) { continue }
         break
@@ -2765,6 +2819,7 @@ function Start-MainProcess {
         4 { $config = Invoke-SplitModeSetup }
     }
     if (-not $config) {
+        if ($global:CtrlCRequested) { return }
         if ($global:MenuNav -eq 'allback') {
             # Delete: 最初のモード選択へ戻る
             $global:MenuNav = ''
@@ -3594,6 +3649,7 @@ catch {
     Write-Log "  スタックトレース: $($_.ScriptStackTrace)" -Level "ERROR"
 }
 finally {
+    if ($global:CtrlCRequested) { Write-Log "Ctrl+C によりメニューをキャンセルして終了しました。" -Level "WARN" }
     Write-Log "処理を終了します。"
     if ($global:LogFilePath) { Write-Log "ログファイル: $($global:LogFilePath)" }
     Read-Host "何かキーを押して終了"

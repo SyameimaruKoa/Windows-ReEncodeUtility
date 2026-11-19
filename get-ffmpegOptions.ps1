@@ -74,6 +74,15 @@ if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction Silen
             [Console]::Write("`e[G")
         }
     }
+    if (-not (Get-Command -Name 'Test-IsControlCKey' -CommandType Function -ErrorAction SilentlyContinue)) {
+        function Test-IsControlCKey {
+            param($Key)
+            if (-not $Key) { return $false }
+            return ([int]$Key.Character -eq 3) -or
+                   ($Key.VirtualKeyCode -eq 67 -and ($Key.ControlKeyState -band
+                       [System.ConsoleModifiers]::Control))
+        }
+    }
     function Show-Menu {
         param (
             [string]$Title,
@@ -83,6 +92,8 @@ if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction Silen
         $currentIndex = $DefaultIndex
         $drawnLines = ($Title -split "`r?`n").Count + 1 + $Choices.Length + 2
         $firstDraw = $true
+        $menuInterrupted = $false
+        try {
         while ($true) {
             if ($IsWindows) {
                 Clear-Screen
@@ -103,7 +114,27 @@ if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction Silen
                 }
             }
             Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
-            $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            $key = $null
+            try {
+                if ($IsWindows) {
+                    $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                }
+                else {
+                    [Console]::TreatControlCAsInput = $true
+                    try { $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") }
+                    finally { [Console]::TreatControlCAsInput = $false }
+                }
+            }
+            catch {
+                if (-not $IsWindows) { $menuInterrupted = $true }
+                throw
+            }
+            if ($null -eq $key) { $menuInterrupted = $true; break }
+            # Ctrl+C はメニューをキャンセルしてスクリプト全体を終了する
+            if (-not $IsWindows -and (Get-Command -Name 'Test-IsControlCKey' -CommandType Function -ErrorAction SilentlyContinue) -and (Test-IsControlCKey -Key $key)) {
+                $global:CtrlCRequested = $true
+                $global:MenuNav = ''; return -1
+            }
             switch ($key.VirtualKeyCode) {
                 38 { if ($currentIndex -gt 0) { $currentIndex-- } } # UpArrow
                 40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } } # DownArrow
@@ -115,6 +146,16 @@ if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction Silen
                     continue
                 }
                 46 { $global:MenuNav = 'allback'; return -3 } # Delete
+            }
+        }
+        }
+        finally {
+            if ($menuInterrupted -and -not $IsWindows) {
+                if (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue) {
+                    Clear-MenuLines -Lines $drawnLines
+                }
+                Write-Host ""
+                [Console]::Out.Flush()
             }
         }
     }
