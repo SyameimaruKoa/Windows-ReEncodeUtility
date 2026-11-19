@@ -4,6 +4,25 @@
 
 このリポジトリの元になった素材は [git@gist.github.com:85e306167a7f1298d0ec93ea1081c5d3.git](https://gist.github.com/85e306167a7f1298d0ec93ea1081c5d3) 由来で、最初はそのファイル群を AI で最適化するところから始まっている。あわせて、このリポジトリ自体もその AI 最適化を行ったタイミングで git 管理を開始しているため、以後の履歴はその時点からの実装変遷として記録している。
 
+## 2026-11-19（HWフィルター自動置換・未コミット）
+
+- Issue #19 に対応し、`Modules/HardwareFilterResolver.ps1` を追加。HWデコード/エンコード時に、そのHWファミリで使えるフィルターへ `-vf` のフィルターを自動置換する。
+- HWファミリごとの置換ルールとパラメータ変換（`scale` / デインターレース / `pad` / `transpose` 等）を定義。等価なHWフィルターがないものはCPU側に残す。
+- フィルター公開確認に加え、実入力を使った短いプローブで成功した候補のみ採用。結果は `.cache/hardware-filter-cache.clixml` にFFmpegシグネチャ付きで保存し、更新時・7日経過時に無効化する。
+- `Resolve-VideoFilterPipeline` の最終段で置換を実行。`hwdownload` を含むCPUフレーム経路、16-bit RGB回避、ゼロコピー経路は対象外として維持した。
+- `Tests/Test-HardwareFilterResolver.ps1` を追加（20 PASS）。既存の `Test-IntermediateHardware.ps1` / `Test-EncodeFallback.ps1` も成功。実環境では QSV の `scale` → `scale_qsv` 置換を確認。CUDA/D3D11 はこの環境でHWが使えずプローブ失敗のためCPUフィルターを維持。
+
+### 追記: QSVデコード＋CPU用filter_complexの失敗を修正
+
+- 「各目16：9パッド」テンプレートをQSVデコードと併用すると、`split` / `crop` にQSVのHWフレームが渡り `Error reinitializing filters` で失敗していた。
+- `Add-HwDownloadToFilterComplex` を追加し、CPU専用フィルターを含む `-filter_complex` の `[0:v]` 直後に `hwdownload,format=nv12` を挿入する。`hwdownload` 済みのグラフには二重挿入しない。
+- 実入力の先頭2フレームで QSVデコード＋`hevc_qsv` のエンコードが成功することを確認。テストは23 PASS。
+
+### 追記: ファイル名に `[ ]` を含む場合の `New-Item` エラーを修正
+
+- `temp_<ファイル名>` の存在確認に `Test-Path`（ワイルドカード解釈あり）を使っていたため、`[OGOOVYZXbo8]` を含むファイル名で存在しないと誤判定し、`New-Item` が「既に存在します」で失敗していた。
+- `outputDir` / `tempDir` / 出力ファイルパスなどの存在確認を `Test-Path -LiteralPath` に変更し、ディレクトリ作成は `New-Item -Force` にした。
+
 ## 2026-11-19（SBS 16:9 パッドフィルター・未コミット）
 
 - `Profiles/Filters/SBS 2D - 各目16：9パッド.psd1` を追加。各目が16:9でないSBSを縮小せず、左右または上下に黒帯を追加して各目を16:9（SBS全体で32:9）にする。
