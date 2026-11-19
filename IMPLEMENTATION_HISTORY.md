@@ -18,6 +18,11 @@
 - `Add-HwDownloadToFilterComplex` を追加し、CPU専用フィルターを含む `-filter_complex` の `[0:v]` 直後に `hwdownload,format=nv12` を挿入する。`hwdownload` 済みのグラフには二重挿入しない。
 - 実入力の先頭2フレームで QSVデコード＋`hevc_qsv` のエンコードが成功することを確認。テストは23 PASS。
 
+### 追記: ファイル名に `[ ]` を含む場合の `New-Item` エラーを修正
+
+- `temp_<ファイル名>` の存在確認に `Test-Path`（ワイルドカード解釈あり）を使っていたため、`[OGOOVYZXbo8]` を含むファイル名で存在しないと誤判定し、`New-Item` が「既に存在します」で失敗していた。
+- `outputDir` / `tempDir` / 出力ファイルパスなどの存在確認を `Test-Path -LiteralPath` に変更し、ディレクトリ作成は `New-Item -Force` にした。
+
 ## 2026-11-19（SBS 16:9 パッドフィルター・未コミット）
 
 - `Profiles/Filters/SBS 2D - 各目16：9パッド.psd1` を追加。各目が16:9でないSBSを縮小せず、左右または上下に黒帯を追加して各目を16:9（SBS全体で32:9）にする。

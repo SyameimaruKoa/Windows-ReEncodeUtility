@@ -437,7 +437,7 @@ function Invoke-FfmpegEncode {
         } elseif ($Arguments -match '-i\s+(\S+)') {
             $inputPath = $Matches[1]
         }
-        if ($inputPath -and (Test-Path $inputPath) -and $DurationSeconds -gt 0) {
+        if ($inputPath -and (Test-Path -LiteralPath $inputPath) -and $DurationSeconds -gt 0) {
             try {
                 $inputSize = (Get-Item $inputPath).Length
                 $inputBitrateBps = ($inputSize * 8) / $DurationSeconds
@@ -1571,7 +1571,7 @@ function Get-AudioBitrateFromFile {
         [string]$AudioFilePath,
         [double]$DurationSeconds
     )
-    if (-not (Test-Path $AudioFilePath) -or $DurationSeconds -le 0) { return 128 }
+    if (-not (Test-Path -LiteralPath $AudioFilePath) -or $DurationSeconds -le 0) { return 128 }
     try {
         $fileSizeBytes = (Get-Item $AudioFilePath).Length
         $bitrateKbps = [math]::Round(($fileSizeBytes * 8) / ($DurationSeconds * 1000))
@@ -2701,7 +2701,7 @@ function Invoke-InteractiveSetup {
     if ((Show-Menu -Title "出力先を固定しますか？" -Choices @("いいえ (入力元と同じ階層のsubfolder)", "はい (固定フォルダを指定)")) -eq 1) {
         while (-not $outputFixedPath) {
             $outputFixedPath = Read-Host "固定出力先のパスを入力してください"
-            if (-not (Test-Path $outputFixedPath)) {
+            if (-not (Test-Path -LiteralPath $outputFixedPath)) {
                 try { New-Item -Path $outputFixedPath -ItemType Directory -ErrorAction Stop | Out-Null }
                 catch { Write-Warning "フォルダの作成に失敗しました: $_"; $outputFixedPath = "" }
             }
@@ -2795,7 +2795,7 @@ function Invoke-SplitEncodeFile {
     
     # 出力先は「元ファイル名」のフォルダ
     $outputBaseDir = Join-Path $inputDir $baseName
-    if (-not (Test-Path $outputBaseDir)) { New-Item -Path $outputBaseDir -ItemType Directory | Out-Null }
+    if (-not (Test-Path -LiteralPath $outputBaseDir)) { $null = New-Item -Path $outputBaseDir -ItemType Directory -Force }
 
     # --- ログファイル初期化 ---
     Initialize-LogFile -OutputDir $outputBaseDir
@@ -2816,11 +2816,11 @@ function Invoke-SplitEncodeFile {
 
         $segments = @()
         $tempDir = Join-Path $outputBaseDir "temp_$baseName"
-        if (-not (Test-Path $tempDir)) { New-Item -Path $tempDir -ItemType Directory | Out-Null }
+        if (-not (Test-Path -LiteralPath $tempDir)) { $null = New-Item -Path $tempDir -ItemType Directory -Force }
 
         if ($Config.SplitSource -eq "ExternalSRT") {
             $srtFile = Join-Path $inputDir "$baseName.srt"
-            if (-not (Test-Path $srtFile)) {
+            if (-not (Test-Path -LiteralPath $srtFile)) {
                 Write-Log "SRTファイルが見つかりません: $srtFile" -Level "ERROR"
                 Write-Log "このファイルはスキップします。" -Level "ERROR"
                 return
@@ -2880,7 +2880,7 @@ function Invoke-SplitEncodeFile {
             $outputFileName = "${baseName}${suffix}.$($Config.Extension)"
             $outputFilePath = Join-Path $outputBaseDir $outputFileName
             
-            if (Test-Path $outputFilePath) {
+            if (Test-Path -LiteralPath $outputFilePath) {
                 $suffix += "_{0:D2}" -f $count
                 $outputFileName = "${baseName}${suffix}.$($Config.Extension)"
                 $outputFilePath = Join-Path $outputBaseDir $outputFileName
@@ -2999,7 +2999,7 @@ function Invoke-SplitEncodeFile {
             }
             else {
                 # 出力ファイルサイズを記録
-                if (Test-Path $outputFilePath) {
+                if (Test-Path -LiteralPath $outputFilePath) {
                     $outSize = (Get-Item $outputFilePath).Length
                     Write-Log "  出力: $outputFileName ($([math]::Round($outSize / 1MB, 2)) MB)"
                 }
@@ -3008,7 +3008,7 @@ function Invoke-SplitEncodeFile {
         }
         
         # 終了後クリーンアップ
-        if (Test-Path $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force; Write-Log "一時ファイルをクリーンアップしました。" -Level "DEBUG" }
+        if (Test-Path -LiteralPath $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force; Write-Log "一時ファイルをクリーンアップしました。" -Level "DEBUG" }
         Write-Log "全セグメントの処理が完了しました。"
     }
     catch {
@@ -3025,7 +3025,7 @@ function Invoke-EncodeFile {
     $baseName = [System.IO.Path]::GetFileNameWithoutExtension($InputFile)
     $inputDir = Split-Path -Parent $InputFile
     $outputDir = if ($Config.OutputMode -eq "Fixed") { $Config.OutputFixedPath } else { Join-Path $inputDir "encoded_output" }
-    if (-not (Test-Path $outputDir)) { New-Item -Path $outputDir -ItemType Directory | Out-Null }
+    if (-not (Test-Path -LiteralPath $outputDir)) { $null = New-Item -Path $outputDir -ItemType Directory -Force }
     
     # --- ログファイル初期化 ---
     Initialize-LogFile -OutputDir $outputDir
@@ -3046,7 +3046,7 @@ function Invoke-EncodeFile {
         $inputDuration = Get-InputDuration -FilePath $InputFile
 
         $outputFile = Join-Path $outputDir "$baseName.$($Config.Extension)"
-        $tempDir = Join-Path $outputDir "temp_$baseName"; if (-not (Test-Path $tempDir)) { New-Item -Path $tempDir -ItemType Directory | Out-Null }
+        $tempDir = Join-Path $outputDir "temp_$baseName"; if (-not (Test-Path -LiteralPath $tempDir)) { $null = New-Item -Path $tempDir -ItemType Directory -Force }
         $useExternalAudioSync = ($null -ne $Config.ExternalAudioSync)
         if ($useExternalAudioSync) {
             $finalOutputFile = Join-Path $outputDir "$baseName.mkv"
@@ -3142,7 +3142,7 @@ function Invoke-EncodeFile {
                 # 外部エンコーダーで先行エンコード済みの場合は完成ファイルから実測
                 $actualAudioKbps = 0
                 $audioBrSource = ""
-                if ($tempAudioOutFile -and (Test-Path $tempAudioOutFile)) {
+                if ($tempAudioOutFile -and (Test-Path -LiteralPath $tempAudioOutFile)) {
                     $actualAudioKbps = Get-AudioBitrateFromFile -AudioFilePath $tempAudioOutFile -DurationSeconds $inputDuration
                     $audioBrSource = "実測"
                     Write-Log "音声ファイル実測: $tempAudioOutFile ($([math]::Round((Get-Item $tempAudioOutFile).Length / 1KB)) KB / ${actualAudioKbps} kbps)" -Level "DEBUG"
@@ -3385,7 +3385,7 @@ function Invoke-EncodeFile {
             }
 
             # --- 出力ファイル情報をログに記録 ---
-            if (Test-Path $outputFile) {
+            if (Test-Path -LiteralPath $outputFile) {
                 $outSize = (Get-Item $outputFile).Length
                 $outSizeMB = [math]::Round($outSize / 1MB, 2)
                 $inSize = (Get-Item $InputFile).Length
@@ -3425,7 +3425,7 @@ function Invoke-EncodeFile {
             Remove-Item -Path "$passLogBase*" -Force -ErrorAction SilentlyContinue
             Write-Log "2passログをクリーンアップしました。" -Level "DEBUG"
         }
-        if (Test-Path $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force; Write-Log "一時ファイルをクリーンアップしました。" -Level "DEBUG" }
+        if (Test-Path -LiteralPath $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force; Write-Log "一時ファイルをクリーンアップしました。" -Level "DEBUG" }
         Write-Log "ファイル「$(Split-Path -Leaf $InputFile)」の処理が完了しました。"
     }
     catch {
