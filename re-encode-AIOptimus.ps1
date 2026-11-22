@@ -2977,8 +2977,19 @@ function New-AudioOnlyFfmpegArguments {
     if ($Settings.HasVideo) {
         $parts += @('-map', '0:v:0', '-c:v', 'copy')
     }
+    # ffprobe の stream.index はファイル全体の通し番号だが、ffmpeg の 0:a:N は音声内の連番。
+    # TrackInfo の並びから音声内連番へ変換する。
+    $audioIndexes = @()
+    if ($Settings.TrackInfo) {
+        $audioIndexes = @($Settings.TrackInfo | ForEach-Object { [int]$_.Index })
+    }
     foreach ($idx in $Settings.SelectedTracks) {
-        $parts += @('-map', "0:a:$idx")
+        $audioPos = [int]$idx
+        if ($audioIndexes.Count -gt 0) {
+            $found = [array]::IndexOf($audioIndexes, [int]$idx)
+            if ($found -ge 0) { $audioPos = $found }
+        }
+        $parts += @('-map', "0:a:$audioPos")
         if ($Settings.EncodeTracks -contains [int]$idx) {
             $parts += @($Settings.Encoder.Args)
         }

@@ -55,24 +55,24 @@ $inputPath = 'C:\in\test.mp4'
 $outputPath = 'C:\in\test_audio.mkv'
 
 # 1. 全トラックを使用し、全てエンコード
-$audioSettings = @{ SelectedTracks = @(0, 1); EncodeTracks = @(0, 1); Mode = 'all'; Encoder = $encoder; HasVideo = $true }
+$audioSettings = @{ SelectedTracks = @(0, 1); EncodeTracks = @(0, 1); Mode = 'all'; Encoder = $encoder; HasVideo = $true; TrackInfo = @(@{ Index = 0 }, @{ Index = 1 }) }
 $args1 = New-AudioOnlyFfmpegArguments -InputPath $inputPath -OutputPath $outputPath -Settings $audioSettings
 Assert-Contains $args1 '-map 0:v:0 -c:v copy' '映像は再エンコードせずコピー'
 Assert-Contains $args1 '-map 0:a:0 -c:a aac -b:a 192k -map 0:a:1 -c:a aac -b:a 192k' '全トラックをエンコード'
 
 # 2. 一部トラックを使用し、片方だけエンコード、残りはパススルー
-$audioSettings = @{ SelectedTracks = @(0, 2); EncodeTracks = @(0); Mode = 'partial'; Encoder = $encoder; HasVideo = $true }
+$audioSettings = @{ SelectedTracks = @(0, 2); EncodeTracks = @(0); Mode = 'partial'; Encoder = $encoder; HasVideo = $true; TrackInfo = @(@{ Index = 0 }, @{ Index = 1 }, @{ Index = 2 }) }
 $args2 = New-AudioOnlyFfmpegArguments -InputPath $inputPath -OutputPath $outputPath -Settings $audioSettings
 Assert-Contains $args2 '-map 0:a:0 -c:a aac -b:a 192k -map 0:a:2 -c:a copy' '一部エンコード＋残りパススルー'
 Assert-NotContains $args2 '0:a:1' '未選択トラックは map しない'
 
 # 3. 全トラックをパススルー
-$audioSettings = @{ SelectedTracks = @(0, 1); EncodeTracks = @(); Mode = 'copy'; Encoder = $null; HasVideo = $true }
+$audioSettings = @{ SelectedTracks = @(0, 1); EncodeTracks = @(); Mode = 'copy'; Encoder = $null; HasVideo = $true; TrackInfo = @(@{ Index = 0 }, @{ Index = 1 }) }
 $args3 = New-AudioOnlyFfmpegArguments -InputPath $inputPath -OutputPath $outputPath -Settings $audioSettings
 Assert-Contains $args3 '-map 0:a:0 -c:a copy -map 0:a:1 -c:a copy' '全てパススルー'
 
 # 4. 映像ストリームが無い場合
-$audioSettings = @{ SelectedTracks = @(0); EncodeTracks = @(0); Mode = 'all'; Encoder = $encoder; HasVideo = $false }
+$audioSettings = @{ SelectedTracks = @(0); EncodeTracks = @(0); Mode = 'all'; Encoder = $encoder; HasVideo = $false; TrackInfo = @(@{ Index = 0 }) }
 $args4 = New-AudioOnlyFfmpegArguments -InputPath $inputPath -OutputPath $outputPath -Settings $audioSettings
 Assert-NotContains $args4 '0:v:0' '映像なしでは映像 map を出力しない'
 Assert-Contains $args4 '-map 0:a:0 -c:a aac -b:a 192k' '映像なしでも音声はエンコード'
@@ -87,6 +87,12 @@ if ($titleTracks.Count -gt 0) {
     Assert-Contains $titleTracks[0].Title 'Test Audio Title' 'MP4のnameボックスから音声トラック名を取得'
     Assert-Contains (Format-AudioOnlyTrackLabel -Track $titleTracks[0]) 'Test Audio Title' '一覧ラベルにタイトルを表示'
 }
+
+# 6. ffprobe の index 1,2 を ffmpeg の音声内連番 0,1 に変換する
+$audioSettings = @{ SelectedTracks = @(1, 2); EncodeTracks = @(1); Mode = 'partial'; Encoder = $encoder; HasVideo = $true; TrackInfo = @(@{ Index = 1 }, @{ Index = 2 }) }
+$args6 = New-AudioOnlyFfmpegArguments -InputPath $inputPath -OutputPath $outputPath -Settings $audioSettings
+Assert-Contains $args6 '-map 0:a:0 -c:a aac -b:a 192k -map 0:a:1 -c:a copy' 'ffprobe index 1,2 を 0:a:0 / 0:a:1 に変換'
+Assert-NotContains $args6 '0:a:2' '存在しない 0:a:2 を出力しない'
 
 Write-Host ""
 Write-Host "結果: PASS=$($script:Pass) FAIL=$($script:Fail)"

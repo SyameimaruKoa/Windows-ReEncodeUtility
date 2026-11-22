@@ -107,7 +107,8 @@
 - 映像は `-c:v copy` でコピーし、音声のみ再エンコード。出力は `<元ファイル名>_audio.mkv`。
 - 使用トラック（全て／一部）と処理方法（全てエンコード／一部エンコード＋残りパススルー／全てパススルー）を独立に選択可能。
 - ffmpeg 内部エンコーダー（AAC / Opus / FLAC / MP3 / AC3 / E-AC3 / Vorbis）に対応。外部エンコーダーは非対応。
-- `Tests\Test-AudioOnlyMode.ps1` を追加し、4パターンの ffmpeg 引数構築を検証する。
+- `Tests\Test-AudioOnlyMode.ps1` を追加し、ffmpeg 引数構築を検証する。
+- ffprobe の `stream.index` をそのまま `-map 0:a:N` に渡していたため、映像のあるファイルで存在しない音声ストリームを指定して失敗するバグを修正。`TrackInfo` から音声内連番へ変換する。
 - 音声トラック一覧にタイトルを表示。ffprobe 7/8 は MP4 の `udta.name` をタグとして返さないため、ffprobe の `tags.title` / `tags.name` が空のときは MP4 の `trak/udta/name` ボックスを直接読んで補完する。
 - MediaInfo CLI は依存を増やすため使用しない。`tkhd` の track_ID と ffprobe の `stream.id`（`0x` 形式）を照合する。
 - Delete キーでモード選択へ戻れないバグを修正（mode 5 / mode 6）。`Show-Menu` が設定する `MenuNav='allback'` を呼び出し側で検出して外側ループへ戻す。
