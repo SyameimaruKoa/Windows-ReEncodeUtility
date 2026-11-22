@@ -94,30 +94,53 @@ if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction Silen
             [int]$DefaultIndex = 0
         )
         $currentIndex = $DefaultIndex
-        $drawnLines = ($Title -split "`r?`n").Count + 1 + $Choices.Length + 2
+        $titleLines = ($Title -split "`r?`n").Count + 1
+        $drawnLines = $titleLines + $Choices.Length + 2
         $firstDraw = $true
+        $startPos = $Host.UI.RawUI.CursorPosition
+        $menuStartY = $startPos.Y + $titleLines
+        $lastIndex = $currentIndex
+        $incremental = $true
         $menuInterrupted = $false
         try {
         while ($true) {
-            if ($IsWindows) {
-                Clear-Screen
+            if ($firstDraw -or -not $incremental) {
+                if (-not $firstDraw) {
+                    if ($IsWindows) { Clear-Screen }
+                    elseif (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue) {
+                        Clear-MenuLines -Lines $drawnLines
+                    }
+                    $startPos = $Host.UI.RawUI.CursorPosition
+                    $menuStartY = $startPos.Y + $titleLines
+                }
+                Write-Host "$Title`n"
+                for ($i = 0; $i -lt $Choices.Length; $i++) {
+                    if ($i -eq $currentIndex) {
+                        Write-Host -ForegroundColor Black -BackgroundColor White " > $($Choices[$i])"
+                    }
+                    else {
+                        Write-Host "   $($Choices[$i])"
+                    }
+                }
+                Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
+                $firstDraw = $false
+                $lastIndex = $currentIndex
+                $incremental = $true
             }
-            elseif (-not $firstDraw) {
-                if (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue) {
-                    Clear-MenuLines -Lines $drawnLines
+            elseif ($lastIndex -ne $currentIndex) {
+                try {
+                    [Console]::SetCursorPosition(0, $menuStartY + $lastIndex)
+                    Write-Host "   $($Choices[$lastIndex])"
+                    [Console]::SetCursorPosition(0, $menuStartY + $currentIndex)
+                    Write-Host -ForegroundColor Black -BackgroundColor White " > $($Choices[$currentIndex])"
+                    [Console]::SetCursorPosition(0, $startPos.Y + $drawnLines)
+                    $lastIndex = $currentIndex
+                }
+                catch {
+                    $incremental = $false
+                    continue
                 }
             }
-            $firstDraw = $false
-            Write-Host "$Title`n"
-            for ($i = 0; $i -lt $Choices.Length; $i++) {
-                if ($i -eq $currentIndex) {
-                    Write-Host -ForegroundColor Black -BackgroundColor White " > $($Choices[$i])"
-                }
-                else {
-                    Write-Host "   $($Choices[$i])"
-                }
-            }
-            Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
             $key = $null
             try {
                 if ($IsWindows) {

@@ -906,58 +906,61 @@ function Show-Menu {
     }
     $padTarget = $maxLen + 6 # " > " などの余白分
 
+    function Write-MenuLine {
+        param([int]$Index, [bool]$Selected)
+        $text = $Choices[$Index]
+        $line = if ($Selected) { " > $text" } else { "   $text" }
+        $currentLen = 0
+        foreach ($char in $line.ToCharArray()) {
+            if ([int]$char -ge 0x1000) { $currentLen += 2 } else { $currentLen += 1 }
+        }
+        $paddedLine = $line + (" " * [math]::Max(0, $padTarget - $currentLen))
+        if ($Selected) { Write-Host $paddedLine -ForegroundColor Black -BackgroundColor White }
+        else { Write-Host $paddedLine }
+    }
+
+    $menuStartY = $startPos.Y + $titleLines
+    $lastIndex = $currentIndex
+    $incremental = $true
+
     # Ctrl+C で中断されたときは finally で選択行を消し、カーソルを安全な行へ移す。
     # Linux では ReadKey が Ctrl+C でブロックしたままになり、
     # 別キーを押すまで画面が更新されないため、ここで強制的に整える。
     $menuInterrupted = $false
     try {
     while ($true) {
-        if (-not $firstDraw) {
-            if ($IsWindows) {
-                # Windows は従来どおり画面をクリアして全角文字の重複を防ぐ
-                if ($NoClear) {
-                    try {
-                        $Host.UI.RawUI.CursorPosition = $startPos
-                    }
-                    catch {
-                        Clear-Host
-                    }
-                }
-                else {
-                    Clear-Host
-                }
-            }
-            else {
-                # Linux では画面全体を消さず、直前のメニュー行だけを書き換える
-                if (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue) {
+        if ($firstDraw -or -not $incremental) {
+            if (-not $firstDraw) {
+                if ($IsWindows) { Clear-Host }
+                elseif (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue) {
                     Clear-MenuLines -Lines $drawnLines
                 }
+                $startPos = $Host.UI.RawUI.CursorPosition
+                $menuStartY = $startPos.Y + $titleLines
+            }
+            Write-Host "$Title`n"
+            for ($i = 0; $i -lt $Choices.Length; $i++) {
+                Write-MenuLine -Index $i -Selected ($i -eq $currentIndex)
+            }
+            Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
+            $firstDraw = $false
+            $lastIndex = $currentIndex
+            $incremental = $true
+        }
+        elseif ($lastIndex -ne $currentIndex) {
+            try {
+                [Console]::SetCursorPosition(0, $menuStartY + $lastIndex)
+                Write-MenuLine -Index $lastIndex -Selected $false
+                [Console]::SetCursorPosition(0, $menuStartY + $currentIndex)
+                Write-MenuLine -Index $currentIndex -Selected $true
+                [Console]::SetCursorPosition(0, $startPos.Y + $drawnLines)
+                $lastIndex = $currentIndex
+            }
+            catch {
+                $incremental = $false
+                continue
             }
         }
-        $firstDraw = $false
-
-        Write-Host "$Title`n"
-
-        for ($i = 0; $i -lt $Choices.Length; $i++) {
-            $line = if ($i -eq $currentIndex) { " > $($Choices[$i])" } else { "   $($Choices[$i])" }
-            
-            # 全角半角を考慮したパディング計算
-            $currentLen = 0
-            foreach ($char in $line.ToCharArray()) {
-                if ([int]$char -ge 0x1000) { $currentLen += 2 } else { $currentLen += 1 }
-            }
-            $spacesToPad = [math]::Max(0, $padTarget - $currentLen)
-            $paddedLine = $line + (" " * $spacesToPad)
-            
-            if ($i -eq $currentIndex) {
-                Write-Host $paddedLine -ForegroundColor Black -BackgroundColor White
-            }
-            else {
-                Write-Host $paddedLine
-            }
-        }
-
-        Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
 
         $key = $null
         try {
