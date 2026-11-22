@@ -108,6 +108,8 @@
 - 使用トラック（全て／一部）と処理方法（全てエンコード／一部エンコード＋残りパススルー／全てパススルー）を独立に選択可能。
 - ffmpeg 内部エンコーダー（AAC / Opus / FLAC / MP3 / AC3 / E-AC3 / Vorbis）に対応。外部エンコーダーは非対応。
 - `Tests\Test-AudioOnlyMode.ps1` を追加し、4パターンの ffmpeg 引数構築を検証する。
+- 音声トラック一覧にタイトルを表示。ffprobe 7/8 は MP4 の `udta.name` をタグとして返さないため、ffprobe の `tags.title` / `tags.name` が空のときは MediaInfo CLI の JSON で補完する。
+- Delete キーでモード選択へ戻れないバグを修正（mode 5 / mode 6）。`Show-Menu` が設定する `MenuNav='allback'` を呼び出し側で検出して外側ループへ戻す。
 
 ## 2026-11-18（追記・未コミット）
 

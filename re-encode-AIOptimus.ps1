@@ -2715,15 +2715,39 @@ function Invoke-ExternalAudioSynthesis {
 #endregion
 
 #region 音声のみエンコード（映像はパススルー・マルチトラック対応）
+function Get-MediaInfoAudioTitles {
+    param([Parameter(Mandatory = $true)][string]$FilePath)
+    $titles = @{}
+    $mi = Get-Command -Name 'mediainfo' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $mi) { return $titles }
+    try {
+        $jsonStr = & $mi.Source --Output=JSON "$FilePath" 2>$null | Out-String
+        if ($jsonStr) {
+            $json = $jsonStr | ConvertFrom-Json
+            foreach ($t in @($json.media.track)) {
+                if ($t.'@type' -eq 'Audio' -and $t.Title) {
+                    $key = if ($t.StreamOrder) { [int]$t.StreamOrder } else { [int]$t.ID - 1 }
+                    if (-not $titles.ContainsKey($key)) { $titles[$key] = [string]$t.Title }
+                }
+            }
+        }
+    } catch {}
+    return $titles
+}
+
 function Get-AudioOnlyTrackList {
     param([Parameter(Mandatory = $true)][string]$FilePath)
     $jsonStr = & $global:Settings.FfprobePath -v quiet -print_format json -show_streams -select_streams a "$FilePath" 2>$null | Out-String
     if (-not $jsonStr) { return @() }
     try { $json = $jsonStr | ConvertFrom-Json } catch { return @() }
+    $mediaTitles = Get-MediaInfoAudioTitles -FilePath $FilePath
     $tracks = @()
     foreach ($s in @($json.streams)) {
         $lang = if ($s.tags -and $s.tags.language) { [string]$s.tags.language } else { 'und' }
-        $title = if ($s.tags -and $s.tags.title) { [string]$s.tags.title } else { '' }
+        $title = ''
+        if ($s.tags -and $s.tags.title) { $title = [string]$s.tags.title }
+        elseif ($s.tags -and $s.tags.name) { $title = [string]$s.tags.name }
+        if (-not $title -and $mediaTitles.ContainsKey([int]$s.index)) { $title = $mediaTitles[[int]$s.index] }
         $tracks += @{
             Index = [int]$s.index
             Codec = [string]$s.codec_name
