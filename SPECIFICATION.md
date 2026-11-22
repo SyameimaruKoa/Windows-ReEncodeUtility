@@ -220,6 +220,13 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
 
 ## 5. コアロジック & エッジケース確定仕様
 
+### 0.1 PowerShell 互換性
+
+- PowerShell 5.1 と 7 の**両方で動作**する。OS 側の PowerShell 7 移行に伴い 5.1 を排除するのではなく、両対応を維持する。
+- 全 `.ps1` / `.psm1` は **UTF-8 BOM 付き**で保存する（5.1 が BOM 無し UTF-8 を ANSI として読み、日本語が文字化けするため）。
+- PS7 固有構文（`??` / `?.` / `$PSStyle` / `ForEach-Object -Parallel` / `-AsHashtable` 等）は使用しない。
+- `Tests\Test-PowerShellCompatibility.ps1` で BOM・PS7 固有構文・構文解析を検証する。
+
 ### 5.1 エンコード実行中の操作ロック
 - エンコード開始と同時にパラメータ設定パネルは自動ロック。
 - 実行中に受け付ける操作は `Space` (一時停止/再開), `Esc` (中断), `F3` (ログ展開/スクロール), `Alt+D` (詳細確認) のみに限定。

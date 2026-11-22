@@ -169,7 +169,7 @@ X向けのMP4/H.264等の出力形式は、プラットフォームモードで�
 | ----------------------- | -------------------- | ------------------------------------------------------------------------- |
 | **FFmpeg**              | 動画エンコーディング | [ffmpeg.org](https://ffmpeg.org/download.html) または PATH 環境変数に登録 |
 | **FFprobe**             | 動画情報取得         | FFmpeg に付属                                                             |
-| **PowerShell 7 以上**   | スクリプト実行       | [インストール](https://learn.microsoft.com/ja-jp/powershell/scripting/install/installing-powershell-on-windows) |
+| **PowerShell 5.1 以上 / PowerShell 7** | スクリプト実行 | Windows 10/11 に含まれる 5.1、または [7 をインストール](https://learn.microsoft.com/ja-jp/powershell/scripting/install/installing-powershell-on-windows)。どちらでも動作 |
 
 ### オプション（外部音声エンコーダー）
 
