@@ -8,9 +8,13 @@
 .EXAMPLE
     .\Record-MiraBox.ps1
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 param([switch]$h, [switch]$help)
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 if ($h -or $help) { Get-Help $MyInvocation.MyCommand.Path -Detailed; exit }
 
 #region UIユーティリティ

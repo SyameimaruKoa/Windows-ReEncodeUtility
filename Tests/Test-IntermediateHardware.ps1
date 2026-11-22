@@ -9,13 +9,17 @@
 .EXAMPLE
     pwsh -File .\Tests\Test-IntermediateHardware.ps1
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 [CmdletBinding()]
 param(
     [Alias('h', 'help')]
     [switch]$ShowHelp
 )
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 #region ヘルプ
 if ($ShowHelp -or $args -contains '--help') {
     Get-Help $MyInvocation.MyCommand.Path -Detailed

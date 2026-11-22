@@ -16,14 +16,18 @@
     System.Collections.Hashtable
     選択された映像・音声のエンコード設定を含むハッシュテーブルを返す。
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 [CmdletBinding()]
 param (
     [switch]$Intermediate,
     [ValidateSet("On", "Optional", "Off")]
     [string]$HwScanMode = "Optional"
 )
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 
 #region ヘルプ表示
 if ($args -contains "-h" -or $args -contains "--help") {

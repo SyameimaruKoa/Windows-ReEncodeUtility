@@ -1,4 +1,5 @@
-﻿# AudioSync.psm1 — Video/audio waveform alignment independent of the encoder.
+﻿#requires -Version 5.1
+# AudioSync.psm1 — Video/audio waveform alignment independent of the encoder.
 Set-StrictMode -Version Latest
 
 function Get-AudioSyncAlignment {

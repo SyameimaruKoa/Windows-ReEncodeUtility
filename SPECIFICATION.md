@@ -225,7 +225,18 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
 - PowerShell 5.1 と 7 の**両方で動作**する。OS 側の PowerShell 7 移行に伴い 5.1 を排除するのではなく、両対応を維持する。
 - 全 `.ps1` / `.psm1` は **UTF-8 BOM 付き**で保存する（5.1 が BOM 無し UTF-8 を ANSI として読み、日本語が文字化けするため）。
 - PS7 固有構文（`??` / `?.` / `$PSStyle` / `ForEach-Object -Parallel` / `-AsHashtable` 等）は使用しない。
-- `Tests\Test-PowerShellCompatibility.ps1` で BOM・PS7 固有構文・構文解析を検証する。
+- 各スクリプトは `#requires -Version 5.1` とし、`$IsWindows` / `$IsLinux` / `$IsMacOS` は PS5.1 で未定義のため互換初期化（冒頭の `Get-Variable` 確認と代入）を行う。
+- `Tests\Test-PowerShellCompatibility.ps1` で BOM・PS7 固有構文・`#requires`・互換初期化・構文解析を検証する。
+
+### 0.2 音声のみエンコード／マルチトラック音声
+
+- メインメニューに「音声のみエンコード（映像はパススルー・マルチトラック対応）」を追加。
+- 映像は `-map 0:v:0 -c:v copy` でコピーし、音声トラックのみ再エンコードする。出力は `<元ファイル名>_audio.mkv`。
+- 使用トラック: 「全トラック」または「一部トラック（0,2 のようなカンマ区切り）」。
+- 処理方法: 「全てエンコード」「一部のみエンコード＋残りパススルー」「全てパススルー」。
+- エンコーダーは ffmpeg 内部の AAC / Opus / FLAC / MP3 / AC3 / E-AC3 / Vorbis。`-encoders` から利用可能なものだけを表示する。
+- 外部エンコーダー（qaac / nero / fdkaac）は非対応。
+- `Tests\Test-AudioOnlyMode.ps1` で ffmpeg 引数構築を検証する。
 
 ### 5.1 エンコード実行中の操作ロック
 - エンコード開始と同時にパラメータ設定パネルは自動ロック。

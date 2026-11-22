@@ -5,12 +5,16 @@
     キャッシュを使用して不要な再スキャンを防ぎつつ、利用可能なHWエンコーダーのリストを $global:HardwareInfo に格納する。
     他のスクリプトからドットソースで読み込まれることを想定しておるぞ。
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 [CmdletBinding()]
 param(
     [switch]$ForceScan
 )
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 
 #region ヘルプ表示
 if ($args -contains "-h" -or $args -contains "--help") {

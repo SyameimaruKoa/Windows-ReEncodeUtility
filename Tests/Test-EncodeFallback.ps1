@@ -4,13 +4,17 @@
 .PARAMETER WithVideo
     実動画を使った事前検証プローブの実行も行う（既定のテスト動画を使用）。
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 [CmdletBinding()]
 param(
     [switch]$WithVideo,
     [string]$VideoPath = (Join-Path (Split-Path -Parent $PSScriptRoot) '.cache\Azahar 2126.2 _ SUPER MARIO 3D LAND 2026-11-16 19-03-51.mp4')
 )
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot

@@ -1,5 +1,9 @@
-﻿#requires -Version 7.0
-
+﻿#requires -Version 5.1
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 #region 中間ファイル用ハードウェアエンコード
 function Get-IntermediateEncoderHelp {
     param([string]$Encoder, [string]$Ffmpeg)

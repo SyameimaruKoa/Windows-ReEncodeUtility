@@ -7,6 +7,8 @@
     さらにチャプターや字幕に基づいた分割保存が可能じゃ。
     PS CameraのSBS左右交換プロファイルでは、外部4ch WAVの自動同期と2音声トラック合成を選べる。
     メインメニューの外部音声同期モードなら映像を再エンコードせず音声だけ合成できる。
+    音声のみエンコードモードでは映像をコピーし、音声トラックだけを再エンコードする。
+    使用トラック（全て／一部）と処理方法（全てエンコード／一部エンコード＋残りパススルー／全てパススルー）を個別に選べる。
     エンコード設定は get-ffmpegOptions.ps1 で行うぞ。
     音声同期で音が一致しない場合は手動オフセットを選択する。
 .PARAMETER QsvDefaultDepth
@@ -19,8 +21,7 @@
     このスクリプトの実行には、ffmpeg, ffprobe や各種外部エンコーダーが必要じゃ。
     `config.user.psd1` に各ツールのパスを正しく設定しておくのじゃぞ。
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 [CmdletBinding()]
 param (
     [switch]$QsvDefaultDepth,
@@ -30,6 +31,11 @@ param (
     [Parameter(ValueFromPipeline = $true, ValueFromRemainingArguments = $true, HelpMessage = "処理対象のファイルまたはフォルダのパスを入力せい。")]
     [string[]]$Path
 )
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 
 #region ヘルプ表示
 if ($ShowHelp -or $args -contains "-h" -or $args -contains "--help" -or -not $Path -or $Path.Count -eq 0) {
@@ -2708,6 +2714,204 @@ function Invoke-ExternalAudioSynthesis {
 }
 #endregion
 
+#region 音声のみエンコード（映像はパススルー・マルチトラック対応）
+function Get-AudioOnlyTrackList {
+    param([Parameter(Mandatory = $true)][string]$FilePath)
+    $jsonStr = & $global:Settings.FfprobePath -v quiet -print_format json -show_streams -select_streams a "$FilePath" 2>$null | Out-String
+    if (-not $jsonStr) { return @() }
+    try { $json = $jsonStr | ConvertFrom-Json } catch { return @() }
+    $tracks = @()
+    foreach ($s in @($json.streams)) {
+        $lang = if ($s.tags -and $s.tags.language) { [string]$s.tags.language } else { 'und' }
+        $title = if ($s.tags -and $s.tags.title) { [string]$s.tags.title } else { '' }
+        $tracks += @{
+            Index = [int]$s.index
+            Codec = [string]$s.codec_name
+            Channels = [int]$s.channels
+            Language = $lang
+            Title = $title
+        }
+    }
+    return $tracks
+}
+
+function Test-AudioOnlyHasVideo {
+    param([Parameter(Mandatory = $true)][string]$FilePath)
+    $out = & $global:Settings.FfprobePath -v error -select_streams v:0 -show_entries stream=index -of csv=p=0 "$FilePath" 2>$null
+    return ($out -match '\d')
+}
+
+function Format-AudioOnlyTrackLabel {
+    param([Parameter(Mandatory = $true)][hashtable]$Track)
+    $label = "[{0}] {1} {2}ch {3}" -f $Track.Index, $Track.Codec, $Track.Channels, $Track.Language
+    if ($Track.Title) { $label += ' "' + $Track.Title + '"' }
+    return $label
+}
+
+function Read-AudioOnlyTrackNumbers {
+    param(
+        [Parameter(Mandatory = $true)]$Tracks,
+        [Parameter(Mandatory = $true)][string]$Title
+    )
+    Write-Host "  音声トラック一覧:"
+    foreach ($t in $Tracks) { Write-Host "    $(Format-AudioOnlyTrackLabel -Track $t)" }
+    $indexes = @($Tracks | ForEach-Object { [int]$_.Index })
+    $maxIndex = ($indexes | Measure-Object -Maximum).Maximum
+    while ($true) {
+        $entered = (Read-Host "$Title (カンマ区切り、例: 0,2 / 空欄で全トラック)").Trim()
+        if (-not $entered) { return @($indexes) }
+        $nums = @()
+        $valid = $true
+        foreach ($part in @($entered -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+            $n = 0
+            if (-not [int]::TryParse($part, [ref]$n)) { $valid = $false; break }
+            $nums += $n
+        }
+        if ($valid -and $nums.Count -gt 0 -and @($nums | Where-Object { $_ -lt 0 -or $_ -gt $maxIndex }).Count -eq 0) {
+            return @($nums | Sort-Object -Unique)
+        }
+        Write-Host "  0 ~ $maxIndex の範囲でカンマ区切り入力するのじゃ。" -ForegroundColor Yellow
+    }
+}
+
+function Read-AudioOnlyEncoder {
+    $available = @()
+    try {
+        $lines = & $global:Settings.FfmpegPath -hide_banner -encoders 2>&1
+        foreach ($line in $lines) {
+            if ($line -match '^\s*A[\.\w]+\s+(aac|libopus|libvorbis|flac|libmp3lame|ac3|eac3)\s') {
+                $available += $Matches[1]
+            }
+        }
+    } catch {}
+    $menu = @()
+    if ($available -contains 'aac') { $menu += @{ Key = 'aac'; Label = 'AAC' } }
+    if ($available -contains 'libopus') { $menu += @{ Key = 'libopus'; Label = 'Opus' } }
+    if ($available -contains 'flac') { $menu += @{ Key = 'flac'; Label = 'FLAC (無損失)' } }
+    if ($available -contains 'libmp3lame') { $menu += @{ Key = 'libmp3lame'; Label = 'MP3' } }
+    if ($available -contains 'ac3') { $menu += @{ Key = 'ac3'; Label = 'AC3' } }
+    if ($available -contains 'eac3') { $menu += @{ Key = 'eac3'; Label = 'E-AC3' } }
+    if ($available -contains 'libvorbis') { $menu += @{ Key = 'libvorbis'; Label = 'Vorbis' } }
+    if ($menu.Count -eq 0) { $menu += @{ Key = 'aac'; Label = 'AAC' } }
+    $idx = Show-Menu -Title "音声エンコーダーを選択" -Choices @($menu | ForEach-Object { $_.Label })
+    if ($idx -lt 0) { return $null }
+    $key = $menu[$idx].Key
+    $label = $menu[$idx].Label
+    if ($key -eq 'flac') {
+        return @{ Key = $key; Args = @('-c:a', 'flac'); Description = "$label (無損失)" }
+    }
+    $brChoices = @('320k', '256k', '192k', '128k', '96k', 'カスタム')
+    $brIndex = Show-Menu -Title "$label のビットレートを選択" -Choices $brChoices
+    if ($brIndex -lt 0) { return $null }
+    if ($brIndex -eq 5) { $br = (Read-Host 'ビットレートを入力 (例: 160k)').Trim() }
+    else { $br = $brChoices[$brIndex] }
+    if (-not $br) { return $null }
+    return @{ Key = $key; Args = @('-c:a', $key, '-b:a', $br); Description = "$label $br" }
+}
+
+function Read-AudioOnlySettings {
+    param([Parameter(Mandatory = $true)][string]$VideoPath)
+    $tracks = @(Get-AudioOnlyTrackList -FilePath $VideoPath)
+    if ($tracks.Count -eq 0) {
+        Write-Log "音声トラックが見つからぬ: $VideoPath" -Level "ERROR"
+        return $null
+    }
+    Write-Host "  音声トラック: $($tracks.Count) 本"
+
+    $useChoice = Show-Menu -Title "使用する音声トラックを選択してください。" -Choices @(
+        "全トラックを使用 ($($tracks.Count)本)",
+        "一部トラックのみ使用（番号指定）"
+    )
+    if ($useChoice -lt 0) { return $null }
+    if ($useChoice -eq 0) { $selected = @($tracks | ForEach-Object { [int]$_.Index }) }
+    else { $selected = @(Read-AudioOnlyTrackNumbers -Tracks $tracks -Title '使用するトラック番号') }
+    if ($selected.Count -eq 0) { return $null }
+
+    $modeChoice = Show-Menu -Title "音声トラックの処理方法を選択してください。" -Choices @(
+        '全てエンコード',
+        '一部のみエンコード、残りはパススルー',
+        '全てパススルー（コピー）'
+    )
+    if ($modeChoice -lt 0) { return $null }
+
+    $encodeTracks = @()
+    $encoder = $null
+    if ($modeChoice -eq 0) { $encodeTracks = @($selected) }
+    elseif ($modeChoice -eq 1) {
+        $selectedTracks = @($tracks | Where-Object { $selected -contains [int]$_.Index })
+        $encodeTracks = @(Read-AudioOnlyTrackNumbers -Tracks $selectedTracks -Title 'エンコードするトラック番号')
+        if ($encodeTracks.Count -eq 0) { return $null }
+    }
+    if ($modeChoice -ne 2) {
+        $encoder = Read-AudioOnlyEncoder
+        if (-not $encoder) { return $null }
+    }
+
+    return @{
+        SelectedTracks = @($selected)
+        EncodeTracks = @($encodeTracks)
+        Mode = @('all', 'partial', 'copy')[$modeChoice]
+        Encoder = $encoder
+        TrackInfo = $tracks
+        HasVideo = (Test-AudioOnlyHasVideo -FilePath $VideoPath)
+    }
+}
+
+function New-AudioOnlyFfmpegArguments {
+    param(
+        [Parameter(Mandatory = $true)][string]$InputPath,
+        [Parameter(Mandatory = $true)][string]$OutputPath,
+        [Parameter(Mandatory = $true)][hashtable]$Settings
+    )
+    $parts = @('-hide_banner', '-nostdin', '-y', '-i', ('"' + $InputPath + '"'))
+    if ($Settings.HasVideo) {
+        $parts += @('-map', '0:v:0', '-c:v', 'copy')
+    }
+    foreach ($idx in $Settings.SelectedTracks) {
+        $parts += @('-map', "0:a:$idx")
+        if ($Settings.EncodeTracks -contains [int]$idx) {
+            $parts += @($Settings.Encoder.Args)
+        }
+        else {
+            $parts += @('-c:a', 'copy')
+        }
+    }
+    $parts += ('"' + $OutputPath + '"')
+    return ($parts -join ' ')
+}
+
+function Invoke-AudioOnlyEncode {
+    param(
+        [Parameter(Mandatory = $true)][string]$VideoPath,
+        [Parameter(Mandatory = $true)][hashtable]$Settings,
+        [string]$OutputPath = ''
+    )
+    $resolved = (Resolve-Path -LiteralPath $VideoPath).ProviderPath
+    if (-not $OutputPath) {
+        $dir = [System.IO.Path]::GetDirectoryName($resolved)
+        $base = [System.IO.Path]::GetFileNameWithoutExtension($resolved)
+        $OutputPath = Join-Path $dir "${base}_audio.mkv"
+    }
+    $arguments = New-AudioOnlyFfmpegArguments -InputPath $resolved -OutputPath $OutputPath -Settings $Settings
+    $duration = 0
+    try {
+        $d = & $global:Settings.FfprobePath -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$resolved" 2>$null
+        if ($d -match '^[\d\.]+$') { $duration = [double]$d }
+    } catch {}
+    Write-Log "音声のみエンコード: $OutputPath"
+    Write-Log "  ffmpeg 引数: $arguments" -Level "DEBUG"
+    $result = Invoke-FfmpegEncode -Arguments $arguments -DurationSeconds $duration
+    if ($result.ExitCode -ne 0) {
+        throw "音声のみエンコードに失敗しました (exit=$($result.ExitCode))。"
+    }
+    if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
+        throw "出力ファイルが作成されておらぬ: $OutputPath"
+    }
+    Write-Log "音声のみエンコード完了: $OutputPath"
+    return $OutputPath
+}
+#endregion
+
 #region メイン処理
 
 #region モード選択・セットアップ
@@ -2796,7 +3000,7 @@ function Start-MainProcess {
     }
 
     # --- 実行モード選択 ---
-    $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "プラットフォーム向けアップロード (Twitter/Discord/catbox.moe)", "中間ファイル作成モード (高画質・MKV・音声設定可)", "チャプター/字幕分割モード (分割して再エンコード)", "外部音声同期・マルチトラック合成（映像の再エンコードなし）")
+    $modeChoices = @("通常モード (一つずつ対話形式で設定)", "テンプレートから選択", "プラットフォーム向けアップロード (Twitter/Discord/catbox.moe)", "中間ファイル作成モード (高画質・MKV・音声設定可)", "チャプター/字幕分割モード (分割して再エンコード)", "外部音声同期・マルチトラック合成（映像の再エンコードなし）", "音声のみエンコード（映像はパススルー・マルチトラック対応）")
     # Delete は設定を最初（モード選択）まで戻すため、モード選択と設定全体をループする。
     while ($true) {
     while ($true) {
@@ -2822,6 +3026,26 @@ function Start-MainProcess {
             }
             catch {
                 Write-Log "外部音声同期に失敗: $_" -Level "ERROR"
+            }
+        }
+        return
+    }
+
+    if ($selectedMode -eq 6) {
+        foreach ($inputFile in $Path) {
+            $inputFile = $inputFile.Trim('"')
+            if (-not (Test-Path -LiteralPath $inputFile -PathType Leaf)) {
+                Write-Log "動画ファイルが見つからぬ: $inputFile" -Level "ERROR"
+                continue
+            }
+            $resolvedInput = (Resolve-Path -LiteralPath $inputFile).ProviderPath
+            $audioOnlySettings = Read-AudioOnlySettings -VideoPath $resolvedInput
+            if (-not $audioOnlySettings) { continue }
+            try {
+                $null = Invoke-AudioOnlyEncode -VideoPath $resolvedInput -Settings $audioOnlySettings
+            }
+            catch {
+                Write-Log "音声のみエンコードに失敗: $_" -Level "ERROR"
             }
         }
         return
