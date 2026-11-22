@@ -2715,34 +2715,95 @@ function Invoke-ExternalAudioSynthesis {
 #endregion
 
 #region 音声のみエンコード（映像はパススルー・マルチトラック対応）
-function Get-MediaInfoAudioTitles {
+function Read-Mp4Box {
+    param(
+        [Parameter(Mandatory = $true)][System.IO.BinaryReader]$Reader,
+        [Parameter(Mandatory = $true)][long]$ParentEnd
+    )
+    $start = $Reader.BaseStream.Position
+    if ($start + 8 -gt $ParentEnd) { return $null }
+    $size32 = [System.Net.IPAddress]::NetworkToHostOrder($Reader.ReadInt32())
+    $type = [System.Text.Encoding]::ASCII.GetString($Reader.ReadBytes(4))
+    $headerSize = 8
+    $size = [long]$size32
+    if ($size32 -eq 1) {
+        $size = [System.Net.IPAddress]::NetworkToHostOrder($Reader.ReadInt64())
+        $headerSize = 16
+    }
+    elseif ($size32 -eq 0) {
+        $size = $ParentEnd - $start
+    }
+    if ($size -lt $headerSize -or $start + $size -gt $ParentEnd) { return $null }
+    return @{
+        Type = $type
+        DataStart = $start + $headerSize
+        Size = $size
+        HeaderSize = $headerSize
+        End = $start + $size
+    }
+}
+
+function Get-Mp4TrackTitles {
     param([Parameter(Mandatory = $true)][string]$FilePath)
     $titles = @{}
-    $miPath = $null
-    $cmd = Get-Command -Name 'mediainfo' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($cmd) { $miPath = $cmd.Source }
-    if (-not $miPath -and $global:Settings -and $global:Settings.MediaInfoPath) {
-        $miPath = $global:Settings.MediaInfoPath
-    }
-    if (-not $miPath) {
-        $candidates = @()
-        if ($env:ProgramFiles) { $candidates += (Join-Path $env:ProgramFiles 'MediaInfo\mediainfo.exe') }
-        if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'MediaInfo\mediainfo.exe') }
-        foreach ($c in $candidates) {
-            if (Test-Path -LiteralPath $c -PathType Leaf) { $miPath = $c; break }
-        }
-    }
-    if (-not $miPath) { return $titles }
+    $ext = [System.IO.Path]::GetExtension($FilePath).ToLowerInvariant()
+    if ($ext -notin @('.mp4', '.m4v', '.mov', '.m4a')) { return $titles }
     try {
-        $jsonStr = & $miPath --Output=JSON "$FilePath" 2>$null | Out-String
-        if ($jsonStr) {
-            $json = $jsonStr | ConvertFrom-Json
-            foreach ($t in @($json.media.track)) {
-                if ($t.'@type' -eq 'Audio' -and $t.Title) {
-                    $key = if ($t.StreamOrder) { [int]$t.StreamOrder } else { [int]$t.ID - 1 }
-                    if (-not $titles.ContainsKey($key)) { $titles[$key] = [string]$t.Title }
-                }
+        $fs = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $reader = New-Object System.IO.BinaryReader($fs)
+            $fileEnd = $fs.Length
+            $moov = $null
+            while ($fs.Position + 8 -le $fileEnd) {
+                $box = Read-Mp4Box -Reader $reader -ParentEnd $fileEnd
+                if (-not $box) { break }
+                if ($box.Type -eq 'moov') { $moov = $box; break }
+                $fs.Position = $box.End
             }
+            if (-not $moov) { return $titles }
+            $fs.Position = $moov.DataStart
+            while ($fs.Position + 8 -le $moov.End) {
+                $trak = Read-Mp4Box -Reader $reader -ParentEnd $moov.End
+                if (-not $trak) { break }
+                if ($trak.Type -eq 'trak') {
+                    $trackId = 0
+                    $title = ''
+                    $fs.Position = $trak.DataStart
+                    while ($fs.Position + 8 -le $trak.End) {
+                        $child = Read-Mp4Box -Reader $reader -ParentEnd $trak.End
+                        if (-not $child) { break }
+                        if ($child.Type -eq 'tkhd') {
+                            $fs.Position = $child.DataStart
+                            $version = $reader.ReadByte()
+                            [void]$reader.ReadBytes(3)
+                            if ($version -eq 0) { [void]$reader.ReadBytes(8) } else { [void]$reader.ReadBytes(16) }
+                            $trackId = [System.Net.IPAddress]::NetworkToHostOrder($reader.ReadInt32())
+                        }
+                        elseif ($child.Type -eq 'udta') {
+                            $fs.Position = $child.DataStart
+                            while ($fs.Position + 8 -le $child.End) {
+                                $grand = Read-Mp4Box -Reader $reader -ParentEnd $child.End
+                                if (-not $grand) { break }
+                                if ($grand.Type -eq 'name') {
+                                    $payloadLen = [int]($grand.Size - $grand.HeaderSize)
+                                    if ($payloadLen -gt 0 -and $payloadLen -lt 4096) {
+                                        $bytes = $reader.ReadBytes($payloadLen)
+                                        $title = [System.Text.Encoding]::UTF8.GetString($bytes).TrimEnd([char]0)
+                                    }
+                                }
+                                $fs.Position = $grand.End
+                            }
+                        }
+                        $fs.Position = $child.End
+                    }
+                    if ($trackId -gt 0 -and $title) { $titles[$trackId] = $title }
+                }
+                $fs.Position = $trak.End
+            }
+        }
+        finally {
+            $reader.Close()
+            $fs.Close()
         }
     } catch {}
     return $titles
@@ -2753,14 +2814,23 @@ function Get-AudioOnlyTrackList {
     $jsonStr = & $global:Settings.FfprobePath -v quiet -print_format json -show_streams -select_streams a "$FilePath" 2>$null | Out-String
     if (-not $jsonStr) { return @() }
     try { $json = $jsonStr | ConvertFrom-Json } catch { return @() }
-    $mediaTitles = Get-MediaInfoAudioTitles -FilePath $FilePath
+    $mp4Titles = Get-Mp4TrackTitles -FilePath $FilePath
     $tracks = @()
     foreach ($s in @($json.streams)) {
         $lang = if ($s.tags -and $s.tags.language) { [string]$s.tags.language } else { 'und' }
         $title = ''
         if ($s.tags -and $s.tags.title) { $title = [string]$s.tags.title }
         elseif ($s.tags -and $s.tags.name) { $title = [string]$s.tags.name }
-        if (-not $title -and $mediaTitles.ContainsKey([int]$s.index)) { $title = $mediaTitles[[int]$s.index] }
+        if (-not $title) {
+            $streamId = 0
+            if ($s.id) {
+                $sid = [string]$s.id
+                if ($sid -match '^0x([0-9a-fA-F]+)$') { $streamId = [Convert]::ToInt32($Matches[1], 16) }
+                else { [void][int]::TryParse($sid, [ref]$streamId) }
+            }
+            if ($streamId -gt 0 -and $mp4Titles.ContainsKey($streamId)) { $title = $mp4Titles[$streamId] }
+            elseif ($mp4Titles.ContainsKey([int]$s.index + 1)) { $title = $mp4Titles[[int]$s.index + 1] }
+        }
         $tracks += @{
             Index = [int]$s.index
             Codec = [string]$s.codec_name

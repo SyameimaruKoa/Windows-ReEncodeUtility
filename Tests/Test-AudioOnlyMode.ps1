@@ -31,7 +31,8 @@ function Get-FunctionFromAst {
 }
 
 . ([scriptblock]::Create((Get-FunctionFromAst -Path (Join-Path $root 're-encode-AIOptimus.ps1') -Name 'New-AudioOnlyFfmpegArguments')))
-. ([scriptblock]::Create((Get-FunctionFromAst -Path (Join-Path $root 're-encode-AIOptimus.ps1') -Name 'Get-MediaInfoAudioTitles')))
+. ([scriptblock]::Create((Get-FunctionFromAst -Path (Join-Path $root 're-encode-AIOptimus.ps1') -Name 'Read-Mp4Box')))
+. ([scriptblock]::Create((Get-FunctionFromAst -Path (Join-Path $root 're-encode-AIOptimus.ps1') -Name 'Get-Mp4TrackTitles')))
 . ([scriptblock]::Create((Get-FunctionFromAst -Path (Join-Path $root 're-encode-AIOptimus.ps1') -Name 'Get-AudioOnlyTrackList')))
 . ([scriptblock]::Create((Get-FunctionFromAst -Path (Join-Path $root 're-encode-AIOptimus.ps1') -Name 'Format-AudioOnlyTrackLabel')))
 
@@ -76,17 +77,15 @@ $args4 = New-AudioOnlyFfmpegArguments -InputPath $inputPath -OutputPath $outputP
 Assert-NotContains $args4 '0:v:0' '映像なしでは映像 map を出力しない'
 Assert-Contains $args4 '-map 0:a:0 -c:a aac -b:a 192k' '映像なしでも音声はエンコード'
 
-# 5. ffprobe がトラック名を返さない MP4 でも MediaInfo からタイトルを補完する
-if (Get-Command -Name 'mediainfo' -CommandType Application -ErrorAction SilentlyContinue) {
-    $tmpDir = Join-Path $root '.cache/tmp'
-    if (-not (Test-Path -LiteralPath $tmpDir -PathType Container)) { $null = New-Item -ItemType Directory -Path $tmpDir -Force }
-    $titleTestMp4 = Join-Path $tmpDir 'audio-title-test.mp4'
-    $null = & ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc=duration=1:size=320x240:rate=30' -f lavfi -i 'sine=frequency=440:duration=1' -map 0:v -map 1:a -c:v libx264 -preset ultrafast -c:a aac -metadata:s:a:0 'title=Test Audio Title' -y $titleTestMp4 2>$null
-    $titleTracks = @(Get-AudioOnlyTrackList -FilePath $titleTestMp4)
-    if ($titleTracks.Count -gt 0) {
-        Assert-Contains $titleTracks[0].Title 'Test Audio Title' 'MediaInfoから音声トラック名を補完'
-        Assert-Contains (Format-AudioOnlyTrackLabel -Track $titleTracks[0]) 'Test Audio Title' '一覧ラベルにタイトルを表示'
-    }
+# 5. ffprobe がトラック名を返さない MP4 でもボックスを直接読んでタイトルを補完する
+$tmpDir = Join-Path $root '.cache/tmp'
+if (-not (Test-Path -LiteralPath $tmpDir -PathType Container)) { $null = New-Item -ItemType Directory -Path $tmpDir -Force }
+$titleTestMp4 = Join-Path $tmpDir 'audio-title-test.mp4'
+$null = & ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc=duration=1:size=320x240:rate=30' -f lavfi -i 'sine=frequency=440:duration=1' -map 0:v -map 1:a -c:v libx264 -preset ultrafast -c:a aac -metadata:s:a:0 'title=Test Audio Title' -y $titleTestMp4 2>$null
+$titleTracks = @(Get-AudioOnlyTrackList -FilePath $titleTestMp4)
+if ($titleTracks.Count -gt 0) {
+    Assert-Contains $titleTracks[0].Title 'Test Audio Title' 'MP4のnameボックスから音声トラック名を取得'
+    Assert-Contains (Format-AudioOnlyTrackLabel -Track $titleTracks[0]) 'Test Audio Title' '一覧ラベルにタイトルを表示'
 }
 
 Write-Host ""
