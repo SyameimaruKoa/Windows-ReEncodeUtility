@@ -140,8 +140,8 @@ if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction Silen
                 $global:MenuNav = ''; return -1
             }
             switch ($key.VirtualKeyCode) {
-                38 { if ($currentIndex -gt 0) { $currentIndex-- } } # UpArrow
-                40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } } # DownArrow
+                38 { if ($currentIndex -gt 0) { $currentIndex-- } else { $currentIndex = $Choices.Length - 1 } } # UpArrow: 先頭で末尾へ戻る
+                40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } else { $currentIndex = 0 } } # DownArrow: 末尾で先頭へ戻る
                 13 { $global:MenuNav = ''; return $currentIndex } # Enter
                 27 { $global:MenuNav = ''; return -1 } # Escape
                 8  {

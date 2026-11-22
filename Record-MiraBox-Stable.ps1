@@ -67,8 +67,8 @@ function Show-Menu {
         Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
         $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         switch ($key.VirtualKeyCode) {
-            38 { if ($currentIndex -gt 0) { $currentIndex-- } }
-            40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } }
+            38 { if ($currentIndex -gt 0) { $currentIndex-- } else { $currentIndex = $Choices.Length - 1 } } # 先頭で末尾へ戻る
+            40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } else { $currentIndex = 0 } } # 末尾で先頭へ戻る
             13 { $global:MenuNav = ''; Write-Host ""; return $currentIndex }
             27 { $global:MenuNav = ''; Write-Host ""; return -1 }
             8  {

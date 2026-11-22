@@ -111,6 +111,7 @@
 - 音声トラック一覧にタイトルを表示。ffprobe 7/8 は MP4 の `udta.name` をタグとして返さないため、ffprobe の `tags.title` / `tags.name` が空のときは MP4 の `trak/udta/name` ボックスを直接読んで補完する。
 - MediaInfo CLI は依存を増やすため使用しない。`tkhd` の track_ID と ffprobe の `stream.id`（`0x` 形式）を照合する。
 - Delete キーでモード選択へ戻れないバグを修正（mode 5 / mode 6）。`Show-Menu` が設定する `MenuNav='allback'` を呼び出し側で検出して外側ループへ戻す。
+- 対話メニューの `↑` / `↓` を循環移動に変更（先頭で ↑ は末尾へ、末尾で ↓ は先頭へ）。3箇所の `Show-Menu`（メイン・設定・録画）すべてに適用。
 
 ## 2026-11-18（追記・未コミット）
 
