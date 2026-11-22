@@ -1,9 +1,9 @@
 
 # Windows-ReEncodeUtility
 
-FFmpeg を使用して、ドラッグ＆ドロップした動画ファイルを対話的かつ柔軟に一括再エンコードするための PowerShell ユーティリティです。
+FFmpeg を使用して、ドラッグ＆ドロップした動画ファイルを対話的かつ柔軟に一括再エンコードするための PowerShell ユーティリティです。Windows に加えて Linux にも対応しています（リポジトリ名は Windows-ReEncodeUtility のまま）。
 
-ハードウェアエンコーディング対応、複数プラットフォーム自動最適化、テンプレート機能、高度なフィルタ処理などに加え、MiraBox等を用いた録画機能も備え、プロフェッショナルな動画処理を実現します。
+ハードウェアエンコーディング対応、複数プラットフォーム自動最適化、テンプレート機能、高度なフィルタ処理などに加え、MiraBox等を用いた録画機能も備え、プロフェッショナルな動画処理を実現します。録画機能は Windows 専用です。
 
 
 ## PS Camera SBSの左右交換と4ch音声同期
@@ -22,6 +22,8 @@ FFmpeg を使用して、ドラッグ＆ドロップした動画ファイルを�
 他のPSVR用SBSプロファイル4種もMKVへ変更し、同じ `stereo_mode=left_right` を付与する。映像の変換処理は従来のまま維持する。
 
 詳しくは [音声ツールの使い方](Tools/Audio/README.md) を参照。
+
+> **メニュー操作**: `↑` / `↓` で移動、`Enter` で決定。**`Backspace` は一つ前の選択へ戻る**、**`Delete` は設定の最初（モード選択）まで戻る**、`Esc` は終了です。すべての対話メニューに共通です。
 
 ## 📋 目次
 
@@ -114,6 +116,10 @@ CPU（従来のH.264/H.265）に加えて、NVENC・QSV・AMF・Vulkan Video・D
 
 設定の最後に開く「共通テンプレート設定」で読み込み・保存を選びます。プラットフォームモードでは既存の解像度調整フィルターを維持し、読み込んだフィルターを前段に合成します。
 
+**各目が16:9でないSBSを16:9にする場合**
+
+`Profiles/Filters/` の「SBS 2D - 各目16：9パッド」は、左右の映像を縮小せずに黒帯を追加し、各目を16:9（SBS全体では32:9）にします。目が縦長なら左右に、横長なら上下に黒帯を足します。
+
 **SBSを一般的な横長動画として投稿する場合**
 
 `Profiles/Filters/` の「VLC式アナグリフ」は、VLCの Anaglyph 3D 標準設定と同じ**赤（左眼）＋シアン（右眼）**方式で、SBSの2映像を1画面に重ねます。**左眼の赤成分と右眼の緑・青成分**を合成し、左右の映像のずれが赤／シアンの輪郭として明確に現れます。左右のフレーム切り替えではありません。フルSBSとハーフSBSを別々に用意し、ハーフSBSでは片眼の横圧縮をLanczosで補正します。
@@ -163,7 +169,7 @@ X向けのMP4/H.264等の出力形式は、プラットフォームモードで�
 | ----------------------- | -------------------- | ------------------------------------------------------------------------- |
 | **FFmpeg**              | 動画エンコーディング | [ffmpeg.org](https://ffmpeg.org/download.html) または PATH 環境変数に登録 |
 | **FFprobe**             | 動画情報取得         | FFmpeg に付属                                                             |
-| **PowerShell 5.1 以上 / PowerShell 7** | スクリプト実行 | Windows 10/11 に含まれる 5.1、または 7 をインストール。どちらでも動作 |
+| **PowerShell 5.1 以上 / PowerShell 7** | スクリプト実行 | Windows 10/11 に含まれる 5.1、または [7 をインストール](https://learn.microsoft.com/ja-jp/powershell/scripting/install/installing-powershell-on-windows)。どちらでも動作 |
 
 ### オプション（外部音声エンコーダー）
 
@@ -174,6 +180,9 @@ X向けのMP4/H.264等の出力形式は、プラットフォームモードで�
 | **qaac**             | AAC エンコーディング（高速） | [GitHub](https://github.com/nu774/qaac)                          | 長年にAppleが熟成させている。要iTunes |
 | **Nero AAC Encoder** | 高品質 AAC                   | [Nero](https://www.nero.com/jpn/tools-nerodigitalaudiolabs.html) | 古いが高評価、品質 -q で細かく制御    |
 | **fdkaac**           | Fraunhofer FDK ベース AAC    | [GitHub](https://github.com/kekyo/fdk-aac-win32-builder)         | VBR/HE-AAC 対応                       |
+| **fdkaac (Linux)**   | Fraunhofer FDK ベース AAC    | `apt install fdkaac`                                            | Linux ネイティブ CLI。qaac / Nero は Linux では未設定 |
+
+Linux では qaac / Nero は未設定です。fdkaac は `Get-Command` で自動検出し、未検出時は FFmpeg 内蔵 AAC/Opus へフォールバックします（従来どおり）。
 
 ### オプション（補助ツール）
 
@@ -181,6 +190,8 @@ X向けのMP4/H.264等の出力形式は、プラットフォームモードで�
 | --------------- | ------------------ | ------------------------------------------------------------- | -------------------------------------- |
 | **exiftool**    | メタデータ処理     | [exiftool.org](https://exiftool.org/)                         | 低（メタデータ保持機能を使う場合のみ） |
 | **LosslessCut** | ビジュアル編集補助 | [MaCleaner 12 / GitHub](https://github.com/mifi/lossless-cut) | 低（設定例のみ）                       |
+
+Windows PowerShell 5.1（`powershell.exe`）には非対応です。`pwsh.exe` を使用してください。Linux でも PowerShell 7 (`pwsh`) / FFmpeg / ffprobe が必須です。
 
 ---
 
@@ -226,7 +237,7 @@ ffprobe -version
 ### 3. 実行権限の確認（必要に応じて）
 
 ```powershell
-# PowerShell を 管理者 で起動後：
+# PowerShell 7 (pwsh) で実行
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
@@ -236,6 +247,17 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 # コマンドラインで実行（引数なしでヘルプ表示）
 .\start.bat -h
 ```
+
+### Linux でのセットアップ
+
+- PowerShell 7 (`pwsh`) / FFmpeg / ffprobe をインストール（必須。Windows PowerShell 5.1 は非対応）。
+- 起動は `./start.sh`（引数なし / `-h` / `--help` でヘルプ表示）。
+- `sudo ./SETUP.SH -i` で `/usr/local/bin` に `ReEncode_*.sh` のシンボリックリンクを張り、`-u` で解除。PATH は `/usr/local/bin` または `~/.local/bin`。
+- 設定は `config.user.linux.psd1`（`$IsLinux` 時に自動読み込み。Windows は従来の `config.user.psd1`）。
+- HW は VAAPI を追加（`-vaapi_device` は `VaapiDevicePath`、既定 `/dev/dri/renderD128`）。NVENC/QSV は FFmpeg の実Detectに任せる。MF / D3D11VA / D3D12VA / DXVA2 は Linux では選択肢に出さない。Vulkan は従来どおり制限付き。
+- GPU 使用率ログは Windows の PDH 依存のため Linux では N/A（CPU/GPU 監視は無効化）。
+- 設定画面の描画: Windows は従来どおり画面全体をクリアするが、Linux では `Clear-Host` を使わず、メニュー行だけを ANSI エスケープで書き換える（画面全体を上書きしない）。確認画面も Linux ではクリアせず追記表示する。
+- メニュー中の Ctrl+C: Linux では Ctrl+C をキー入力として受け取り（[Console]::TreatControlCAsInput）、Esc と同じくメニューをキャンセルしてスクリプトを終了する。以前は別キーを押さないと画面が更新されなかったが、Ctrl+C を押した時点で選択行を消して終了する。
 
 ---
 
@@ -268,6 +290,16 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 # ヘルプ表示
 .\start.bat -h
 ```
+
+#### 方法 3：Linux での起動
+
+```bash
+./start.sh              # 対話メニュー起動
+./start.sh -h           # ヘルプ
+./start.sh --help
+```
+
+動画ファイルは `./start.sh /path/to/input.mp4` のように渡せます（複数ファイル・フォルダにも対応）。`sudo ./SETUP.SH -i` で PATH にシンボリックリンクを登録しておくと、`ReEncode_start.sh` を任意のディレクトリから呼び出せます。
 
 ### QSV非同期処理数（メニュー項目なし）
 
@@ -371,6 +403,10 @@ AV1:
 ```
 
 未対応のハードウェア・コーデックは自動除外。
+
+HWデコード／HWエンコード使用時は、利用中のHWで使えるフィルターも自動選択する。`scale` を `scale_qsv` / `scale_cuda` / `vpp_amf` などへ、`yadif` / `bwdif` を `yadif_cuda` / `deinterlace_qsv` などへ置換する。FFmpegが公開していることに加え、短い実エンコードで成功した候補だけを採用する。判定結果は `.cache/hardware-filter-cache.clixml` にFFmpegシグネチャ付きで保存され、FFmpeg更新時や7日経過時に再判定する。等価なHWフィルターがない `lenscorrection` などはCPUのまま実行する。
+
+`split` / `crop` / `pad` などCPU専用フィルターを含む `-filter_complex` をHWデコードと併用する場合、入力のHWフレームを `hwdownload,format=nv12` でCPUへ渡すよう自動補正する。
 
 ### 2. インターレース自動検出・解除
 
@@ -502,7 +538,7 @@ HW アクセルでエラー発生
 利用可能な映像エンコーダーについて、短い合成映像で**実能力を自動プローブ**します。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Tools\Check-HardwareEncoderLimits.ps1
+pwsh -ExecutionPolicy Bypass -File .\Tools\Check-HardwareEncoderLimits.ps1
 # -Force でスキャンキャッシュを無視、 -Quick で利用可否と品質オプションのみ
 ```
 
@@ -520,13 +556,19 @@ MiraBox等のキャプチャデバイスから映像を取り込み、**ゼロ�
 - **teeマルチプレクサ**を利用し、エンコード負荷を最小限に抑えながらMKV保存とUDPストリーミングを並行処理
 - 面倒な設定なしで、保存先をインタラクティブに選択可能
 
+この録画スクリプトは dshow に依存するため Windows 専用です。Linux では使用できません。
+
 ---
 
 ## ⚙️ 設定ファイル
 
 ### config.user.psd1
 
-実行ファイル（FFmpeg、外部エンコーダー等）のパスを設定する中心ファイルです。詳細はリポジトリ内の[当該ファイル](config.user.psd1)を参照してください。
+実行ファイル（FFmpeg、外部エンコーダー等）のパスを設定する中心ファイルです。詳細はリポジトリ内の[当該ファイル](config.user.psd1)を参照してください。Windows で使用します。
+
+### config.user.linux.psd1
+
+Linux 用の設定ファイルです。`$IsLinux` 時に自動読み込みされます。FFmpeg / ffprobe / 外部エンコーダーのパスに加え、VAAPI のデバイスパスを `VaapiDevicePath`（既定 `/dev/dri/renderD128`）で指定できます。Windows では従来の `config.user.psd1` を使用します。
 
 ### テンプレートファイル（Profiles/*.psd1）
 
@@ -536,12 +578,15 @@ MiraBox等のキャプチャデバイスから映像を取り込み、**ゼロ�
 
 ```text
 動画再エンコード/
-├── start.bat                     # 起動用バッチファイル
+├── start.bat                     # 起動用バッチファイル (Windows)
+├── start.sh                      # 起動スクリプト (Linux。引数なし / -h / --help)
+├── SETUP.SH                      # Linux 用シンボリックリンク設定 (-i 登録 / -u 解除)
 ├── re-encode-AIOptimus.ps1       # メイン処理スクリプト
 ├── get-ffmpegOptions.ps1         # エンコード設定メニュー構築スクリプト
 ├── Get-HardwareInfo.ps1          # ハードウェア検出スクリプト
-├── Record-MiraBox-Stable.ps1     # 録画＆プレビュー用スクリプト (MiraBox対応)
-├── config.user.psd1              # 環境設定ファイル（要編集）
+├── Record-MiraBox-Stable.ps1     # 録画＆プレビュー用スクリプト (MiraBox対応、Windows 専用)
+├── config.user.psd1              # 環境設定ファイル（要編集、Windows）
+├── config.user.linux.psd1        # Linux 用環境設定ファイル（$IsLinux 時に自動読み込み）
 ├── README.md                     # このファイル
 ├── IMPLEMENTATION_HISTORY.md     # 実装変遷記録
 ├── .cache/                       # ハードウェアスキャン等のキャッシュ保存先
@@ -566,13 +611,14 @@ MiraBox等のキャプチャデバイスから映像を取り込み、**ゼロ�
 
 ### Q1. PowerShell スクリプトが実行できない
 
-**A:** 以下で実行権限を許可してください：
+**A:** PowerShell 7 が入っているか確認し、必要なら実行権限を許可してください。
 
 ```powershell
-# PowerShell を【管理者実行】で開く
+pwsh -v
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-
 ```
+
+`powershell.exe`（Windows PowerShell 5.1）ではなく `pwsh.exe` を使ってください。
 
 ### Q2. FFmpeg / FFprobe が見つからない
 
@@ -608,11 +654,15 @@ QaacPath = "C:\path\to\qaac64.exe"
 
 ### Q5. エンコード中止したい
 
-**A:** Ctrl+C で中断可能。ただし既出力ファイルは残ります。
+**A:** Ctrl+C で中断できます。ffmpeg 子プロセスも終了させますが、書きかけの出力ファイルは残ります。
 
 ### Q6. テンプレートを自作したい
 
 **A:** 各モードの設定完了後、共通テンプレート画面で「エンコードテンプレートを保存する」または「フィルターテンプレートを保存する」を選んでください。従来の一体型プロファイルも同じ画面から保存できます。
+
+### Q7. Linux で起動・インストールしたい
+
+**A:** `./start.sh` で起動します（`-h` / `--help` でヘルプ）。`sudo ./SETUP.SH -i` で `/usr/local/bin` に `ReEncode_*.sh` のシンボリックリンクを張り、`-u` で解除できます。PATH に `/usr/local/bin` または `~/.local/bin` が通っている必要があります。設定は `config.user.linux.psd1` に記載します。qaac / Nero は Linux では未設定で、fdkaac は `apt install fdkaac` のネイティブ CLI を使います。
 
 ## 📚 実装履歴
 
@@ -634,4 +684,4 @@ QaacPath = "C:\path\to\qaac64.exe"
 
 改善提案・バグ報告は Issue / Pull Request でお願いします。
 
-**最終更新：** 2026-07-14
+**最終更新：** 2026-11-19

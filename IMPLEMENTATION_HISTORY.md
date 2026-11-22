@@ -4,6 +4,67 @@
 
 このリポジトリの元になった素材は [git@gist.github.com:85e306167a7f1298d0ec93ea1081c5d3.git](https://gist.github.com/85e306167a7f1298d0ec93ea1081c5d3) 由来で、最初はそのファイル群を AI で最適化するところから始まっている。あわせて、このリポジトリ自体もその AI 最適化を行ったタイミングで git 管理を開始しているため、以後の履歴はその時点からの実装変遷として記録している。
 
+## 2026-11-19（Linux 対応・未コミット）
+
+- ブランチ `OptiPlex-3040-MFF_20261119` にて Issue #15 の Linux 対応を実装。
+- PowerShell 7 / FFmpeg / ffprobe は従来どおり必須。Windows PowerShell 5.1 は非対応のまま。
+- Linux では `start.sh`（引数なし / `-h` / `--help` でヘルプ）で起動。`sudo ./SETUP.SH -i` で `/usr/local/bin` に `ReEncode_*.sh` のシンボリックリンクを張り、`-u` で解除。PATH は `/usr/local/bin` または `~/.local/bin`。
+- Linux 用設定 `config.user.linux.psd1` を `$IsLinux` 時に自動読み込み。Windows は従来の `config.user.psd1` のまま。
+- 外部音声エンコーダー: Linux では qaac / Nero は未設定、fdkaac は Linux ネイティブ CLI（`apt install fdkaac`）を使用し `Get-Command` で自動検出。未検出時は FFmpeg 内蔵 AAC/Opus へフォールバック（従来どおり）。
+- HW: Linux で VAAPI を追加（`-vaapi_device` は config の `VaapiDevicePath`、既定 `/dev/dri/renderD128`）。NVENC/QSV は FFmpeg の実Detectに任せる。MF / D3D11VA / D3D12VA / DXVA2 は Linux では選択肢に出さない。Vulkan は従来どおり制限付き。
+- ffmpeg の自前ビルドはしない。libfdk_aac 込み ffmpeg のビルドも見送り（将来 FFmpeg 9.1 の内蔵 AAC 改善を様子見）。qaac は Windows のまま最良と判断。
+- 一時ファイルは従来どおり `.cache/` 配下。録画スクリプト `Record-MiraBox-Stable.ps1` は Windows 専用（dshow 依存）で対象外。
+- GPU 使用率ログは Windows の PDH 依存のため Linux では N/A（CPU/GPU 監視は無効化）。
+- 画面描画: `Clear-Screen` / `Clear-MenuLines` を追加。Windows は従来どおり `Clear-Host` で全画面クリア、Linux はメニュー行だけを ANSI エスケープで書き換え、確認画面はクリアせず追記表示する（Issue #15 の要望）。`Test-MenuNavigation.ps1` はヘルパー未定義時も動作するようガードを追加。
+- Ctrl+C 中断: `Invoke-ExternalProcess` / `Invoke-FfmpegEncode` / `Invoke-ProbeFfmpeg` の `finally` で、まだ終了していない ffmpeg 子プロセスを `Kill($true)` するよう修正。Linux で SIGINT を送ると子プロセスが終了し、pwsh も正常終了することを実機確認。書きかけの出力ファイルは残る。
+- メニューの Ctrl+C: Linux では ReadKey が Ctrl+C でブロックし、別キーを押すまで画面が更新されなかった。[Console]::TreatControlCAsInput で Ctrl+C をキー入力として受け取り、`Test-IsControlCKey` で検出して Esc と同じくメニューをキャンセル、`$global:CtrlCRequested` を立ててスクリプト全体を終了する。`Show-Menu` に try/finally を追加し、中断時に選択行を消して描画を確定。`get-ffmpegOptions.ps1` のローカル Show-Menu も同样。
+
+## 2026-11-19（HWフィルター自動置換・未コミット）
+
+- Issue #19 に対応し、`Modules/HardwareFilterResolver.ps1` を追加。HWデコード/エンコード時に、そのHWファミリで使えるフィルターへ `-vf` のフィルターを自動置換する。
+- HWファミリごとの置換ルールとパラメータ変換（`scale` / デインターレース / `pad` / `transpose` 等）を定義。等価なHWフィルターがないものはCPU側に残す。
+- フィルター公開確認に加え、実入力を使った短いプローブで成功した候補のみ採用。結果は `.cache/hardware-filter-cache.clixml` にFFmpegシグネチャ付きで保存し、更新時・7日経過時に無効化する。
+- `Resolve-VideoFilterPipeline` の最終段で置換を実行。`hwdownload` を含むCPUフレーム経路、16-bit RGB回避、ゼロコピー経路は対象外として維持した。
+- `Tests/Test-HardwareFilterResolver.ps1` を追加（20 PASS）。既存の `Test-IntermediateHardware.ps1` / `Test-EncodeFallback.ps1` も成功。実環境では QSV の `scale` → `scale_qsv` 置換を確認。CUDA/D3D11 はこの環境でHWが使えずプローブ失敗のためCPUフィルターを維持。
+
+### 追記: QSVデコード＋CPU用filter_complexの失敗を修正
+
+- 「各目16：9パッド」テンプレートをQSVデコードと併用すると、`split` / `crop` にQSVのHWフレームが渡り `Error reinitializing filters` で失敗していた。
+- `Add-HwDownloadToFilterComplex` を追加し、CPU専用フィルターを含む `-filter_complex` の `[0:v]` 直後に `hwdownload,format=nv12` を挿入する。`hwdownload` 済みのグラフには二重挿入しない。
+- 実入力の先頭2フレームで QSVデコード＋`hevc_qsv` のエンコードが成功することを確認。テストは23 PASS。
+
+### 追記: ファイル名に `[ ]` を含む場合の `New-Item` エラーを修正
+
+- `temp_<ファイル名>` の存在確認に `Test-Path`（ワイルドカード解釈あり）を使っていたため、`[OGOOVYZXbo8]` を含むファイル名で存在しないと誤判定し、`New-Item` が「既に存在します」で失敗していた。
+- `outputDir` / `tempDir` / 出力ファイルパスなどの存在確認を `Test-Path -LiteralPath` に変更し、ディレクトリ作成は `New-Item -Force` にした。
+
+## 2026-11-19（SBS 16:9 パッドフィルター・未コミット）
+
+- `Profiles/Filters/SBS 2D - 各目16：9パッド.psd1` を追加。各目が16:9でないSBSを縮小せず、左右または上下に黒帯を追加して各目を16:9（SBS全体で32:9）にする。
+- `max()` で縦横の不足を判定し、出力サイズと黒帯位置を偶数に丸めて yuv420p でも使えるようにした。縦長の目（2880x1080）と横長の目（3840x720）の両方で出力が 3840x1080 になり、黒帯が外側と左右の目の間に入ることを実動画で確認。
+- README にフィルターテンプレートの説明を追記。
+
+## 2026-11-19（PowerShell 7 への更新・未コミット）
+
+- Issue #13 に対応し、全 `.ps1` に `#requires -Version 7.0` を追加。Windows PowerShell 5.1 (`powershell.exe`) での実行を不可とした。
+- `start.bat` は `pwsh` でメインスクリプトを起動するよう変更し、`pwsh` が見つからない場合はインストール先を案内して終了するようにした。ヘルプにも PowerShell 7 必須を明記。
+- `README.md` / `Tools/Audio/README.md` / `Tests/Test-IntermediateHardware.ps1` のヘルプを PowerShell 7 前提へ更新。`powershell -File` の記述を `pwsh -File` に変更。
+- PS 5.1 固有の不具合回避を前提としたコメントのみ、現在の意図が分かる表現へ修正。コードの挙動は変更していない。
+- PowerShell 7.6.10 で各スクリプトのヘルプ表示、モジュールのドットソース、`Test-EncodeFallback.ps1`（28 PASS）、`Test-IntermediateHardware.ps1`、`Check-HardwareEncoderLimits.ps1 -Quick`（48件）を実行し動作を確認。
+
+## 2026-11-18（メニュー操作改善・未コミット）
+
+- すべての対話メニュー（`re-encode-AIOptimus.ps1` / `get-ffmpegOptions.ps1` / `Record-MiraBox-Stable.ps1` の `Show-Menu`）でキー意味を整理した。
+  - `Backspace`（VK=8）: 一つ前の選択へ戻る（戻り値 `-2`、`$global:MenuNav='back'`）
+  - `Delete`（VK=46）: 設定の最初（モード選択）まで戻る（戻り値 `-3`、`$global:MenuNav='allback'`）
+  - `Esc`（VK=27）: 終了（`-1`）
+- プラットフォーム設定では、セットアップ方法のメニューから Backspace でプラットフォーム選択へ、サブメニューからは一つ前のセットアップ方法選択へ戻る。トップレベルでは Delete でモード選択へ戻る。
+- メニュー下部にキー操作のヒントを表示。レイアウト計算にも1行分を反映。
+- `Modules/TemplateManager.ps1` の `Invoke-TemplateOptions` が Backspace/Delete を `default` でキャンセル扱いしていた不具合を修正。Backspace はメニュー再表示（設定は保持）、Delete はモード選択まで戻る、Esc は終了に分流した。
+- キー入力を `Read-MenuKey` に分離し、`Tests/Test-MenuNavigation.ps1` でスタブ化して実コンソールなしに全キー動作を検証（13 PASS / 0 FAIL）。
+- 「使用するハードウェア」などサブメニューでも Backspace がキャンセルに落ちる問題を修正。`Show-Menu` は戻る先が未登録なら同じメニューを再表示して終了させない。プラットフォーム設定実行中のみ `MenuBackHandler` を登録し、サブメニューからの Backspace は「セットアップ方法選択」まで一つ戻る。
+- プラットフォーム設定の戻り処理で `continue` が外側ループの外にあり正常に戻せていなかった不具合を修正し、ループ構造を整理した。実キー列（Enter→Enter→Backspace→Esc）で KA 選択から一つ戻ることを検証済み。
+
 ## 2026-11-18（GPU 使用の実測と非対応化・未コミット）
 
 - ffmpeg verbose ログで各 HW 経路が実際に GPU を使うか確認した。QSV は oneVPL MFX、D3D12VA は `hwupload`+`pix_fmt=d3d12` のときだけ `Intel Iris Xe Graphics` を使用。MF 映像既定と `aac_mf` / `mp3_mf` はソフトウェア MFT で CPU 動作（`-hw_encoding 1` のときのみハードウェア MFT）。Vulkan 映像エンコーダーはこの環境で初期化失敗。

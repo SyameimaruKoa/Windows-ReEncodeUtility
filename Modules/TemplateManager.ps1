@@ -1,4 +1,6 @@
-﻿#region 共通テンプレート
+﻿#requires -Version 7.0
+
+#region 共通テンプレート
 function Get-SettingsTemplate {
     param([ValidateSet('Encoding', 'Filter')][string]$Kind)
     $folder = if ($Kind -eq 'Encoding') { $global:Settings.EncodingTemplateDir } else { $global:Settings.FilterTemplateDir }
@@ -172,7 +174,7 @@ function Invoke-TemplateOptions {
             '従来形式（一体型）のテンプレートを保存する'
         )
         if (-not $Config.PlatformMode) { $choices += 'エンコードテンプレートを読み込む' }
-        $index = Show-Menu -Title "共通テンプレート設定（Escでキャンセル）`n映像フィルター: $($Config.AdditionalVF)" -Choices $choices
+        $index = Show-Menu -Title "共通テンプレート設定（Escで終了 / Backspaceで一つ戻る / Deleteで最初へ）`n映像フィルター: $($Config.AdditionalVF)" -Choices $choices
         switch ($index) {
             0 { return $true }
             1 { Use-FilterTemplate -Config $Config }
@@ -186,6 +188,9 @@ function Invoke-TemplateOptions {
                     Write-Log 'エンコードテンプレートを適用しました。'
                 }
             }
+            -2 { continue } # Backspace: このメニューを再表示（設定は保持したまま）
+            -3 { return $false } # Delete: 最初へ（呼び出し側がモード選択に戻す）
+            -1 { return $false } # Esc: 終了
             default { return $false }
         }
     }

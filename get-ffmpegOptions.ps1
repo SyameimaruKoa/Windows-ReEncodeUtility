@@ -16,6 +16,8 @@
     System.Collections.Hashtable
     選択された映像・音声のエンコード設定を含むハッシュテーブルを返す。
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param (
     [switch]$Intermediate,
@@ -49,10 +51,38 @@ if ($HwScanMode -ne "Off") {
     }
 }
 
+# --- 画面クリア関数 ---
+# グローバルスコープに Clear-Screen が無い場合のみローカルで定義する
+if (-not (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue)) {
+    function Clear-Screen {
+        if (-not $IsWindows) { Write-Host ""; return }
+        Clear-Host
+    }
+}
+
 # --- 対話メニュー関数 ---
 # グローバルスコープに Show-Menu が定義されていない場合のみローカルで定義する
 # (re-encode-AIOptimus.ps1 から呼ばれる場合は既にグローバルに存在する)
 if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue)) {
+        function Clear-MenuLines {
+            param ([int]$Lines)
+            if ($IsWindows -or $Lines -le 0) { return }
+            for ($i = 0; $i -lt $Lines; $i++) {
+                [Console]::Write("`e[1A`e[2K")
+            }
+            [Console]::Write("`e[G")
+        }
+    }
+    if (-not (Get-Command -Name 'Test-IsControlCKey' -CommandType Function -ErrorAction SilentlyContinue)) {
+        function Test-IsControlCKey {
+            param($Key)
+            if (-not $Key) { return $false }
+            return ([int]$Key.Character -eq 3) -or
+                   ($Key.VirtualKeyCode -eq 67 -and ($Key.ControlKeyState -band
+                       [System.ConsoleModifiers]::Control))
+        }
+    }
     function Show-Menu {
         param (
             [string]$Title,
@@ -60,8 +90,20 @@ if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction Silen
             [int]$DefaultIndex = 0
         )
         $currentIndex = $DefaultIndex
+        $drawnLines = ($Title -split "`r?`n").Count + 1 + $Choices.Length + 2
+        $firstDraw = $true
+        $menuInterrupted = $false
+        try {
         while ($true) {
-            Clear-Host
+            if ($IsWindows) {
+                Clear-Screen
+            }
+            elseif (-not $firstDraw) {
+                if (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue) {
+                    Clear-MenuLines -Lines $drawnLines
+                }
+            }
+            $firstDraw = $false
             Write-Host "$Title`n"
             for ($i = 0; $i -lt $Choices.Length; $i++) {
                 if ($i -eq $currentIndex) {
@@ -71,12 +113,49 @@ if (-not (Get-Command -Name 'Show-Menu' -CommandType Function -ErrorAction Silen
                     Write-Host "   $($Choices[$i])"
                 }
             }
-            $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
+            $key = $null
+            try {
+                if ($IsWindows) {
+                    $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                }
+                else {
+                    [Console]::TreatControlCAsInput = $true
+                    try { $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") }
+                    finally { [Console]::TreatControlCAsInput = $false }
+                }
+            }
+            catch {
+                if (-not $IsWindows) { $menuInterrupted = $true }
+                throw
+            }
+            if ($null -eq $key) { $menuInterrupted = $true; break }
+            # Ctrl+C はメニューをキャンセルしてスクリプト全体を終了する
+            if (-not $IsWindows -and (Get-Command -Name 'Test-IsControlCKey' -CommandType Function -ErrorAction SilentlyContinue) -and (Test-IsControlCKey -Key $key)) {
+                $global:CtrlCRequested = $true
+                $global:MenuNav = ''; return -1
+            }
             switch ($key.VirtualKeyCode) {
                 38 { if ($currentIndex -gt 0) { $currentIndex-- } } # UpArrow
                 40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } } # DownArrow
-                13 { return $currentIndex } # Enter
-                27 { return -1 } # Escape
+                13 { $global:MenuNav = ''; return $currentIndex } # Enter
+                27 { $global:MenuNav = ''; return -1 } # Escape
+                8  {
+                    if ($global:MenuBackHandler) { $global:MenuNav = 'back'; return -2 }
+                    $currentIndex = $DefaultIndex
+                    continue
+                }
+                46 { $global:MenuNav = 'allback'; return -3 } # Delete
+            }
+        }
+        }
+        finally {
+            if ($menuInterrupted -and -not $IsWindows) {
+                if (Get-Command -Name 'Clear-MenuLines' -CommandType Function -ErrorAction SilentlyContinue) {
+                    Clear-MenuLines -Lines $drawnLines
+                }
+                Write-Host ""
+                [Console]::Out.Flush()
             }
         }
     }
@@ -153,9 +232,9 @@ function Get-EncoderSettings {
     }
     else {
         try {
-            $ffmpegOutput = ffmpeg -hide_banner -encoders 2>$null
+            $ffmpegOutput = & $global:Settings.FfmpegPath -hide_banner -encoders 2>$null
             foreach ($line in $ffmpegOutput) {
-                if ($line -match "^\s*[VA][\w\.]+\s+([a-zA-Z0-9_]+_(nvenc|qsv|amf|vulkan|d3d12va|mf))(\s+|$)") {
+                if ($line -match "^\s*[VA][\w\.]+\s+([a-zA-Z0-9_]+_(nvenc|qsv|amf|vulkan|d3d12va|mf|vaapi))(\s+|$)") {
                     $availableEncoders += $Matches[1]
                 }
             }
@@ -267,6 +346,10 @@ function Get-EncoderSettings {
     # これらの GPU 経路は中間ファイル作成モード (Modules/IntermediateHardware.ps1) のみで使用する。
     $allHwChoices = @("NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "CPU (Software)")
     $allHwKeys = @("NVIDIA", "Intel", "AMD", "CPU")
+    if (-not $IsWindows) {
+        $allHwChoices += "VAAPI (Linux)"
+        $allHwKeys += "VAAPI"
+    }
     $hwChoices = @(); $hwKeys = @()
     for ($i = 0; $i -lt $allHwChoices.Length; $i++) {
         $show = $true
@@ -275,6 +358,7 @@ function Get-EncoderSettings {
                 "NVIDIA" { $show = $hwInfo.HasNvidia }
                 "Intel" { $show = $hwInfo.HasIntel }
                 "AMD" { $show = $hwInfo.HasAMD }
+                "VAAPI" { $show = $hwInfo.HasVAAPI }
                 "CPU" { $show = $true }
             }
         }
@@ -285,11 +369,12 @@ function Get-EncoderSettings {
     $selectedHW = $hwKeys[$hwIndex]
 
     $videoSetting = ""
-    if ($selectedHW -in @("NVIDIA", "Intel", "AMD", "Vulkan", "D3D12VA", "MF")) {
+    if ($selectedHW -in @("NVIDIA", "Intel", "AMD", "VAAPI", "Vulkan", "D3D12VA", "MF")) {
         $suffix = switch ($selectedHW) {
             "NVIDIA" { "_nvenc" }
             "Intel" { "_qsv" }
             "AMD" { "_amf" }
+            "VAAPI" { "_vaapi" }
             "Vulkan" { "_vulkan" }
             "D3D12VA" { "_d3d12va" }
             "MF" { "_mf" }
@@ -325,6 +410,10 @@ function Get-EncoderSettings {
                 "AMD" {
                     $codecChoices = @("H.264/AVC", "H.265/HEVC", "AV1")
                     $codecMap = @("h264_amf", "hevc_amf", "av1_amf")
+                }
+                "VAAPI" {
+                    $codecChoices = @("H.264/AVC", "H.265/HEVC")
+                    $codecMap = @("h264_vaapi", "hevc_vaapi")
                 }
             }
         }
@@ -363,6 +452,10 @@ function Get-EncoderSettings {
             $qPresets = [ordered]@{ "高品質 (QP:22)" = "-rc cqp -qp_i 22 -qp_p 22 -qp_b 22"; "中品質 (QP:28)" = "-rc cqp -qp_i 28 -qp_p 28 -qp_b 28"; "低品質 (QP:35)" = "-rc cqp -qp_i 35 -qp_p 35 -qp_b 35"; "カスタム品質 (QP)" = "-rc cqp -qp_i {val} -qp_p {val} -qp_b {val}"; "カスタムビットレート" = "-rc vbr_peak -b:v {val}" }
             $pPresets = [ordered]@{ "Quality (高品質)" = "-quality quality"; "Balanced (標準)" = "-quality balanced"; "Speed (速度優先)" = "-quality speed" }
             $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets -PresetOptions $pPresets
+        }
+        elseif ($selectedHW -eq "VAAPI") {
+            $qPresets = [ordered]@{ "高品質 (Q:20)" = "-q:v 20"; "標準品質 (Q:25)" = "-q:v 25"; "低品質 (Q:30)" = "-q:v 30"; "カスタム品質 (Q)" = "-q:v {val}"; "カスタムビットレート" = "-b:v {val}" }
+            $videoSetting = Get-DetailedVideoOption -BaseEncoder $baseEncoder -QualityPresets $qPresets
         }
         else {
             # Vulkan / D3D12VA / MF は GPU 使用を保証できないため非対応（パラメータ変換は行わない）
@@ -431,7 +524,7 @@ function Get-EncoderSettings {
 
     if (-not $videoSetting) { return $null } # 途中でキャンセルされた場合
 
-    Clear-Host
+    if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
     Write-Host "--- 最終確認 ---"
     Write-Host "映像: $videoSetting"
     Write-Host "音声: $($audioSetting.Description)"
@@ -451,9 +544,9 @@ function Get-IntermediateSettings {
     }
     else {
         try {
-            $ffmpegOutput = ffmpeg -hide_banner -encoders 2>$null
+            $ffmpegOutput = & $global:Settings.FfmpegPath -hide_banner -encoders 2>$null
             foreach ($line in $ffmpegOutput) {
-                if ($line -match "^\s*[VA][\w\.]+\s+([a-zA-Z0-9_]+_(nvenc|qsv|amf|vulkan|d3d12va|mf))(\s+|$)") {
+                if ($line -match "^\s*[VA][\w\.]+\s+([a-zA-Z0-9_]+_(nvenc|qsv|amf|vulkan|d3d12va|mf|vaapi))(\s+|$)") {
                     $availableEncoders += $Matches[1]
                 }
             }
@@ -583,7 +676,7 @@ function Get-IntermediateSettings {
         }
     }
 
-    Clear-Host
+    if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
     Write-Host "--- 最終確認 ---"
     Write-Host "映像: $videoSetting"
     Write-Host "音声: $($audioSetting.Description)"

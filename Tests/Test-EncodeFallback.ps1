@@ -4,10 +4,12 @@
 .PARAMETER WithVideo
     実動画を使った事前検証プローブの実行も行う（既定のテスト動画を使用）。
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param(
     [switch]$WithVideo,
-    [string]$VideoPath = 'C:\Users\kouki\Documents\MyApp\Windows-ReEncodeUtility\.cache\Azahar 2126.2 _ SUPER MARIO 3D LAND 2026-11-16 19-03-51.mp4'
+    [string]$VideoPath = (Join-Path (Split-Path -Parent $PSScriptRoot) '.cache\Azahar 2126.2 _ SUPER MARIO 3D LAND 2026-11-16 19-03-51.mp4')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -106,7 +108,7 @@ try {
     $tmpOut = Join-Path $global:AppCacheDir 'probe-out.mp4'
     $okProbe = Test-EncodeConfiguration -Arguments "-hide_banner -y -f lavfi -i `"color=c=black:s=64x64:d=1:r=25`" -c:v libx264 -pix_fmt yuv420p `"$tmpOut`""
     Assert-Equal $true $okProbe.Success '有効な設定はプローブ成功'
-    Assert-True ($okProbe.ProbeArgs -match '-frames:v 8 -f null NUL') 'プローブ引数が軽量設定に置換された'
+    Assert-True ($okProbe.ProbeArgs -match '-frames:v 8 -f null (?:NUL|-)') 'プローブ引数が軽量設定に置換された'
     Assert-True ($okProbe.ProbeArgs -notmatch 'probe-out\.mp4') '出力先が除去された'
     $badProbe = Test-EncodeConfiguration -Arguments "-hide_banner -y -f lavfi -i `"color=c=black:s=64x64:d=1:r=25`" -c:v no_such_encoder_xyz `"$tmpOut`""
     Assert-Equal $false $badProbe.Success '無効なエンコーダはプローブ失敗'
@@ -147,7 +149,7 @@ try {
 }
 finally {
     # 安全装置: .cache\test-work 配下の自分専用ディレクトリ以外は絶対に削除しない
-    if ($global:AppCacheDir -and $global:AppCacheDir.StartsWith($workRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($global:AppCacheDir -and $global:AppCacheDir.StartsWith($workRoot + [IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $global:AppCacheDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     else {

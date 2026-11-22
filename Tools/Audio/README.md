@@ -1,6 +1,6 @@
 # 音声同期・チャンネル抽出ツール
 
-Windows PowerShell 5.1以降、FFmpeg、FFprobeを使用。追加のPythonパッケージは不要。
+PowerShell 7以降、FFmpeg、FFprobeを使用。追加のPythonパッケージは不要。
 メインの `re-encode-AIOptimus.ps1` からも呼び出せるほか、2つのコマンドを単独実行できる。
 
 ## メインメニューから使う

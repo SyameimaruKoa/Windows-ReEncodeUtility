@@ -7,6 +7,7 @@
     すべての新経路はプローブ（短い実エンコード）に成功した場合のみ採用され、
     失敗時は従来の動作（CPUリサイズ／HWアクセルなし）へ戻る。
 #>
+#requires -Version 7.0
 
 #region 能力キャッシュ (SchemaVersion 1)
 
@@ -50,13 +51,13 @@ function Import-EncodeCapabilityCache {
         catch { $cache = $null }
     }
     $valid = $cache -and $cache.SchemaVersion -eq 1 -and
-             $cache.MachineName -eq $env:COMPUTERNAME -and
+             $cache.MachineName -eq [System.Environment]::MachineName -and
              $cache.FfmpegSignature -eq $signature -and
              $cache.Entries
     if (-not $valid) {
         $cache = [pscustomobject]@{
             SchemaVersion   = 1
-            MachineName     = $env:COMPUTERNAME
+            MachineName     = [System.Environment]::MachineName
             SavedAt         = Get-Date
             FfmpegSignature = $signature
             Entries         = @{}
@@ -207,7 +208,9 @@ function Convert-GpuFilterToCpuFilter {
 
     $remainder = [regex]::Replace($vf, '(?i)(?:^|,)(?:scale_qsv|vpp_qsv|scale_cuda|vpp_amf|scale_d3d11|scale_vulkan|scale_vaapi|scale_vt)=[^,]*', '')
     $remainder = $remainder.Trim(',')
-    $download = if ($remainder -match 'hwdownload') { '' } else { 'hwdownload,format=nv12,' }
+    # VAAPI エンコーダは VAAPI surface のみを受け付けるため、CPU スケール後に再度 hwupload する
+    $isVaapiEncode = $ArgString -match '(?i)-c:v(?::\w+)?\s+\S+_vaapi\b'
+    $download = if ($isVaapiEncode) { 'format=nv12,hwupload,' } elseif ($remainder -match 'hwdownload') { '' } else { 'hwdownload,format=nv12,' }
     $newVf = "$download" + "scale=$w`:$h" + $(if ($remainder) { ",$remainder" } else { '' })
 
     return [regex]::Replace($ArgString, '(?<=-vf\s+")[^"]*(?=")', { $newVf })
@@ -283,6 +286,10 @@ function Invoke-ProbeFfmpeg {
         return @{ ExitCode = -1; StdErr = $_.Exception.Message }
     }
     finally {
+        # Ctrl+C 等で中断された場合、別プロセスの ffmpeg が残らぬよう終了させる
+        if ($proc -and -not $proc.HasExited) {
+            try { $proc.Kill($true) } catch {}
+        }
         Remove-Item -LiteralPath $stderrFile, $stdoutFile -Force -ErrorAction SilentlyContinue
     }
 }
@@ -300,14 +307,14 @@ function Test-EncodeConfiguration {
     $probe = $probe -replace '(?i)\s+-pass\s+[12]\b', ''
     $probe = $probe -replace '(?i)\s+-passlogfile\s+\S+', ''
     $probe = $probe -replace '(?i)\s+-progress\s+\S+', ''
-    $probe = $probe -replace '(?i)\s+-f\s+null\s+NUL\s*$', ''
+    $probe = $probe -replace '(?i)\s+-f\s+null\s+(?:NUL|-)\s*$', ''
     # 末尾の「引用符付き出力ファイル指定」のみを除去する。
-    # 2pass の 1st pass は -f null NUL で終わるため、素のトークンを除去すると
+    # 2pass の 1st pass は -f null - (Windows は NUL) で終わるため、素のトークンを除去すると
     # 直後のオプション（-an 等）を誤って消してしまう。
     if ($probe -match '(?s)^(.*\S)\s+"[^"]+"\s*$') {
         $probe = $Matches[1]
     }
-    $probe = "$probe -an -frames:v $Frames -f null NUL"
+    $probe = "$probe -an -frames:v $Frames -f null -"
 
     $result = Invoke-ProbeFfmpeg -Arguments $probe
     $class = if ($result.ExitCode -eq 0) { '' } else { Get-EncodeFailureClass -StdErr $result.StdErr }
@@ -330,7 +337,7 @@ function Test-ZeroCopyPath {
 
     $probeArgs = "-hide_banner -y $HwAccelOption -ss 0 -i `"$InputPath`" -an"
     if ($VideoFilter) { $probeArgs += " -vf `"$VideoFilter`"" }
-    $probeArgs += " -frames:v $Frames $VideoOptions -f null NUL"
+    $probeArgs += " -frames:v $Frames $VideoOptions -f null -"
 
     if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
         Write-Log "ゼロコピー経路プローブ: $VideoFilter / $HwAccelOption" -Level 'DEBUG'

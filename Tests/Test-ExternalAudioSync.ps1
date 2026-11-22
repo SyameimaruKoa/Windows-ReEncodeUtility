@@ -7,6 +7,8 @@
     最終出力のビープ音位置を実測してオフセット(ms)を求める。
     一時ファイルはすべて git 対象外の .cache 配下に作る。
 #>
+#requires -Version 7.0
+
 [CmdletBinding()]
 param()
 
@@ -101,7 +103,7 @@ function Get-StreamInfo {
 
 $script:Rows = [System.Collections.Generic.List[object]]::new()
 function Add-Row {
-    param([string]$Encoder, [string]$Preset, [double[]]$Times, [string]$StreamStart, [string]$Note)
+    param([string]$Encoder, [string]$Preset, [double[]]$Times, [string]$StreamStart, [string]$Note, [string]$Status = 'TESTED')
     $offsets = @()
     for ($i = 0; $i -lt [math]::Min($Times.Count, $expectedBeeps.Count); $i++) {
         $offsets += [math]::Round(($Times[$i] - $expectedBeeps[$i]) * 1000, 1)
@@ -110,7 +112,7 @@ function Add-Row {
     $script:Rows.Add([pscustomobject]@{
             Encoder = $Encoder; Preset = $Preset; Beeps = $Times.Count
             OffsetsMs = ($offsets -join ', '); AvgOffsetMs = $avg
-            StreamStart = $StreamStart; Note = $Note
+            StreamStart = $StreamStart; Note = $Note; Status = $Status
         })
     Write-Host ("  {0,-9} {1,-16} beeps={2} offsets=[{3}] ms start={4} {5}" -f $Encoder, $Preset, $Times.Count, ($offsets -join ', '), $StreamStart, $Note)
 }
@@ -151,6 +153,9 @@ foreach ($e in $external) {
     $exe = $e.Exe
     if (-not $exe -or -not (Get-Command $exe -ErrorAction SilentlyContinue)) {
         Write-Host "`n=== $($e.Type): 実行ファイルなし ==="
+        foreach ($case in $e.Cases) {
+            Add-Row -Encoder $e.Type -Preset $case.Name -Times @() -StreamStart '-' -Note '実行ファイルが見つからない' -Status 'SKIP'
+        }
         continue
     }
     Write-Host "`n===== $($e.Type) ====="
@@ -242,13 +247,17 @@ $zeroPresets = @(
     'AAC-LC TVBR91', 'AAC-LC TVBR64', 'AAC-LC q0.50', 'HE-AAC q0.35',
     'AAC-LC VBR4', 'AAC-LC 128k', 'Opus 128k', 'Vorbis q4', 'FLAC', 'AC3 192k', 'MP3 128k'
 )
+$skipped = @($script:Rows | Where-Object { $_.Status -eq 'SKIP' })
 $bad = @($script:Rows | Where-Object {
-        $_.Preset -in $zeroPresets -and [math]::Abs($_.AvgOffsetMs) -gt 5
+        $_.Status -ne 'SKIP' -and $_.Preset -in $zeroPresets -and [math]::Abs($_.AvgOffsetMs) -gt 5
     })
-if ($bad.Count -eq 0) {
-    Write-Host 'PASS: 自動選択プリセットと内蔵エンコーダーはすべて |offset| <= 5ms' -ForegroundColor Green
+if ($bad.Count -gt 0) {
+    Write-Host "FAIL: 同期ズレがあるプリセット: $($bad.Preset -join ', ')" -ForegroundColor Red
+}
+elseif ($skipped.Count -gt 0) {
+    Write-Host "SKIP: 外部エンコーダー未検出のため $($skipped.Count) 件を検証できていません: $($skipped.Preset -join ', ')" -ForegroundColor Yellow
 }
 else {
-    Write-Host "FAIL: 同期ズレがあるプリセット: $($bad.Preset -join ', ')" -ForegroundColor Red
+    Write-Host 'PASS: 自動選択プリセットと内蔵エンコーダーはすべて |offset| <= 5ms' -ForegroundColor Green
 }
 Write-Host "詳細: $jsonPath"
