@@ -2718,10 +2718,23 @@ function Invoke-ExternalAudioSynthesis {
 function Get-MediaInfoAudioTitles {
     param([Parameter(Mandatory = $true)][string]$FilePath)
     $titles = @{}
-    $mi = Get-Command -Name 'mediainfo' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $mi) { return $titles }
+    $miPath = $null
+    $cmd = Get-Command -Name 'mediainfo' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { $miPath = $cmd.Source }
+    if (-not $miPath -and $global:Settings -and $global:Settings.MediaInfoPath) {
+        $miPath = $global:Settings.MediaInfoPath
+    }
+    if (-not $miPath) {
+        $candidates = @()
+        if ($env:ProgramFiles) { $candidates += (Join-Path $env:ProgramFiles 'MediaInfo\mediainfo.exe') }
+        if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'MediaInfo\mediainfo.exe') }
+        foreach ($c in $candidates) {
+            if (Test-Path -LiteralPath $c -PathType Leaf) { $miPath = $c; break }
+        }
+    }
+    if (-not $miPath) { return $titles }
     try {
-        $jsonStr = & $mi.Source --Output=JSON "$FilePath" 2>$null | Out-String
+        $jsonStr = & $miPath --Output=JSON "$FilePath" 2>$null | Out-String
         if ($jsonStr) {
             $json = $jsonStr | ConvertFrom-Json
             foreach ($t in @($json.media.track)) {

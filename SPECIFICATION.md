@@ -236,7 +236,7 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
 - 処理方法: 「全てエンコード」「一部のみエンコード＋残りパススルー」「全てパススルー」。
 - エンコーダーは ffmpeg 内部の AAC / Opus / FLAC / MP3 / AC3 / E-AC3 / Vorbis。`-encoders` から利用可能なものだけを表示する。
 - 外部エンコーダー（qaac / nero / fdkaac）は非対応。
-- トラック名は ffprobe の `tags.title` / `tags.name` を優先し、MP4 などで返されない場合は MediaInfo CLI（`--Output=JSON`）の `Title` で補完する。MediaInfo が無い環境では空欄になる。
+- トラック名は ffprobe の `tags.title` / `tags.name` を優先し、MP4 などで返されない場合は MediaInfo CLI（`--Output=JSON`）の `Title` で補完する。CLI は PATH、`$global:Settings.MediaInfoPath`、`%ProgramFiles%\MediaInfo\mediainfo.exe` の順に探索する。見つからない環境では空欄になる。
 - `Tests\Test-AudioOnlyMode.ps1` で ffmpeg 引数構築とトラック名補完を検証する。
 
 ### 5.1 エンコード実行中の操作ロック
