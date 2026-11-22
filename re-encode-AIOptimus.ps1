@@ -3012,6 +3012,7 @@ function Start-MainProcess {
     }
 
     if ($selectedMode -eq 5) {
+        $backToMode = $false
         foreach ($inputFile in $Path) {
             $inputFile = $inputFile.Trim('"')
             if (-not (Test-Path -LiteralPath $inputFile -PathType Leaf)) {
@@ -3019,7 +3020,14 @@ function Start-MainProcess {
                 continue
             }
             $syncSettings = Read-ExternalAudioSyncSettings -VideoPath $inputFile
-            if (-not $syncSettings) { continue }
+            if (-not $syncSettings) {
+                if ($global:MenuNav -eq 'allback') {
+                    $global:MenuNav = ''
+                    $backToMode = $true
+                    break
+                }
+                continue
+            }
             try {
                 $resolvedInput = (Resolve-Path -LiteralPath $inputFile).ProviderPath
                 $null = Invoke-ExternalAudioSynthesis -VideoPath $resolvedInput -Settings $syncSettings
@@ -3028,10 +3036,12 @@ function Start-MainProcess {
                 Write-Log "外部音声同期に失敗: $_" -Level "ERROR"
             }
         }
+        if ($backToMode) { continue }
         return
     }
 
     if ($selectedMode -eq 6) {
+        $backToMode = $false
         foreach ($inputFile in $Path) {
             $inputFile = $inputFile.Trim('"')
             if (-not (Test-Path -LiteralPath $inputFile -PathType Leaf)) {
@@ -3040,7 +3050,14 @@ function Start-MainProcess {
             }
             $resolvedInput = (Resolve-Path -LiteralPath $inputFile).ProviderPath
             $audioOnlySettings = Read-AudioOnlySettings -VideoPath $resolvedInput
-            if (-not $audioOnlySettings) { continue }
+            if (-not $audioOnlySettings) {
+                if ($global:MenuNav -eq 'allback') {
+                    $global:MenuNav = ''
+                    $backToMode = $true
+                    break
+                }
+                continue
+            }
             try {
                 $null = Invoke-AudioOnlyEncode -VideoPath $resolvedInput -Settings $audioOnlySettings
             }
@@ -3048,6 +3065,7 @@ function Start-MainProcess {
                 Write-Log "音声のみエンコードに失敗: $_" -Level "ERROR"
             }
         }
+        if ($backToMode) { continue }
         return
     }
 
