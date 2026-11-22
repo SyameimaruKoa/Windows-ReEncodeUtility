@@ -29,6 +29,15 @@
 - 使えたもの: **D3D12VA の H.264/HEVC は `hwupload` + `pix_fmt=d3d12` で動作**（CPU フレーム入力では失敗）。Vulkan の `ffv1_vulkan` も hwupload で動作。MF 音声は `aac_mf` と `mp3_mf` が動作（`ac3_mf` は MFT なし）。外部音声エンコーダー 7プリセットはすべて正常。
 - 使えなかったもの: Vulkan 映像H.264/HEVC/AV1（Vulkan コンピュートパイプライン初期化失敗）、MF の `hevc_mf` / `av1_mf`、D3D12VA AV1。いずれもこの環境のドライバ／MFT 不足が原因で、コード側の不具合ではない。
 
+## 2026-11-22
+
+### PowerShell 5.1 / 7 両対応の明示化
+
+- OS 側の PowerShell 7 移行に伴い 5.1 を排除せず、両方で動く構成を維持することを明記した。
+- 全 `.ps1` / `.psm1`（18ファイル）が UTF-8 BOM 付きで、PS7 固有構文が無いことを確認済み。
+- `Tests\Test-PowerShellCompatibility.ps1` を追加し、BOM・PS7 固有構文・構文解析を静的に検証する。
+- README / SPECIFICATION に両対応と保存ルールを記載。
+
 ## 2026-11-18（追記・未コミット）
 
 ### 一時ファイルをプロジェクト内に限定
