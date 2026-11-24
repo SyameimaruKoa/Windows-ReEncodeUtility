@@ -190,13 +190,29 @@ Linux では qaac / Nero は未設定です。fdkaac は `Get-Command` で自動
 | --------------- | ------------------ | ------------------------------------------------------------- | -------------------------------------- |
 | **exiftool**    | メタデータ処理     | [exiftool.org](https://exiftool.org/)                         | 低（メタデータ保持機能を使う場合のみ） |
 | **LosslessCut** | ビジュアル編集補助 | [MaCleaner 12 / GitHub](https://github.com/mifi/lossless-cut) | 低（設定例のみ）                       |
+| **Python 3**    | FFplay比較GUIの実行 | Linux: 標準搭載 / Windows: [python.org](https://www.python.org/downloads/) | 低（比較GUIを使う場合のみ） |
 | **tkinter**     | FFplay比較GUI      | Linux: `apt install python3-tk` / Windows: Python に同梱      | 低（比較GUIを使う場合のみ）            |
+| **ffplay**      | FFplay比較         | FFmpeg に付属（PATH に登録）                                  | 低（比較を使う場合のみ）               |
 
 Windows PowerShell 5.1（`powershell.exe`）には非対応です。`pwsh.exe` を使用してください。Linux でも PowerShell 7 (`pwsh`) / FFmpeg / ffprobe が必須です。
 
 ---
 
 ## 🔧 セットアップ
+
+### 依存関係の確認・インストール案内
+
+`install.sh` / `install.bat` で必須・オプションのコマンドを確認できる。不足しているもののインストール方法を表示する（実際のインストールは行わない）。
+
+```bash
+./install.sh --check     # Linux
+```
+
+```bat
+install.bat --check      # Windows
+```
+
+引数なし / `-h` / `--help` でヘルプを表示する。
 
 ### 1. FFmpeg・FFprobe のインストール
 
@@ -595,6 +611,8 @@ Linux 用の設定ファイルです。`$IsLinux` 時に自動読み込みされ
 動画再エンコード/
 ├── start.bat                     # 起動用バッチファイル (Windows)
 ├── start.sh                      # 起動スクリプト (Linux。引数なし / -h / --help)
+├── install.bat                   # 依存関係チェック (Windows。--check)
+├── install.sh                    # 依存関係チェック (Linux。--check)
 ├── SETUP.SH                      # Linux 用シンボリックリンク設定 (-i 登録 / -u 解除)
 ├── re-encode-AIOptimus.ps1       # メイン処理スクリプト
 ├── get-ffmpegOptions.ps1         # エンコード設定メニュー構築スクリプト
