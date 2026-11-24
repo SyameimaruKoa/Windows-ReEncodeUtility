@@ -476,3 +476,15 @@ Opus音声エンコーダー（libopus）を使用する際、入力ファイル
 - インターレース処理を行うか確認する共通関数 `Select-DeinterlaceOption` を新設した。「行わない（スキップ）」「自動判定する（動画解析を実行）」「手動で選択する（解析をスキップして直接フィルター指定）」の3択を用意し、必要に応じて判定やフィルター一覧を表示して `Resolve-DeinterlaceFilter` でフィルターを解決する構成とした。
 - おまかせモード（`Invoke-PlatformAutoSetup`）、プラットフォーム手動モード（`Invoke-PlatformDetailedSetup`）、カスタムモード（`Invoke-InteractiveSetup`）の3箇所で重複していたインターレース処理コードを `Select-DeinterlaceOption` の呼び出しに統一した。
 
+## 2026-11-24
+
+### メディア情報スクリプトを移管し Linux 対応を追加
+
+`Windows-homebrew-scripts` の `Media/Playback/Media_Info_get-info.ps1` を `Tools/Media/` へ移動した。Windows に加えて Linux でも実行できるよう、次の変更を行った。
+
+- FFmpeg のヌル出力先を `NUL` から `-` に変更し、OS を問わず解析できるようにした。
+- `Get-Command` の結果取得を `.Source` から `.Path` に統一した。
+- 標準入力がリダイレクトされた環境ではキー待ちを省略し、非対話実行でも完了するようにした。
+- FFplay比較GUIを Python + tkinter の共通実装に置き換え、Windows / Linux どちらもボタン付きウィンドウで8種類の比較を起動できるようにした。tkinter が無い環境では比較用コマンド例、ffplay が無い環境や DISPLAY / WAYLAND_DISPLAY の無い headless 環境では比較機能のみスキップする。
+- README.md に付属ツールとして追記した。
+

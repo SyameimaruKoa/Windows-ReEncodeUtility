@@ -190,6 +190,7 @@ Linux では qaac / Nero は未設定です。fdkaac は `Get-Command` で自動
 | --------------- | ------------------ | ------------------------------------------------------------- | -------------------------------------- |
 | **exiftool**    | メタデータ処理     | [exiftool.org](https://exiftool.org/)                         | 低（メタデータ保持機能を使う場合のみ） |
 | **LosslessCut** | ビジュアル編集補助 | [MaCleaner 12 / GitHub](https://github.com/mifi/lossless-cut) | 低（設定例のみ）                       |
+| **tkinter**     | FFplay比較GUI      | Linux: `apt install python3-tk` / Windows: Python に同梱      | 低（比較GUIを使う場合のみ）            |
 
 Windows PowerShell 5.1（`powershell.exe`）には非対応です。`pwsh.exe` を使用してください。Linux でも PowerShell 7 (`pwsh`) / FFmpeg / ffprobe が必須です。
 
@@ -258,6 +259,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 - GPU 使用率ログは Windows の PDH 依存のため Linux では N/A（CPU/GPU 監視は無効化）。
 - 設定画面の描画: Windows は従来どおり画面全体をクリアするが、Linux では `Clear-Host` を使わず、メニュー行だけを ANSI エスケープで書き換える（画面全体を上書きしない）。確認画面も Linux ではクリアせず追記表示する。
 - メニュー中の Ctrl+C: Linux では Ctrl+C をキー入力として受け取り（[Console]::TreatControlCAsInput）、Esc と同じくメニューをキャンセルしてスクリプトを終了する。以前は別キーを押さないと画面が更新されなかったが、Ctrl+C を押した時点で選択行を消して終了する。
+- FFplay比較GUIは Python + tkinter の共通実装。Linux では `apt install python3-tk` で導入し、無い場合は比較用コマンド例を表示する。
 
 ---
 
@@ -558,6 +560,19 @@ MiraBox等のキャプチャデバイスから映像を取り込み、**ゼロ�
 
 この録画スクリプトは dshow に依存するため Windows 専用です。Linux では使用できません。
 
+### メディア情報の確認 (`Tools/Media/Media_Info_get-info.ps1`)
+
+ffprobe / ffmpeg を使ってメディアファイルの情報を表示するスタンドアロンスクリプトです。一般情報、フレームレート詳細、先頭フレームの表示時間、走査方式（インターレース／プログレッシブ）に加え、実映像解析による 3:2 プルダウン周期・重複フレームの検出と逆テレシネの要否推定を行います。
+
+```powershell
+pwsh -NoProfile -File ./Tools/Media/Media_Info_get-info.ps1 -h
+pwsh -NoProfile -File ./Tools/Media/Media_Info_get-info.ps1 ./input.mkv
+pwsh -NoProfile -File ./Tools/Media/Media_Info_get-info.ps1 -FullAnalysis ./input.mkv
+pwsh -NoProfile -File ./Tools/Media/Media_Info_get-info.ps1 -SkipCadenceAnalysis ./input.mkv
+```
+
+FFplay 比較 GUI は Python + tkinter のボタン付きウィンドウで、Windows / Linux 共通です。GUI 環境で `tkinter` が使える場合に表示されます（Linux は `python3-tk`、Windows は Python に同梱）。`tkinter` が無い環境では比較用の ffplay コマンド例を表示し、ffplay 自体が無い環境や DISPLAY / WAYLAND_DISPLAY の無い headless 環境では比較機能だけをスキップします。情報表示と解析はどの環境でも実行されます。
+
 ---
 
 ## ⚙️ 設定ファイル
@@ -592,6 +607,7 @@ Linux 用の設定ファイルです。`$IsLinux` 時に自動読み込みされ
 ├── .cache/                       # ハードウェアスキャン等のキャッシュ保存先
 │   └── hardware-scan-cache.clixml
 ├── Modules/TemplateManager.ps1   # エンコード・フィルターテンプレート管理
+├── Tools/Media/Media_Info_get-info.ps1  # メディア情報・逆テレシネ判定 (Windows/Linux)
 └── Profiles/                     # テンプレート保存先
     ├── Encoding/                  # エンコード設定
     ├── Filters/                   # すべてのエンコードモードで使用する映像フィルター
@@ -684,4 +700,4 @@ QaacPath = "C:\path\to\qaac64.exe"
 
 改善提案・バグ報告は Issue / Pull Request でお願いします。
 
-**最終更新：** 2026-11-19
+**最終更新：** 2026-11-24
