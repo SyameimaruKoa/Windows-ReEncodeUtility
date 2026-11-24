@@ -485,6 +485,6 @@ Opus音声エンコーダー（libopus）を使用する際、入力ファイル
 - FFmpeg のヌル出力先を `NUL` から `-` に変更し、OS を問わず解析できるようにした。
 - `Get-Command` の結果取得を `.Source` から `.Path` に統一した。
 - 標準入力がリダイレクトされた環境ではキー待ちを省略し、非対話実行でも完了するようにした。
-- Linux の FFplay比較GUIを zenity / yad / kdialog の自動検出方式に変更した。Windows は従来の Windows Forms GUI を維持し、GUIツールが無い環境では比較用コマンド例、ffplay が無い環境や DISPLAY / WAYLAND_DISPLAY の無い headless 環境では比較機能のみスキップする。
+- FFplay比較GUIを Python + tkinter の共通実装に置き換え、Windows / Linux どちらもボタン付きウィンドウで8種類の比較を起動できるようにした。tkinter が無い環境では比較用コマンド例、ffplay が無い環境や DISPLAY / WAYLAND_DISPLAY の無い headless 環境では比較機能のみスキップする。
 - README.md に付属ツールと依存関係（GUI ツール）を追記した。
 

@@ -53,7 +53,7 @@
     ・ドラッグ＆ドロップでも実行できます。
     ・Shiftを押したまま起動すると全編解析します。
     ・判定はあくまで映像からの推定です。2:2などの完全判定は対象外です。
-    ・FFplay比較は Windows では Windows Forms、Linux では zenity / yad / kdialog のGUIで表示します。GUIツールが無い場合はコマンド例、ffplay が無い環境や headless 環境では比較のみスキップします。
+    ・FFplay比較は Python + tkinter のGUI（Windows/Linux共通）で表示します。tkinter が無い場合はコマンド例、ffplay が無い環境や headless 環境では比較のみスキップします。
 #>
 #endregion
 
@@ -600,82 +600,12 @@ function Show-TelecineAssessment {
 
 #region FFplayによるフィルター確認
 
-# Linux の GUI ツール (zenity / yad / kdialog) で比較モードを選択させる。
-function Get-DesktopGuiSelection {
-    param(
-        [string]$ToolName,
-        [string]$ToolPath,
-        [string]$Title,
-        [string]$Text,
-        [string[]]$Items
-    )
-
-    switch ($ToolName) {
-        'zenity' {
-            $lines = foreach ($item in $Items) {
-                $parts = $item -split '\|', 2
-                'FALSE' + "`t" + $parts[0] + "`t" + $(if ($parts.Count -ge 2) { $parts[1] } else { '' })
-            }
-            $savedLang = $env:LANG
-            $savedLocale = $env:LC_ALL
-            try {
-                $env:LANG = 'C.UTF-8'
-                $env:LC_ALL = 'C.UTF-8'
-                $result = @($lines | & $ToolPath --list --radiolist --title=$Title --text=$Text --column='Select' --column='Mode' --column='Description' --separator='|' --print-column=2 --width=1000 --height=640 2>$null)
-            }
-            finally {
-                $env:LANG = $savedLang
-                $env:LC_ALL = $savedLocale
-            }
-            if ($LASTEXITCODE -eq 0 -and $result.Count -gt 0) { return [string]$result[0] }
-        }
-        'yad' {
-            $lines = foreach ($item in $Items) {
-                $parts = $item -split '\|', 2
-                'FALSE' + "`t" + $parts[0] + "`t" + $(if ($parts.Count -ge 2) { $parts[1] } else { '' })
-            }
-            $savedLang = $env:LANG
-            $savedLocale = $env:LC_ALL
-            try {
-                $env:LANG = 'C.UTF-8'
-                $env:LC_ALL = 'C.UTF-8'
-                $result = @($lines | & $ToolPath --list --radiolist --title=$Title --text=$Text --column='Select' --column='Mode' --column='Description' --separator='|' --print-column=2 --width=1000 --height=640 2>$null)
-            }
-            finally {
-                $env:LANG = $savedLang
-                $env:LC_ALL = $savedLocale
-            }
-            if ($LASTEXITCODE -eq 0 -and $result.Count -gt 0) { return [string]$result[0] }
-        }
-        'kdialog' {
-            $arguments = @('--title', $Title, '--radiolist', $Text, 1000, 640, $Items.Count)
-            foreach ($item in $Items) {
-                $parts = $item -split '\|', 2
-                $arguments += @($parts[0], $(if ($parts.Count -ge 2) { $parts[1] } else { '' }), 'off')
-            }
-            $savedLang = $env:LANG
-            $savedLocale = $env:LC_ALL
-            try {
-                $env:LANG = 'C.UTF-8'
-                $env:LC_ALL = 'C.UTF-8'
-                $result = @(& $ToolPath @arguments 2>$null)
-            }
-            finally {
-                $env:LANG = $savedLang
-                $env:LC_ALL = $savedLocale
-            }
-            if ($LASTEXITCODE -eq 0 -and $result.Count -gt 0) { return [string]$result[0] }
-        }
-    }
-    return $null
-}
-
-function Show-DesktopGuiComparison {
+# Windows/Linux 共通のボタンGUIを Python + tkinter で表示する。
+function Show-TkComparison {
     param(
         [string]$VideoPath,
         [string]$FFprobeExecutable,
-        [string]$GuiToolName,
-        [string]$GuiToolPath,
+        [string]$PythonExecutable,
         [string]$FFplayExecutable
     )
 
@@ -715,9 +645,46 @@ function Show-DesktopGuiComparison {
         @{ Name = '8  隣接フレームの差分（Bob後）'; Filter = 'bwdif=mode=send_field:parity=tff:deint=interlaced,tblend=all_mode=difference'; Rate = 2.0; Bob = $true; Description = 'Bob後の隣接フレームの差分を表示し、点滅や補間差を見る。' }
     )
 
+    $pythonScript = @'
+import json
+import subprocess
+import sys
+import tkinter as tk
+import tkinter.messagebox as messagebox
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+
+root = tk.Tk()
+root.title(data["title"])
+root.geometry("760x780")
+root.resizable(False, False)
+
+info = tk.Label(root, text=data["info"], justify="left", wraplength=720)
+info.pack(anchor="w", padx=15, pady=(12, 6))
+
+def launch(command):
+    try:
+        subprocess.Popen(command)
+    except Exception as exc:
+        messagebox.showerror("ffplay起動失敗", str(exc))
+
+for button in data["buttons"]:
+    frame = tk.Frame(root)
+    frame.pack(fill="x", padx=15, pady=2)
+    action = tk.Button(frame, text=button["label"], anchor="w", command=lambda command=button["command"]: launch(command))
+    action.pack(fill="x")
+    note = tk.Label(frame, text=button["description"], anchor="w", justify="left", wraplength=710, foreground="#555555")
+    note.pack(anchor="w", padx=12)
+
+help_label = tk.Label(root, text=data["help"], justify="left", wraplength=720)
+help_label.pack(anchor="w", padx=15, pady=(10, 12))
+
+root.mainloop()
+'@
+
     $fitScreen = "scale='min(1880,iw)':'min(1000,ih)':force_original_aspect_ratio=decrease"
-    $items = @()
-    $labels = @{}
+    $buttons = @()
     foreach ($mode in $modes) {
         $suffix = ''
         if ($observedFps -gt 0) {
@@ -731,28 +698,41 @@ function Show-DesktopGuiComparison {
             }
         }
         $label = $mode.Name + $suffix
-        $labels[$label] = $mode
-        $items += $label + '|' + $mode.Description
+        $buttons += @{
+            label = $label
+            description = $mode.Description
+            command = @($FFplayExecutable, '-hide_banner', '-an', '-sn', '-window_title', $label, '-vf', $(if ($mode.Filter) { "$($mode.Filter),$fitScreen" } else { $fitScreen }), '-i', $VideoPath)
+        }
     }
 
-    $title = 'FFplay比較 - ' + [IO.Path]::GetFileName($VideoPath)
-    $text = '比較するモードを選んでください'
+    $inputRateLabel = if ($observedFps -gt 0) {
+        '冒頭PTSから推定した入力fps: ' + $observedFps.ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
+    }
+    else { '入力fps: 時刻情報から推定できませんでした' }
+    $payload = @{
+        title = 'FFplay比較 - ' + [IO.Path]::GetFileName($VideoPath)
+        info = $inputRateLabel + [Environment]::NewLine + '各モードのfpsは推定出力値（実描画FPSではありません）。'
+        help = '各ボタンでFFplayが起動する。S: 1コマ進む　Space: 再生/停止　左右: 10秒移動　Q/Esc: 終了' + [Environment]::NewLine + '差分は変化が少ないほど暗くなる。静止場面や圧縮ノイズに注意。'
+        buttons = $buttons
+    } | ConvertTo-Json -Depth 6
+
     Write-Host ''
-    Write-Host ('[ FFplay比較 (' + $GuiToolName + ') ]') -ForegroundColor Cyan
-    Write-Host '一覧からモードを選ぶとFFplayが起動する。閉じると一覧に戻り、ESCで終了する。'
+    Write-Host '[ FFplay比較 (Python/tkinter) ]' -ForegroundColor Cyan
+    Write-Host 'ボタンを押すと別ウィンドウでFFplayが起動する。'
 
-    while ($true) {
-        $selected = Get-DesktopGuiSelection -ToolName $GuiToolName -ToolPath $GuiToolPath -Title $title -Text $text -Items $items
-        if (-not $selected) { break }
-
-        $selectedLabel = [string]$selected
-        $mode = $labels[$selectedLabel]
-        if (-not $mode) {
-            $mode = @($modes | Where-Object { $selectedLabel.StartsWith($_.Name) })[0]
-        }
-        if (-not $mode) { continue }
-        $filter = if ($mode.Filter) { "$($mode.Filter),$fitScreen" } else { $fitScreen }
-        & $FFplayExecutable -hide_banner -an -sn -window_title $selectedLabel -vf $filter -i $VideoPath
+    $tempDir = [IO.Path]::GetTempPath()
+    $stem = 'ffplay-compare-' + [guid]::NewGuid().ToString('N')
+    $scriptPath = [IO.Path]::Combine($tempDir, $stem + '.py')
+    $payloadPath = [IO.Path]::Combine($tempDir, $stem + '.json')
+    $utf8 = [Text.UTF8Encoding]::new($false)
+    try {
+        [IO.File]::WriteAllText($scriptPath, $pythonScript, $utf8)
+        [IO.File]::WriteAllText($payloadPath, $payload, $utf8)
+        & $PythonExecutable $scriptPath $payloadPath
+    }
+    finally {
+        Remove-Item -LiteralPath $scriptPath -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $payloadPath -ErrorAction SilentlyContinue
     }
 }
 
@@ -782,18 +762,23 @@ function Show-FFplayVerification {
         $screenHeight = $area.Height
     }
     catch {
-        # Linux の GUI 環境では zenity / yad / kdialog で比較モードを選択させる。
-        if ($env:OS -ne 'Windows_NT') {
-            foreach ($toolName in @('zenity', 'yad', 'kdialog')) {
-                $tool = Get-Command $toolName -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($tool) {
-                    Show-DesktopGuiComparison -VideoPath $VideoPath -FFprobeExecutable $FFprobeExecutable -GuiToolName $toolName -GuiToolPath $tool.Path -FFplayExecutable $ffplay.Path
+        # Python + tkinter が使えれば Windows/Linux 共通のボタンGUIを出す。
+        $python = Get-Command python3 -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $python) { $python = Get-Command python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 }
+        if ($python) {
+            try {
+                & $python.Path -c 'import tkinter' 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    Show-TkComparison -VideoPath $VideoPath -FFprobeExecutable $FFprobeExecutable -PythonExecutable $python.Path -FFplayExecutable $ffplay.Path
                     return
                 }
             }
+            catch {
+                # tkinter が無い場合はコマンド例にフォールバックする。
+            }
         }
-        # 使えるGUIツールが無い環境では、比較用コマンドを表示する。
-        Write-Host '使えるGUIツールが無いため、以下のコマンドでFFplay比較ができるのじゃ。' -ForegroundColor Yellow
+        # Windows Forms も tkinter も使えない環境では、比較用コマンドを表示する。
+        Write-Host 'Windows Forms も tkinter も使えないため、以下のコマンドでFFplay比較ができるのじゃ。' -ForegroundColor Yellow
         $cliQuote = { param([string]$v) "'" + $v.Replace("'", "''") + "'" }
         $cliFit = "scale='min(1880,iw)':'min(1000,ih)':force_original_aspect_ratio=decrease"
         $cliModes = @(
