@@ -11,7 +11,7 @@
     先頭10フレームの走査方式フラグも表示します。
     FFmpegで複数区間の3:2プルダウン周期を解析し、逆テレシネの要否を推定します。
     Shift起動または -FullAnalysis で全編解析します。
-    FFplayで元映像・逆テレシネ・Bwdif・差分を比較する説明付きボタンを表示します。
+    FFplayで元映像・逆テレシネ・Bwdif・nnedi3・差分を比較する説明付きボタンを表示します。
 
 .PARAMETER filePaths
     情報を表示したいメディアファイルのパスを1つ以上指定します。
@@ -600,6 +600,48 @@ function Show-TelecineAssessment {
 
 #region FFplayによるフィルター確認
 
+$script:previewNnediFilter = $null
+$script:previewNnediBobFilter = $null
+
+function Resolve-PreviewNnediFilter {
+    $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+    $weightsFile = Join-Path $projectRoot 'nnedi3_weights.bin'
+    if (-not (Test-Path -LiteralPath $weightsFile -PathType Leaf)) {
+        Write-Host 'nnedi用ウェイトファイル(nnedi3_weights.bin)をダウンロードします...' -ForegroundColor Cyan
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/dubhater/vapoursynth-nnedi3/master/src/nnedi3_weights.bin' -OutFile $weightsFile -UseBasicParsing
+        }
+        catch {
+            Write-Host "ダウンロード失敗。nnedi比較は使えません: $_" -ForegroundColor Yellow
+            return
+        }
+    }
+    $escapedWeights = $weightsFile.Replace('\', '/').Replace(':', '\:')
+    $script:previewNnediFilter = "nnedi=weights='$escapedWeights'"
+    $script:previewNnediBobFilter = "nnedi=weights='$escapedWeights':field=tf"
+}
+
+function Get-PreviewNnediModes {
+    if (-not $script:previewNnediFilter) { return @() }
+    return @(
+        @{
+            Name        = '9  nnedi3（30p・高品質）'
+            Filter      = $script:previewNnediFilter
+            Rate        = 1.0
+            Bob         = $false
+            Description = 'nnedi3_weights.binの学習ウェイトで縞を消し、約30pで見る。Bwdifより高品質だが非常に重い。'
+        },
+        @{
+            Name        = '10  nnedi3 Bob（60p・高品質・最重）'
+            Filter      = $script:previewNnediBobFilter
+            Rate        = 2.0
+            Bob         = $true
+            Description = '両フィールドから2枚を生成し、約60pの動きを残す。高品質だがリアルタイム再生が厳しい。軽さ優先なら5のBwdif Bobを使う。'
+        }
+    )
+}
+
 # Linux では GTK のボタンGUIで比較モードを選択させる。
 function Show-GtkComparison {
     param(
@@ -669,6 +711,8 @@ public static class GtkNative {
         @{ Name = '7  隣接フレームの差分（元映像）'; Filter = 'tblend=all_mode=difference'; Rate = 1.0; Bob = $false; Description = '元の隣接フレームの差分を表示し、縞や画素の変化を調べる。' },
         @{ Name = '8  隣接フレームの差分（Bob後）'; Filter = 'bwdif=mode=send_field:parity=tff:deint=interlaced,tblend=all_mode=difference'; Rate = 2.0; Bob = $true; Description = 'Bob後の隣接フレームの差分を表示し、点滅や補間差を見る。' }
     )
+    $nnediModes = Get-PreviewNnediModes
+    if ($nnediModes.Count -gt 0) { $modes += $nnediModes }
 
     $fitScreen = "scale='min(1880,iw)':'min(1000,ih)':force_original_aspect_ratio=decrease"
     $buttons = @()
@@ -697,7 +741,7 @@ public static class GtkNative {
 
     $window = [GtkNative]::gtk_window_new(0)
     [GtkNative]::gtk_window_set_title($window, 'FFplay比較 - ' + [IO.Path]::GetFileName($VideoPath))
-    [GtkNative]::gtk_window_set_default_size($window, 760, 820)
+    [GtkNative]::gtk_window_set_default_size($window, 760, 980)
     [GtkNative]::gtk_container_set_border_width($window, 12)
     $box = [GtkNative]::gtk_vbox_new($false, 4)
     [GtkNative]::gtk_container_add($window, $box)
@@ -769,6 +813,8 @@ function Show-FFplayVerification {
         if ($LASTEXITCODE -eq 0 -and -not $videoStream) { return }
     }
 
+    Resolve-PreviewNnediFilter
+
     # Media_Action_play.bat の既定の画面サイズ調整を維持する
     $screenWidth = 1920
     $screenHeight = 1080
@@ -804,6 +850,8 @@ function Show-FFplayVerification {
             @{ Name = '7  隣接フレームの差分（元映像）'; Filter = 'tblend=all_mode=difference' },
             @{ Name = '8  隣接フレームの差分（Bob後）'; Filter = 'bwdif=mode=send_field:parity=tff:deint=interlaced,tblend=all_mode=difference' }
         )
+        $nnediModes = Get-PreviewNnediModes
+        if ($nnediModes.Count -gt 0) { $cliModes += $nnediModes }
         Write-Host ''
         Write-Host '[ FFplay比較コマンド（Windows Forms 非対応環境用） ]' -ForegroundColor Cyan
         foreach ($cliMode in $cliModes) {
@@ -853,12 +901,14 @@ function Show-FFplayVerification {
         @{ Name = '7  隣接フレームの差分（元映像）'; Filter = 'tblend=all_mode=difference'; Rate = 1.0; Bob = $false; Description = '元の隣接フレームの差分を表示し、縞や画素の変化を調べる。' },
         @{ Name = '8  隣接フレームの差分（Bob後）'; Filter = 'bwdif=mode=send_field:parity=tff:deint=interlaced,tblend=all_mode=difference'; Rate = 2.0; Bob = $true; Description = 'Bob後の隣接フレームの差分を表示し、点滅や補間差を見る。' }
     )
+    $nnediModes = Get-PreviewNnediModes
+    if ($nnediModes.Count -gt 0) { $modes += $nnediModes }
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = 'FFplay比較 - ' + [IO.Path]::GetFileName($VideoPath)
     $form.StartPosition = 'CenterScreen'
-    $form.Size = New-Object System.Drawing.Size(690, 770)
-    $form.MinimumSize = New-Object System.Drawing.Size(690, 770)
+    $form.Size = New-Object System.Drawing.Size(690, 930)
+    $form.MinimumSize = New-Object System.Drawing.Size(690, 930)
     $form.MaximizeBox = $false
 
     $info = New-Object System.Windows.Forms.Label
@@ -916,7 +966,7 @@ function Show-FFplayVerification {
     }
 
     $help = New-Object System.Windows.Forms.Label
-    $help.SetBounds(15, 665, 650, 55)
+    $help.SetBounds(15, 820, 650, 55)
     $help.Text = 'S: 1コマ進む　Space: 再生/停止　左右: 10秒移動　Q/Esc: 終了' +
         [Environment]::NewLine +
         '差分は変化が少ないほど暗くなる。静止場面や圧縮ノイズに注意。'

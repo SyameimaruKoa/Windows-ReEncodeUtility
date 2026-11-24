@@ -572,7 +572,7 @@ pwsh -NoProfile -File ./Tools/Media/Media_Info_get-info.ps1 -FullAnalysis ./inpu
 pwsh -NoProfile -File ./Tools/Media/Media_Info_get-info.ps1 -SkipCadenceAnalysis ./input.mkv
 ```
 
-FFplay 比較 GUI は Windows では Windows Forms、Linux では PowerShell から GTK 3 を直接呼び出したボタン付きウィンドウです。8種類の比較をボタンから起動でき、fps の推定値と各モードの説明も表示します。`libgtk-3-0` が無い環境では比較用の ffplay コマンド例を表示し、ffplay 自体が無い環境や DISPLAY / WAYLAND_DISPLAY の無い headless 環境では比較機能だけをスキップします。情報表示と解析はどの環境でも実行されます。
+FFplay 比較 GUI は Windows では Windows Forms、Linux では PowerShell から GTK 3 を直接呼び出したボタン付きウィンドウです。8種類の比較をボタンから起動でき、`nnedi3_weights.bin` があれば nnedi3 の 30p と 60p Bob（高品質・非常に重い）も加わります。ウェイトファイルが無い場合は起動時にリポジトリ直下へ自動ダウンロードし、失敗した場合は nnedi3 比較だけを省略します。fps の推定値と各モードの説明も表示します。`libgtk-3-0` が無い環境では比較用の ffplay コマンド例を表示し、ffplay 自体が無い環境や DISPLAY / WAYLAND_DISPLAY の無い headless 環境では比較機能だけをスキップします。情報表示と解析はどの環境でも実行されます。
 
 ---
 
