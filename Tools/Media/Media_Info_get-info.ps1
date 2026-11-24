@@ -612,7 +612,10 @@ function Get-DesktopGuiSelection {
 
     switch ($ToolName) {
         'zenity' {
-            $lines = foreach ($item in $Items) { 'FALSE|' + $item }
+            $lines = foreach ($item in $Items) {
+                $parts = $item -split '\|', 2
+                'FALSE' + "`t" + $parts[0] + "`t" + $(if ($parts.Count -ge 2) { $parts[1] } else { '' })
+            }
             $savedLang = $env:LANG
             $savedLocale = $env:LC_ALL
             try {
@@ -627,7 +630,10 @@ function Get-DesktopGuiSelection {
             if ($LASTEXITCODE -eq 0 -and $result.Count -gt 0) { return [string]$result[0] }
         }
         'yad' {
-            $lines = foreach ($item in $Items) { 'FALSE|' + $item }
+            $lines = foreach ($item in $Items) {
+                $parts = $item -split '\|', 2
+                'FALSE' + "`t" + $parts[0] + "`t" + $(if ($parts.Count -ge 2) { $parts[1] } else { '' })
+            }
             $savedLang = $env:LANG
             $savedLocale = $env:LC_ALL
             try {
