@@ -714,7 +714,13 @@ public static class GtkNative {
     foreach ($item in $buttons) {
         $button = [GtkNative]::gtk_button_new_with_label($item.label)
         $exe = $FFplayExecutable
-        $arguments = @('-hide_banner', '-an', '-sn', '-window_title', $item.label, '-vf', $item.filter, '-i', $VideoPath)
+        $quoteArg = { param([string]$v) '"' + $v + '"' }
+        $arguments = @(
+            '-hide_banner', '-an', '-sn',
+            '-window_title', (& $quoteArg $item.label),
+            '-vf', (& $quoteArg $item.filter),
+            '-i', (& $quoteArg $VideoPath)
+        )
         $callback = [GtkNative+SignalCallback]({
             param($w, $d)
             try {
