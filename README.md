@@ -8,9 +8,9 @@ FFmpeg を使用して、ドラッグ＆ドロップした動画ファイルを�
 
 ## PS Camera SBSの左右交換と4ch音声同期
 
-既存のPSVR向けプロファイルとは別に、`Profiles/PS Camera SBS - 左右交換.psd1` を追加した。**左右映像を入れ替えるだけ**で、クロップ・拡縮・レンズ補正は行わない。映像は `hevc_qsv -global_quality 25 -preset veryslow`、音声はコピー（既存PSVRプロファイルと同設定）。MKVには正式な3D識別情報 `stereo_mode=left_right` を付与する。
+既存のPSVR向けプロファイルとは別に、`Profiles/Filters/PS Camera SBS - 左右交換.psd1` を追加した。**左右映像を入れ替えるだけ**で、クロップ・拡縮・レンズ補正は行わない。映像・音声設定は共通の `Profiles/Encoding/HEVC QSV - 音声コピー.psd1`（`hevc_qsv -global_quality 25 -preset veryslow` / 音声コピー）に分離した。MKVには正式な3D識別情報 `stereo_mode=left_right` を付与する。
 
-**メインメニューの「テンプレートから選択」→「PS Camera SBS - 左右交換」**を選ぶと、エンコード時に外部音声の自動同期または手動オフセットを指定できる。WAVを選択した場合、メイン（ch1/ch4）と補助（ch2/ch3）の2トラックを同期してMKVに合成する。音声を選択しなければ、入力音声をコピーして3D情報付きのMKVを出力する。外部音声を選択した場合はメイン・補助の2トラックをOpus（各256kbps VBR）で保存する。
+**メインメニューの「テンプレートから選択」→「PS Camera SBS - 左右交換」**で左右入れ替えフィルタを読み込める。外部音声の同期プロンプトはフィルターテンプレートに含めないため、4ch音声の同期・合成は下記の「外部音声同期・マルチトラック合成」または `Tools/Audio/` のスクリプトで行う。
 
 さらに、**メインメニューの「外部音声同期・マルチトラック合成」**を選べば、既存動画に外部音声だけを同期して結合できる。映像は再エンコードしない。
 
@@ -613,14 +613,16 @@ Linux 用の設定ファイルです。`$IsLinux` 時に自動読み込みされ
 ├── Tools/Media/Media_Info_get-info.ps1  # メディア情報・逆テレシネ判定 (Windows/Linux)
 └── Profiles/                     # テンプレート保存先
     ├── Encoding/                  # エンコード設定
+    │   └── HEVC QSV - 音声コピー.psd1
     ├── Filters/                   # すべてのエンコードモードで使用する映像フィルター
+    │   ├── PS Camera SBS - 左右交換.psd1
+    │   ├── PSVR SBS - フル.psd1
+    │   ├── PSVR SBS - ハーフ.psd1
+    │   ├── PSVR SBS - フル - クロップ - 16：9.psd1
+    │   ├── PSVR SBS - フル - クロップ - 4：3.psd1
     │   ├── SBS 2D - フル - VLC式アナグリフ.psd1
-    │   └── SBS 2D - ハーフ - VLC式アナグリフ.psd1
-    ├── PSVR SBS - フル.psd1
-    ├── PSVR SBS - ハーフ.psd1
-    ├── PSVR SBS - フル - クロップ - 16：9.psd1
-    ├── PSVR SBS - フル - クロップ - 4：3.psd1
-    ├── 暫定アニメ用-with-VP9.psd1
+    │   ├── SBS 2D - ハーフ - VLC式アナグリフ.psd1
+    │   └── SBS 2D - 各目16：9パッド.psd1
     └── ...
 ```
 
