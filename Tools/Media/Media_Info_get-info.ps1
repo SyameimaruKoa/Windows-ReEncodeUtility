@@ -717,7 +717,12 @@ public static class GtkNative {
         $arguments = @('-hide_banner', '-an', '-sn', '-window_title', $item.label, '-vf', $item.filter, '-i', $VideoPath)
         $callback = [GtkNative+SignalCallback]({
             param($w, $d)
-            Start-Process -FilePath $exe -ArgumentList $arguments
+            try {
+                Start-Process -FilePath $exe -ArgumentList $arguments -ErrorAction Stop
+            }
+            catch {
+                # GTK のコールバック内で例外を投げると PowerShell 全体が終了するため握る。
+            }
         }.GetNewClosure())
         [void][GtkNative]::g_signal_connect_data($button, 'clicked', $callback, [IntPtr]::Zero, [IntPtr]::Zero, 0)
         [GtkNative]::gtk_box_pack_start($box, $button, $false, $false, 0)
@@ -746,7 +751,7 @@ public static class GtkNative {
 function Show-FFplayVerification {
     param([string]$VideoPath, [string]$FFprobeExecutable)
 
-    $ffplay = Get-Command ffplay -CommandType Application -ErrorAction SilentlyContinue
+    $ffplay = Get-Command ffplay -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     $headless = $env:OS -ne 'Windows_NT' -and -not $env:DISPLAY -and -not $env:WAYLAND_DISPLAY
     if (-not $ffplay -or $headless) {
         $reason = if (-not $ffplay) { 'ffplayが見つからない' } else { 'ディスプレイがなくffplayを起動できない（headless）' }
@@ -922,8 +927,8 @@ function Show-FFplayVerification {
 #endregion FFplayによるフィルター確認
 
 # まずはffprobeかffmpegが使えるか確認するのじゃ
-$ffprobePath = Get-Command -Name ffprobe -ErrorAction SilentlyContinue
-$ffmpegPath = Get-Command -Name ffmpeg -ErrorAction SilentlyContinue
+$ffprobePath = Get-Command -Name ffprobe -ErrorAction SilentlyContinue | Select-Object -First 1
+$ffmpegPath = Get-Command -Name ffmpeg -ErrorAction SilentlyContinue | Select-Object -First 1
 
 if (-not $ffprobePath -and -not $ffmpegPath) {
     Write-Host "エラー: ffprobe も ffmpeg も見つからんかったぞ！ Pathが通っているか確認せい！" -ForegroundColor Red
