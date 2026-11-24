@@ -8,9 +8,13 @@
 .EXAMPLE
     .\Record-MiraBox.ps1
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 param([switch]$h, [switch]$help)
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 if ($h -or $help) { Get-Help $MyInvocation.MyCommand.Path -Detailed; exit }
 
 #region UIユーティリティ
@@ -43,28 +47,57 @@ function Show-Menu {
         if ($len -gt $maxLen) { $maxLen = $len }
     }
     $padTarget = $maxLen + 6
+
+    function Write-MenuLine {
+        param([int]$Index, [bool]$Selected)
+        $text = $Choices[$Index]
+        $line = if ($Selected) { " > $text" } else { "   $text" }
+        $currentLen = 0
+        foreach ($char in $line.ToCharArray()) {
+            if ([int]$char -ge 0x1000) { $currentLen += 2 } else { $currentLen += 1 }
+        }
+        $paddedLine = $line + (" " * [math]::Max(0, $padTarget - $currentLen))
+        if ($Selected) { Write-Host $paddedLine -ForegroundColor Black -BackgroundColor White }
+        else { Write-Host $paddedLine }
+    }
+
+    $menuStartY = $startPos.Y + $titleLines
+    $lastIndex = $currentIndex
+    $incremental = $true
     while ($true) {
-        if (-not $firstDraw) {
-            try { $Host.UI.RawUI.CursorPosition = $startPos } catch { Clear-Host }
-        }
-        $firstDraw = $false
-        Write-Host "$Title`n"
-        for ($i = 0; $i -lt $Choices.Length; $i++) {
-            $line = if ($i -eq $currentIndex) { " > $($Choices[$i])" } else { "   $($Choices[$i])" }
-            $currentLen = 0
-            foreach ($char in $line.ToCharArray()) {
-                if ([int]$char -ge 0x1000) { $currentLen += 2 } else { $currentLen += 1 }
+        if ($firstDraw -or -not $incremental) {
+            if (-not $firstDraw) {
+                try { $Host.UI.RawUI.CursorPosition = $startPos } catch { Clear-Host }
+                $startPos = $Host.UI.RawUI.CursorPosition
+                $menuStartY = $startPos.Y + $titleLines
             }
-            $spacesToPad = [math]::Max(0, $padTarget - $currentLen)
-            $paddedLine = $line + (" " * $spacesToPad)
-            if ($i -eq $currentIndex) { Write-Host $paddedLine -ForegroundColor Black -BackgroundColor White }
-            else { Write-Host $paddedLine }
+            Write-Host "$Title`n"
+            for ($i = 0; $i -lt $Choices.Length; $i++) {
+                Write-MenuLine -Index $i -Selected ($i -eq $currentIndex)
+            }
+            Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
+            $firstDraw = $false
+            $lastIndex = $currentIndex
+            $incremental = $true
         }
-        Write-Host "`n[↑↓] 移動  [Enter] 決定  [Backspace] 一つ戻る  [Delete] 最初へ戻る  [Esc] 終了" -ForegroundColor DarkGray
+        elseif ($lastIndex -ne $currentIndex) {
+            try {
+                [Console]::SetCursorPosition(0, $menuStartY + $lastIndex)
+                Write-MenuLine -Index $lastIndex -Selected $false
+                [Console]::SetCursorPosition(0, $menuStartY + $currentIndex)
+                Write-MenuLine -Index $currentIndex -Selected $true
+                [Console]::SetCursorPosition(0, $startPos.Y + $totalLines + 1)
+                $lastIndex = $currentIndex
+            }
+            catch {
+                $incremental = $false
+                continue
+            }
+        }
         $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         switch ($key.VirtualKeyCode) {
-            38 { if ($currentIndex -gt 0) { $currentIndex-- } }
-            40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } }
+            38 { if ($currentIndex -gt 0) { $currentIndex-- } else { $currentIndex = $Choices.Length - 1 } } # 先頭で末尾へ戻る
+            40 { if ($currentIndex -lt ($Choices.Length - 1)) { $currentIndex++ } else { $currentIndex = 0 } } # 末尾で先頭へ戻る
             13 { $global:MenuNav = ''; Write-Host ""; return $currentIndex }
             27 { $global:MenuNav = ''; Write-Host ""; return -1 }
             8  {

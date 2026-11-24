@@ -14,13 +14,17 @@
 .PARAMETER Quick
     解像度・ピクセル形式のプローブを省略し、利用可否と品質オプションのみ確認する。
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 [CmdletBinding()]
 param(
     [switch]$Force,
     [switch]$Quick
 )
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 
 $ErrorActionPreference = 'Continue'
 $scriptDir = $PSScriptRoot

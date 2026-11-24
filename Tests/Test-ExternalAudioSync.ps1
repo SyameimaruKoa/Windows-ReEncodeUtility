@@ -7,10 +7,14 @@
     最終出力のビープ音位置を実測してオフセット(ms)を求める。
     一時ファイルはすべて git 対象外の .cache 配下に作る。
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 [CmdletBinding()]
 param()
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 
 $ErrorActionPreference = 'Continue'
 $rootDir = Split-Path -Parent $PSScriptRoot

@@ -5,12 +5,16 @@
 .PARAMETER VideoPath
     検証に使う実動画。既定は資料用のテスト動画。
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 [CmdletBinding()]
 param(
     [string]$VideoPath = (Join-Path (Split-Path -Parent $PSScriptRoot) '.cache\Azahar 2126.2 _ SUPER MARIO 3D LAND 2026-11-16 19-03-51.mp4')
 )
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 
 # 'Stop' にすると ffmpeg の stderr が ErrorRecord 化して副作用判定が壊れるため 'Continue' を使う
 $ErrorActionPreference = 'Continue'

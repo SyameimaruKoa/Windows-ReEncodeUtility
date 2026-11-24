@@ -225,7 +225,19 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
 - PowerShell 5.1 と 7 の**両方で動作**する。OS 側の PowerShell 7 移行に伴い 5.1 を排除するのではなく、両対応を維持する。
 - 全 `.ps1` / `.psm1` は **UTF-8 BOM 付き**で保存する（5.1 が BOM 無し UTF-8 を ANSI として読み、日本語が文字化けするため）。
 - PS7 固有構文（`??` / `?.` / `$PSStyle` / `ForEach-Object -Parallel` / `-AsHashtable` 等）は使用しない。
-- `Tests\Test-PowerShellCompatibility.ps1` で BOM・PS7 固有構文・構文解析を検証する。
+- 各スクリプトは `#requires -Version 5.1` とし、`$IsWindows` / `$IsLinux` / `$IsMacOS` は PS5.1 で未定義のため互換初期化（冒頭の `Get-Variable` 確認と代入）を行う。
+- `Tests\Test-PowerShellCompatibility.ps1` で BOM・PS7 固有構文・`#requires`・互換初期化・構文解析を検証する。
+
+### 0.2 音声のみエンコード／マルチトラック音声
+
+- メインメニューに「音声のみエンコード（映像はパススルー・マルチトラック対応）」を追加。
+- 映像は `-map 0:v:0 -c:v copy` でコピーし、音声トラックのみ再エンコードする。出力は `<元ファイル名>_audio.mkv`。
+- 使用トラック: 「全トラック」または「一部トラック（カンマ区切り）」。表示番号は ffprobe の `stream.index`（映像を含む通し番号）で、ffmpeg の `-map 0:a:N` には `TrackInfo` から音声内連番へ変換して渡す。
+- 処理方法: 「全てエンコード」「一部のみエンコード＋残りパススルー」「全てパススルー」。
+- エンコーダーは ffmpeg 内部の AAC / Opus / FLAC / MP3 / AC3 / E-AC3 / Vorbis。`-encoders` から利用可能なものだけを表示する。
+- 外部エンコーダー（qaac / nero / fdkaac）は非対応。
+- トラック名は ffprobe の `tags.title` / `tags.name` を優先し、MP4 などで返されない場合は MP4 の `trak/udta/name` ボックスを直接読んで補完する（`tkhd` の track_ID と ffprobe の `stream.id` を照合）。外部ツールへの依存は無い。
+- `Tests\Test-AudioOnlyMode.ps1` で ffmpeg 引数構築とトラック名補完を検証する。
 
 ### 5.1 エンコード実行中の操作ロック
 - エンコード開始と同時にパラメータ設定パネルは自動ロック。
@@ -429,7 +441,8 @@ ffmpeg の verbose ログで実際に選択される MFT / デバイスを確認
 ### 6.5 TUI モーダルダイアログ操作体系
 - `F1` (ヘルプ), `F2` (連携登録), `F4` (テンプレート読込), `F5` (テンプレート保存) 押下時：
   - 画面中央に Lip Gloss 枠線付きモーダルをオーバーレイ表示。
-  - `↑` / `↓` で項目移動、`Enter` で確定、`Esc` でキャンセルしてメイン画面へ復帰。
+  - `↑` / `↓` で項目移動（先頭で `↑` すると末尾へ、末尾で `↓` すると先頭へ循環）、`Enter` で確定、`Esc` でキャンセルしてメイン画面へ復帰。
+  - 選択移動時は画面全体をクリアせず、旧選択行と新選択行だけを書き換える。カーソル移動が使えない環境では全体再描画へフォールバックする。
 
 ---
 

@@ -37,8 +37,7 @@
 .EXAMPLE
     .\Sync-ExternalAudio.ps1 -Video .\video.mkv -Audio .\microphone.wav -ManualOffsetSeconds -0.32
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 [CmdletBinding()]
 param(
     [string]$Video,
@@ -53,6 +52,11 @@ param(
     [string]$FfprobePath = 'ffprobe',
     [Alias('h', 'help')][switch]$ShowHelp
 )
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 
 #region Help
 if ($ShowHelp -or $args -contains '--help' -or -not $Video -or -not $Audio) {

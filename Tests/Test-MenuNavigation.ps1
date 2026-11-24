@@ -3,10 +3,14 @@
     対話メニューのキー操作（Enter / Backspace / Delete / Esc）を検証する。
     Read-MenuKey をスタブ化して実コンソール入力なしでテストする。
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 [CmdletBinding()]
 param()
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -62,6 +66,14 @@ $config = @{ AdditionalVF = 'scale=1280:-2'; PlatformMode = $true }
 "== Show-Menu キー判定 =="
 Set-TestKeys @(13)
 Assert-Equal 0 (Show-Menu -Title 't' -Choices @('A','B') -NoClear) 'Enter は選択 index を返す'
+
+Set-TestKeys @(38, 13)
+$r = Show-Menu -Title 't' -Choices @('A','B','C') -NoClear
+Assert-Equal 2 $r '先頭で Up すると末尾へ移動'
+
+Set-TestKeys @(40, 40, 40, 13)
+$r = Show-Menu -Title 't' -Choices @('A','B','C') -NoClear
+Assert-Equal 0 $r '末尾で Down すると先頭へ移動'
 
 Set-TestKeys @(8)
 $global:MenuBackHandler = $true

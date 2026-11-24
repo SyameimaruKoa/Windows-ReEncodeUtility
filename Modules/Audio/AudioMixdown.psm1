@@ -1,4 +1,5 @@
-﻿# AudioMixdown.psm1 — independent, lossless channel selection.
+﻿#requires -Version 5.1
+# AudioMixdown.psm1 — independent, lossless channel selection.
 Set-StrictMode -Version Latest
 
 function Get-AudioStereoPanFilter {

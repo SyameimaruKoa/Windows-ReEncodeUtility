@@ -7,8 +7,12 @@
     すべての新経路はプローブ（短い実エンコード）に成功した場合のみ採用され、
     失敗時は従来の動作（CPUリサイズ／HWアクセルなし）へ戻る。
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 #region 能力キャッシュ (SchemaVersion 1)
 
 $script:EncodeCapabilityCache = $null

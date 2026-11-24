@@ -5,10 +5,14 @@
     失敗時は ffmpeg の最初のエラー行を記録し、.cache/untested-encoders.json に保存する。
     一時ファイルはすべて git 対象外の .cache 配下に作り、プロジェクト外は触らない。
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 [CmdletBinding()]
 param()
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 
 $ErrorActionPreference = 'Continue'
 $rootDir = Split-Path -Parent $PSScriptRoot

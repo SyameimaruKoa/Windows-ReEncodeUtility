@@ -95,9 +95,25 @@
 ### PowerShell 5.1 / 7 両対応の明示化
 
 - OS 側の PowerShell 7 移行に伴い 5.1 を排除せず、両方で動く構成を維持することを明記した。
-- 全 `.ps1` / `.psm1`（18ファイル）が UTF-8 BOM 付きで、PS7 固有構文が無いことを確認済み。
-- `Tests\Test-PowerShellCompatibility.ps1` を追加し、BOM・PS7 固有構文・構文解析を静的に検証する。
+- 全 `.ps1` / `.psm1`（22ファイル）が UTF-8 BOM 付きで、PS7 固有構文が無いことを確認済み。
+- PS5.1 実機で `#requires -Version 7.0` による起動失敗が報告されたため、全ファイルを `#requires -Version 5.1` に変更。
+- `$IsWindows` / `$IsLinux` / `$IsMacOS` は PS5.1 で未定義のため、各ファイルの冒頭（`param` の後）に互換初期化を追加。
+- `Tests\Test-PowerShellCompatibility.ps1` を追加し、BOM・PS7 固有構文・`#requires`・互換初期化・構文解析を静的に検証する。
 - README / SPECIFICATION に両対応と保存ルールを記載。
+
+### 音声のみエンコード／マルチトラック音声対応
+
+- メインメニューに「音声のみエンコード（映像はパススルー・マルチトラック対応）」を追加。
+- 映像は `-c:v copy` でコピーし、音声のみ再エンコード。出力は `<元ファイル名>_audio.mkv`。
+- 使用トラック（全て／一部）と処理方法（全てエンコード／一部エンコード＋残りパススルー／全てパススルー）を独立に選択可能。
+- ffmpeg 内部エンコーダー（AAC / Opus / FLAC / MP3 / AC3 / E-AC3 / Vorbis）に対応。外部エンコーダーは非対応。
+- `Tests\Test-AudioOnlyMode.ps1` を追加し、ffmpeg 引数構築を検証する。
+- ffprobe の `stream.index` をそのまま `-map 0:a:N` に渡していたため、映像のあるファイルで存在しない音声ストリームを指定して失敗するバグを修正。`TrackInfo` から音声内連番へ変換する。
+- 音声トラック一覧にタイトルを表示。ffprobe 7/8 は MP4 の `udta.name` をタグとして返さないため、ffprobe の `tags.title` / `tags.name` が空のときは MP4 の `trak/udta/name` ボックスを直接読んで補完する。
+- MediaInfo CLI は依存を増やすため使用しない。`tkhd` の track_ID と ffprobe の `stream.id`（`0x` 形式）を照合する。
+- Delete キーでモード選択へ戻れないバグを修正（mode 5 / mode 6）。`Show-Menu` が設定する `MenuNav='allback'` を呼び出し側で検出して外側ループへ戻す。
+- 対話メニューの `↑` / `↓` を循環移動に変更（先頭で ↑ は末尾へ、末尾で ↓ は先頭へ）。3箇所の `Show-Menu`（メイン・設定・録画）すべてに適用。
+- 選択移動時に画面全体をクリアせず、旧選択行と新選択行だけを書き換える差分描画を導入。Windows の `Clear-Host` によるチラつきを解消。カーソル移動が失敗した場合は全体再描画へフォールバック。
 
 ## 2026-11-18（追記・未コミット）
 

@@ -2,7 +2,7 @@
 .SYNOPSIS
     PowerShell 5.1 / 7 両対応を静的に検証する。
 .DESCRIPTION
-    UTF-8 BOM、PS7 固有構文の不使用、PS5.1 で使えないコマンドレットの不使用を確認する。
+    UTF-8 BOM、PS7 固有構文の不使用、#requires が 5.1 であること、自動変数の互換初期化を確認する。
     このスクリプト自体は PS5.1 / 7 どちらでも動く構文のみを使う。
 #>
 [CmdletBinding()]
@@ -42,7 +42,7 @@ $ps7Patterns = @(
     'Resolve-Path\s+-RelativeBasePath', 'Sort-Object\s+-Top',
     'Get-Content\s+-AsByteStream', 'ConvertTo-Json\s+-AsArray',
     'ForEach-Object\s+-Parallel', ('::Parse' + 'Input'),
-    ('Test-' + 'Json\b'), ('\$Is' + 'Windows\b'), ('\$Is' + 'Linux\b'), ('\$Is' + 'MacOS\b')
+    ('Test-' + 'Json\b'), ('#requires' + '\s+-Version\s+7')
 )
 $ps7Hits = @()
 foreach ($f in $files) {
@@ -54,7 +54,28 @@ foreach ($f in $files) {
 Assert-Ok -Condition ($ps7Hits.Count -eq 0) -Name "PS7 固有構文なし ($($ps7Hits.Count) 件)"
 foreach ($h in $ps7Hits) { Write-Host "    $h" -ForegroundColor Red }
 
-# 3. PS5.1 で動作するAST構文であること（両バージョン共通の Parser で検証）
+# 3. #requires が -Version 5.1 であること
+$badRequires = @()
+foreach ($f in $files) {
+    if ($f.Name -eq 'Test-PowerShellCompatibility.ps1') { continue }
+    $text = [System.IO.File]::ReadAllText($f.FullName)
+    if ($text -notmatch '(?im)^#requires\s+-Version\s+5\.1\s*$') { $badRequires += $f.Name }
+}
+Assert-Ok -Condition ($badRequires.Count -eq 0) -Name "全ファイルが #requires -Version 5.1 ($($badRequires.Count) 件が未対応)"
+foreach ($p in $badRequires) { Write-Host "    $p" -ForegroundColor Red }
+
+# 4. $IsWindows 等を使うファイルは互換初期化を持つこと
+$missingCompat = @()
+foreach ($f in $files) {
+    $text = [System.IO.File]::ReadAllText($f.FullName)
+    if ($text -match '\$Is(Windows|Linux|MacOS)\b' -and $text -notmatch 'Get-Variable -Name IsWindows') {
+        $missingCompat += $f.Name
+    }
+}
+Assert-Ok -Condition ($missingCompat.Count -eq 0) -Name "自動変数の互換初期化あり ($($missingCompat.Count) 件が未対応)"
+foreach ($p in $missingCompat) { Write-Host "    $p" -ForegroundColor Red }
+
+# 5. PS5.1 で動作するAST構文であること（両バージョン共通の Parser で検証）
 $parseErrors = @()
 foreach ($f in $files) {
     $tokens = $null; $errors = $null

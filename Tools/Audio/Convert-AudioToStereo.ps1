@@ -18,8 +18,7 @@
 .EXAMPLE
     .\Convert-AudioToStereo.ps1 -Input .\PSCam4Win-mic.wav
 #>
-#requires -Version 7.0
-
+#requires -Version 5.1
 [CmdletBinding()]
 param(
     [Alias("Input")][string]$InputPath,
@@ -30,6 +29,11 @@ param(
     [string]$FfprobePath = 'ffprobe',
     [Alias('h', 'help')][switch]$ShowHelp
 )
+if (-not (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:IsWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $global:IsLinux = -not $global:IsWindows
+    $global:IsMacOS = $false
+}
 
 #region Help
 if ($ShowHelp -or $args -contains '--help' -or -not $InputPath) {
