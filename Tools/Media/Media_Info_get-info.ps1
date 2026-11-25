@@ -129,7 +129,7 @@ function Show-TelecineAssessment {
 
     $assessment = Get-TelecineAssessment -File $File -FFmpegExecutable $FFmpegExecutable -FFprobeExecutable $FFprobeExecutable -Frames $Frames -Full $Full
     $windowCount = if ($assessment.Meta.AvgFps -gt 0) { 2 } else { 1 }
-    $modeText = if ($Full) { '全編解析' } else { "簡易解析（最大${windowCount}区間 × $Frames フレーム）" }
+    $modeText = if ($Full) { '全編解析' } else { "簡易解析（idet最大${windowCount}区間 / decimate最大$($assessment.DecimateStarts.Count)区間 × $Frames フレーム）" }
     Write-Host "モード: $modeText" -ForegroundColor Cyan
 
     $i = 0
