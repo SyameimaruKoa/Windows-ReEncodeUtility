@@ -405,23 +405,18 @@ function Show-FFplayVerification {
         $pwshCmd = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         $childExe = if ($pwshCmd) { $pwshCmd.Path } elseif ($IsWindows) { Join-Path $PSHOME 'pwsh.exe' } else { 'pwsh' }
         try {
-            $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-            $cacheDir = Join-Path $projectRoot '.cache'
-            if (-not (Test-Path -LiteralPath $cacheDir -PathType Container)) {
-                $null = New-Item -ItemType Directory -Path $cacheDir -Force
-            }
-            $startParams = @{
-                FilePath = $childExe
-                ArgumentList = @('-NoProfile', '-EncodedCommand', $encoded)
-                PassThru = $true
-                RedirectStandardOutput = (Join-Path $cacheDir 'telecine-gui-out.log')
-                RedirectStandardError = (Join-Path $cacheDir 'telecine-gui-err.log')
-            }
-            $child = Start-Process @startParams -ErrorAction Stop
+            # SW_HIDE で起動すると子プロセスのGUIまで消えるため、コンソールを作らない CREATE_NO_WINDOW を使う。
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $childExe
+            $psi.Arguments = "-NoProfile -EncodedCommand $encoded"
+            $psi.WorkingDirectory = (Get-Location).Path
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $child = [System.Diagnostics.Process]::Start($psi)
             Start-Sleep -Milliseconds 400
             $child.Refresh()
             if ($child.HasExited) {
-                Write-Host "GUIプロセスが即座に終了した (exit=$($child.ExitCode))。この場で表示する。ログ: $cacheDir\telecine-gui-*.log" -ForegroundColor Yellow
+                Write-Host "GUIプロセスが即座に終了した (exit=$($child.ExitCode))。この場で表示する。" -ForegroundColor Yellow
             }
             else {
                 Write-Host "FFplay比較GUIを別ウィンドウで起動したぞ (PID=$($child.Id))。判定はそのまま続行する。" -ForegroundColor Cyan
