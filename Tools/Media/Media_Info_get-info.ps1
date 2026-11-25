@@ -10,8 +10,9 @@
     また、映像の走査方式（インターレース／プログレッシブ）とフィールド順、
     先頭10フレームの走査方式フラグも表示します。
     FFmpegで複数区間の3:2プルダウン周期を解析し、逆テレシネの要否を推定します。
+    簡易解析ではidetを最大4区間、decimateを6区間（混在時は中間を追加して最大11区間）走査します。
     Shift起動または -FullAnalysis で全編解析します。
-    FFplayで元映像・逆テレシネ・Bwdif・nnedi3・差分を比較する説明付きボタンを表示します。
+    FFplayで元映像・逆テレシネ・Bwdif・nnedi3・差分を比較する説明付きボタンを、3:2プル判定より先に表示します。
 
 .PARAMETER filePaths
     情報を表示したいメディアファイルのパスを1つ以上指定します。
@@ -129,7 +130,7 @@ function Show-TelecineAssessment {
 
     $assessment = Get-TelecineAssessment -File $File -FFmpegExecutable $FFmpegExecutable -FFprobeExecutable $FFprobeExecutable -Frames $Frames -Full $Full
     $windowCount = if ($assessment.Meta.AvgFps -gt 0) { 2 } else { 1 }
-    $modeText = if ($Full) { '全編解析' } else { "簡易解析（idet最大${windowCount}区間 / decimate最大$($assessment.DecimateStarts.Count)区間 × $Frames フレーム）" }
+    $modeText = if ($Full) { '全編解析' } else { "簡易解析（idet最大${windowCount}区間 / decimate最大$($assessment.DecimateReports.Count)区間 × $Frames フレーム）" }
     Write-Host "モード: $modeText" -ForegroundColor Cyan
 
     $i = 0
@@ -653,24 +654,22 @@ foreach ($filePath in $filePaths) {
             }
             Write-Host "（これはメタデータ／デコード時のフラグで、映像内の縞模様を実測した結果ではないぞ）"
 
-            if (-not $SkipCadenceAnalysis) {
-                $exe = if ($ffmpegPath) { $ffmpegPath.Path } else { $null }
-                Show-TelecineAssessment -File $filePath -FFmpegExecutable $exe -FFprobeExecutable $ffprobePath.Path -Frames $AnalysisFrames -Full $runFullAnalysis
-            }
-
         }
         else {
             Write-Host "[ フレームレート詳細 ]" -ForegroundColor DarkGray
             Write-Host "（ffprobeが見つからんため、このセクションはスキップするのじゃ）"
             Write-Host "[ 走査方式 ]" -ForegroundColor DarkGray
             Write-Host "（ffprobeが見つからんため、このセクションはスキップするのじゃ）"
-            if (-not $SkipCadenceAnalysis) {
-                $exe = if ($ffmpegPath) { $ffmpegPath.Path } else { $null }
-                Show-TelecineAssessment -File $filePath -FFmpegExecutable $exe -FFprobeExecutable $null -Frames $AnalysisFrames -Full $runFullAnalysis
-            }
         }
 
+        # 実映像の比較を先に見せてから、3:2プル判定の解析を実行する。
         Show-FFplayVerification -VideoPath $filePath -FFprobeExecutable $(if ($ffprobePath) { $ffprobePath.Path } else { $null })
+
+        if (-not $SkipCadenceAnalysis) {
+            $exe = if ($ffmpegPath) { $ffmpegPath.Path } else { $null }
+            $probe = if ($ffprobePath) { $ffprobePath.Path } else { $null }
+            Show-TelecineAssessment -File $filePath -FFmpegExecutable $exe -FFprobeExecutable $probe -Frames $AnalysisFrames -Full $runFullAnalysis
+        }
 
         Write-Host "======================================================================`n"
     }

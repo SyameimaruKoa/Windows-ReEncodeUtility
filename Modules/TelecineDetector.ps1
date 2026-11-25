@@ -16,8 +16,8 @@ $script:TelecineChunkFrames = 300
 $script:TelecineCycleLength = 5
 $script:TelecineRepeatThresholds = @(3.0, 1.5)
 $script:TelecineLowRatio = 0.5
-$script:TelecineDropIsMinRatio = 0.7
-$script:TelecineLowCycleRatio = 0.6
+$script:TelecineDropIsMinRatio = 0.6
+$script:TelecineLowCycleRatio = 0.55
 
 #endregion
 
@@ -462,6 +462,18 @@ function Get-TelecineAssessment {
     }
 
     $telecine32 = Test-TelecineIdetReports -Reports $idetReports.ToArray()
+    # フィールド単位の3:2も2区間だけでは取りこぼすことがあるため、未検出時のみ前後に追加走査する。
+    if (-not $telecine32 -and -not $Full -and $meta.AvgFps -gt 0 -and $meta.Duration -gt ($Frames / $meta.AvgFps) * 2.5) {
+        $windowSeconds = $Frames / $meta.AvgFps
+        $latestStart = [math]::Max(0.0, $meta.Duration - $windowSeconds - 1.0)
+        foreach ($fraction in @(0.12, 0.88)) {
+            $extraStart = [math]::Round([math]::Min($latestStart, [math]::Max(0.0, $meta.Duration * $fraction - $windowSeconds / 2.0)), 3)
+            $scan = Invoke-TelecineIdetScan -File $File -FFmpegExecutable $FFmpegExecutable -Start $extraStart -Frames $Frames -Full $false -RepeatThreshold $usedThreshold
+            if (-not $scan.Success) { $idetFailed = $true }
+            foreach ($report in $scan.Reports) { $idetReports.Add($report) }
+        }
+        $telecine32 = Test-TelecineIdetReports -Reports $idetReports.ToArray()
+    }
     $classified = 0
     $progressiveFrames = 0
     $interlacedFrames = 0
@@ -487,6 +499,16 @@ function Get-TelecineAssessment {
             $scan = Invoke-TelecineDecimateScan -File $File -FFmpegExecutable $FFmpegExecutable -Start $start -Frames $Frames -Full $Full
             if (-not $scan.Success) { $decimateFailed = $true }
             foreach ($report in $scan.Reports) { $decimateReports.Add($report) }
+        }
+        # 混在が疑われる場合だけ、区間の中間を追加サンプリングして検出率を上げる。
+        $initialPositive = @($decimateReports | Where-Object { $_.Periodic32 }).Count
+        if (-not $Full -and $initialPositive -gt 0 -and $initialPositive -lt $decimateReports.Count) {
+            for ($i = 0; $i -lt ($decimateStarts.Count - 1); $i++) {
+                $middle = [math]::Round(($decimateStarts[$i] + $decimateStarts[$i + 1]) / 2.0, 3)
+                $scan = Invoke-TelecineDecimateScan -File $File -FFmpegExecutable $FFmpegExecutable -Start $middle -Frames $Frames -Full $false
+                if (-not $scan.Success) { $decimateFailed = $true }
+                foreach ($report in $scan.Reports) { $decimateReports.Add($report) }
+            }
         }
     }
     $positiveWindows = @($decimateReports | Where-Object { $_.Periodic32 }).Count
