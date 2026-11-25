@@ -211,6 +211,8 @@ function Write-Log {
         try { $logMessage | Out-File -LiteralPath $global:LogFilePath -Append -Encoding utf8 } catch {}
     }
 }
+
+. (Join-Path $global:ScriptDir 'Modules/LosslessCut.ps1')
 #endregion
 
 #region メディア情報取得
@@ -2188,6 +2190,10 @@ function Invoke-PlatformAutoSetup {
     # NoMaxrateが有効なプラットフォーム (GitHub Release等) はCRFのみでビットレート上限を設定しない
     $qualityMode = if ($PlatformConfig.NoMaxrate) { "CRF" } else { "CRF+Maxrate" }
     $videoOptions = Build-PlatformVideoOptions -HW $selectedHW -Codec $auto.Codec -QualityMode $qualityMode -QualityValue $auto.QualityValue -Preset $auto.Preset -MaxrateKbps 0
+    $encoder = Get-VideoEncoderName -VideoOptions $videoOptions
+    $chipOnly = Select-ChipOnlyMode -Encoder $encoder
+    if ($null -eq $chipOnly) { return $null }
+    $videoOptions = Add-ChipOnlyToVideo -VideoOptions $videoOptions -ChipOnly $chipOnly
 
     # --- 確認画面 ---
     $qualityDesc = if ($PlatformConfig.NoMaxrate) { "CRF (品質優先・ビットレート上限なし)" } elseif ($selectedHW -eq "Intel" -and $auto.Codec -eq "VP9") { "QSV VBR (容量上限から自動計算)" } elseif ($selectedHW -eq "Intel" -and $auto.Codec -eq "H.265") { "QSV QVBR (品質目標・容量予算を併用)" } else { "CRF+Maxrate (容量内で最大品質を自動確保)" }
@@ -2234,6 +2240,7 @@ function Invoke-PlatformAutoSetup {
         CodecName          = $auto.Codec
         PresetValue        = $auto.Preset
         SpecificEncoder    = ""
+        ChipPreferred      = $chipOnly
         EncoderSettings    = @{
             Video     = $videoOptions
             Audio     = $auto.AudioSetting.Options
@@ -2552,6 +2559,10 @@ function Invoke-PlatformDetailedSetup {
 
     # プレビューオプション生成 (maxrateはエンコード時にファイル長から計算)
     $previewVideoOptions = Build-PlatformVideoOptions -HW $selectedHW -Codec $selectedCodec -QualityMode $qualityMode -QualityValue $qualityValue -Preset $presetValue -MaxrateKbps 0 -SpecificEncoder $specificEncoder
+    $encoder = Get-VideoEncoderName -VideoOptions $previewVideoOptions
+    $chipOnly = Select-ChipOnlyMode -Encoder $encoder
+    if ($null -eq $chipOnly) { return $null }
+    $previewVideoOptions = Add-ChipOnlyToVideo -VideoOptions $previewVideoOptions -ChipOnly $chipOnly
 
     # --- 9. 最終確認 ---
     $qualityDesc = if ($PlatformConfig.NoMaxrate) {
@@ -2613,6 +2624,7 @@ function Invoke-PlatformDetailedSetup {
         CodecName          = $selectedCodec
         PresetValue        = $presetValue
         SpecificEncoder    = $specificEncoder
+        ChipPreferred      = $chipOnly
         EncoderSettings    = @{
             Video     = $previewVideoOptions
             Audio     = $audioSetting.Options
@@ -3264,11 +3276,8 @@ function Invoke-EncodeFile {
         $effectiveHwAccelOption = Get-EffectiveHwAccelOption -HwAccelOption $HwAccelOption -VideoOptions $Config.EncoderSettings.Video
 
         if ($Config.Cut -eq "Yes") {
-            if ($global:Settings.LosslessCutPath) {
-                Write-Log "LosslessCutを起動します..."; Start-Process $global:Settings.LosslessCutPath -ArgumentList "`"$InputFile`""
-            }
-            else {
-                Write-Log "LosslessCut のパスが未設定のため、対話入力のみでカット位置を指定する。" -Level "WARN"
+            if (-not (Start-LosslessCut -Path @($InputFile) -Quiet)) {
+                Write-Log "LosslessCut が見つからないため、対話入力のみでカット位置を指定する。" -Level "WARN"
             }
             $cutStart = Read-Host "開始位置 (例:00:01:15.000)"; $cutEnd = Read-Host "終了位置 (例:00:03:30.500)"
             if ($cutStart -and $cutEnd) { $cutInfo = "-ss $cutStart -to $cutEnd"; Write-Log "カット情報: 開始 $cutStart, 終了 $cutEnd" }
@@ -3382,6 +3391,7 @@ function Invoke-EncodeFile {
                 }
                 $targetBitrateKbps = Get-TargetBitrateKbps -MaxFileSizeMB $Config.MaxFileSizeMB -DurationSeconds $inputDuration -AudioBitrateKbps $actualAudioKbps -MarginFactor $marginFactor
                 $currentVideoOptions = Build-PlatformVideoOptions -HW $Config.HWEncoder -Codec $Config.CodecName -QualityMode $Config.QualityMode -QualityValue $Config.QualityValue -Preset $Config.PresetValue -MaxrateKbps $targetBitrateKbps -SpecificEncoder $specificEnc
+                $currentVideoOptions = Add-ChipOnlyToVideo -VideoOptions $currentVideoOptions -ChipOnly ([bool]$Config.ChipPreferred)
                 Write-Log "映像オプション (自動計算): $currentVideoOptions"
 
                 # ファイルサイズ予測表示

@@ -524,6 +524,11 @@ function Get-EncoderSettings {
 
     if (-not $videoSetting) { return $null } # 途中でキャンセルされた場合
 
+    $encoder = Get-VideoEncoderName -VideoOptions $videoSetting
+    $chipOnly = Select-ChipOnlyMode -Encoder $encoder
+    if ($null -eq $chipOnly) { return $null }
+    $videoSetting = Add-ChipOnlyToVideo -VideoOptions $videoSetting -ChipOnly $chipOnly
+
     if (Get-Command -Name 'Clear-Screen' -CommandType Function -ErrorAction SilentlyContinue) { Clear-Screen }
     Write-Host "--- 最終確認 ---"
     Write-Host "映像: $videoSetting"
@@ -531,7 +536,7 @@ function Get-EncoderSettings {
     $confirm = Show-Menu -Title "この設定でよろしいですか？" -Choices @("はい", "いいえ、やり直します")
     if ($confirm -eq 1) { return Get-EncoderSettings }
 
-    return @{ Video = $videoSetting; Audio = $audioSetting.Options; AudioType = $audioSetting.Type }
+    return @{ Video = $videoSetting; Audio = $audioSetting.Options; AudioType = $audioSetting.Type; ChipPreferred = $chipOnly }
 }
 
 . (Join-Path $PSScriptRoot 'Modules/IntermediateHardware.ps1')

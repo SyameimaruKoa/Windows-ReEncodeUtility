@@ -74,9 +74,9 @@ FFmpeg を使用して、ドラッグ＆ドロップした動画ファイルを�
 - **中間ファイル作成** - CPUおよびハードウェアエンコーダーによる高品質中間形式（編集用・専用エンコード回路優先）
 - **カスタムフィルタ** - FFmpeg フィルタグラフ直接指定対応
 
-#### 中間ファイル作成モードのハードウェアエンコード
+#### ハードウェアエンコードの専用回路優先モード
 
-CPU（従来のH.264/H.265）に加えて、NVENC・QSV・AMF・Vulkan Video・D3D12VA・Media Foundationの利用可能な映像エンコーダーを選択できます。ハードウェア選択時の既定値は「専用エンコード回路優先（補助演算を抑制）」です。「通常のハードウェアエンコード」も選択可能です。
+通常・プラットフォーム・分割・中間ファイルの各モードで、「専用エンコード回路優先（補助演算を抑制）」を選択できます。ハードウェア選択時の既定値は専用回路優先で、「通常のハードウェアエンコード」も選択可能です。対象は NVENC / QSV / AMF です。Vulkan Video / D3D12VA / Media Foundation は実測でGPU使用を保証できないため、中間ファイルモードのみで選択できます。
 
 | バックエンド | 専用回路優先時の制御 |
 | --- | --- |
@@ -189,7 +189,7 @@ Linux では qaac / Nero は未設定です。fdkaac は `Get-Command` で自動
 | **ツール**      | **用途**           | **インストール**                                              | **必須度**                             |
 | --------------- | ------------------ | ------------------------------------------------------------- | -------------------------------------- |
 | **exiftool**    | メタデータ処理     | [exiftool.org](https://exiftool.org/)                         | 低（メタデータ保持機能を使う場合のみ） |
-| **LosslessCut** | ビジュアル編集補助 | [MaCleaner 12 / GitHub](https://github.com/mifi/lossless-cut) | 低（設定例のみ）                       |
+| **LosslessCut** | ビジュアル編集補助 | [MaCleaner 12 / GitHub](https://github.com/mifi/lossless-cut) | 低（未設定時は自動取得）               |
 | **GTK 3**       | LinuxのFFplay比較GUI | `libgtk-3-0`（GUI環境なら標準的に導入済み）              | 低（比較GUIを使う場合のみ）            |
 | **ffplay**      | FFplay比較         | FFmpeg に付属（PATH に登録）                                  | 低（比較を使う場合のみ）               |
 
@@ -258,6 +258,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 - 設定は `config.user.linux.psd1`（`$IsLinux` 時に自動読み込み。Windows は従来の `config.user.psd1`）。
 - HW は VAAPI を追加（`-vaapi_device` は `VaapiDevicePath`、既定 `/dev/dri/renderD128`）。NVENC/QSV は FFmpeg の実Detectに任せる。MF / D3D11VA / D3D12VA / DXVA2 は Linux では選択肢に出さない。Vulkan は従来どおり制限付き。
 - GPU 使用率ログは Windows の PDH 依存のため Linux では N/A（CPU/GPU 監視は無効化）。
+- LosslessCut: 設定値・PATH の既存インストールを優先使用し、見つからなければ最新リリースの AppImage を `.cache/losslesscut` に取得して使用する（バージョンは `latest-linux.yml` で照合し、起動時に自動更新）。メイン処理のカットでは出力を捨てて黙って起動する。単体起動（`pwsh -File ./Tools/Start-LosslessCut.ps1 [-ForceUpdate] [動画...]`）では Windows は `cmd start`、Linux は利用可能なターミナルエミュレータで別コンソールを開きログを表示する。ログファイルは作らない。取得失敗時は対話入力のみでカット位置を指定する。
 - 設定画面の描画: Windows は従来どおり画面全体をクリアするが、Linux では `Clear-Host` を使わず、メニュー行だけを ANSI エスケープで書き換える（画面全体を上書きしない）。確認画面も Linux ではクリアせず追記表示する。
 - メニュー中の Ctrl+C: Linux では Ctrl+C をキー入力として受け取り（[Console]::TreatControlCAsInput）、Esc と同じくメニューをキャンセルしてスクリプトを終了する。以前は別キーを押さないと画面が更新されなかったが、Ctrl+C を押した時点で選択行を消して終了する。
 - FFplay比較GUIは PowerShell から GTK 3 を直接呼び出す。`libgtk-3-0` が無い環境では比較用コマンド例を表示する。
@@ -527,6 +528,10 @@ HW アクセルでエラー発生
 ```
 
 ## 📺 付属ツール
+
+### LosslessCut 単体起動 (`Tools/Start-LosslessCut.ps1`)
+
+最新版の確認・取得を行って LosslessCut を起動する。動画パスを渡すとそのまま開く。`-ForceUpdate` で取得済み AppImage を破棄して再取得、`-NoUpdate` で更新チェックをスキップできる。ヘルプは `-h`。別コンソールでログを表示する。ログファイルは作らない。
 
 ### 音声同期の検証 (`Tests/Test-ExternalAudioSync.ps1`)
 

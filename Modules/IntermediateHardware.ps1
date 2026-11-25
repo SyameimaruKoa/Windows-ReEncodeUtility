@@ -219,4 +219,47 @@ function Select-IntermediateHardwareVideo {
     }
     return @{ Video = $videoSetting; IntermediatePixelFormat = $pixelFormat; IntermediateUploadDevice = $uploadDevice; IntermediateChipPreferred = $chipOnly }
 }
+
+function Get-VideoEncoderName {
+    param([string]$VideoOptions)
+    if ($VideoOptions -match '(?:^|\s)-c:v\s+([^\s]+)') { return $Matches[1] }
+    return ''
+}
+
+function Select-ChipOnlyMode {
+    param([string]$Encoder, [string]$Ffmpeg = '')
+    if ($Encoder -notmatch '_(nvenc|qsv|amf)$') { return $false }
+    $ffmpegPath = if ($Ffmpeg) { $Ffmpeg } elseif ($global:Settings -and $global:Settings.FfmpegPath) { $global:Settings.FfmpegPath } else { 'ffmpeg' }
+    $index = Show-Menu -Title 'ハードウェアエンコード方式を選択' -Choices @(
+        '専用エンコード回路優先（補助演算を抑制）',
+        '通常のハードウェアエンコード'
+    ) -DefaultIndex 0
+    if ($index -lt 0) { return $null }
+    $chipOnly = ($index -eq 0)
+    if ($chipOnly -and $Encoder -match '_qsv$') {
+        $help = Get-IntermediateEncoderHelp -Encoder $Encoder -Ffmpeg $ffmpegPath
+        if (-not (Test-IntermediateEncoderOption -HelpText $help -Name 'low_power')) {
+            Write-Host 'このコーデックは低電力モード(low_power)を公開していません。補助演算の抑制のみ適用します。' -ForegroundColor Yellow
+        }
+    }
+    return $chipOnly
+}
+
+function Add-ChipOnlyToVideo {
+    param([string]$VideoOptions, [bool]$ChipOnly, [string]$Ffmpeg = '')
+    if (-not $ChipOnly) { return $VideoOptions }
+    $encoder = Get-VideoEncoderName -VideoOptions $VideoOptions
+    if ($encoder -notmatch '_(nvenc|qsv|amf)$') { return $VideoOptions }
+    $ffmpegPath = if ($Ffmpeg) { $Ffmpeg } elseif ($global:Settings -and $global:Settings.FfmpegPath) { $global:Settings.FfmpegPath } else { 'ffmpeg' }
+    $help = Get-IntermediateEncoderHelp -Encoder $encoder -Ffmpeg $ffmpegPath
+    try {
+        $extra = @(Get-IntermediateChipOptions -Encoder $encoder -HelpText $help -ChipOnly $true)
+    }
+    catch {
+        Write-Host $_ -ForegroundColor Red
+        return $VideoOptions
+    }
+    if ($extra.Count -eq 0) { return $VideoOptions }
+    return "$VideoOptions $($extra -join ' ')"
+}
 #endregion

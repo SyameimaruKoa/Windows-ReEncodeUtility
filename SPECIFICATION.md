@@ -360,6 +360,8 @@ ffmpeg の verbose ログで実際に選択される MFT / デバイスを確認
 - **LosslessCut 連携の目的と動作**:
   - フレーム単位の正確なカットポイント確認およびタイムコード取得を支援するため、カット欄から `[LosslessCut]` を起動可能。
   - `config.json` の `"losslesscut_path"` は `.exe` だけでなく、普段使われている `.bat` や `.cmd` 経由の起動にも完全対応。
+  - Linux では設定値・PATH の既存インストールを優先し、未検出時は最新リリースの AppImage を `.cache/losslesscut` に取得して使用する。バージョンは `latest-linux.yml` で照合し、起動時に自動更新する。取得失敗時は対話入力へフォールバックする。
+  - メイン処理のカットでは LosslessCut の出力を捨てて起動する。単体起動は別コンソール（Windows は `cmd start`、Linux は利用可能なターミナルエミュレータ）でログを表示する。ログファイルは作らない。単体スクリプトは `Tools/Start-LosslessCut.ps1`（`-ForceUpdate` / `-NoUpdate` / `-h` 対応）。
 
 ### 5.14 ディスク空き容量事前チェック
 - エンコード開始前、出力先ドライブの空き容量を自動取得し、不足（入力サイズ未満等）の場合は事前に警告ダイアログを表示。

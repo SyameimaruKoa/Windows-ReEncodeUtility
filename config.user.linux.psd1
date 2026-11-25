@@ -15,6 +15,7 @@
 
     # --- 補助ツール (オプション) ---
     ExifToolPath     = "exiftool"
+    # 空欄なら PATH を検索し、見つからなければ最新の AppImage を .cache/losslesscut に取得する。
     LosslessCutPath  = ""
 
     # --- その他 ---
