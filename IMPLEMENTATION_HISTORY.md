@@ -535,3 +535,9 @@ Opus音声エンコーダー（libopus）を使用する際、入力ファイル
 - 効果: ゲーセン少女1話は 2/6・確信度67% → **9/11・確信度84%** に改善。けいおん1話は 6/6・96% を維持。
 - `Media_Info_get-info.ps1` の表示順を変更し、`Show-FFplayVerification` を `Show-TelecineAssessment` より先に呼ぶようにした。先に映像を目視してから解析結果を読める。
 - 回帰テスト16 PASS を維持。
+
+### 追記: FFplay比較GUIを非ブロッキング化し、追加サンプリング区間の時刻も表示
+
+- `Show-FFplayVerification` を別PowerShellプロセス（`-ShowComparisonOnly`）で起動するようにし、`ShowDialog()` / `gtk_main()` で止まらずに3:2判定へ進むようにした。GUIを閉じる待ち時間が不要になった。
+- 内部スイッチ `-ShowComparisonOnly` を追加。関数定義より後に分岐を置く必要があるため、配置場所に注意。
+- decimateの追加サンプリング（中間5区間）の開始時刻も `DecimateStarts` に記録し、表示で「位置不明」にならないようにした。

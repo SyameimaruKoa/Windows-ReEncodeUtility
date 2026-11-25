@@ -12,7 +12,7 @@
     FFmpegで複数区間の3:2プルダウン周期を解析し、逆テレシネの要否を推定します。
     簡易解析ではidetを最大4区間、decimateを6区間（混在時は中間を追加して最大11区間）走査します。
     Shift起動または -FullAnalysis で全編解析します。
-    FFplayで元映像・逆テレシネ・Bwdif・nnedi3・差分を比較する説明付きボタンを、3:2プル判定より先に表示します。
+    FFplayで元映像・逆テレシネ・Bwdif・nnedi3・差分を比較する説明付きボタンを、3:2プル判定より先に表示します。GUIは別プロセスで開くため、ウィンドウを閉じなくても判定は続行します。
 
 .PARAMETER filePaths
     情報を表示したいメディアファイルのパスを1つ以上指定します。
@@ -68,6 +68,9 @@ param(
     [switch]$FullAnalysis,
 
     [switch]$SkipCadenceAnalysis,
+
+    # FFplay比較GUIだけを表示する内部用スイッチ（別プロセスから起動する）
+    [switch]$ShowComparisonOnly,
 
     [Alias('h')]
     [switch]$Help
@@ -394,6 +397,27 @@ function Show-FFplayVerification {
         if ($LASTEXITCODE -eq 0 -and -not $videoStream) { return }
     }
 
+    # GUIは別プロセスで開き、この側は3:2判定へ即座に進む。
+    if (-not $ShowComparisonOnly) {
+        $quoteChild = { param([string]$v) "'" + $v.Replace("'", "''") + "'" }
+        $childCommand = '& ' + (& $quoteChild $PSCommandPath) + ' -ShowComparisonOnly -filePaths ' + (& $quoteChild $VideoPath)
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+        $pwshCmd = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        $childExe = if ($pwshCmd) { $pwshCmd.Path } elseif ($IsWindows) { Join-Path $PSHOME 'pwsh.exe' } else { 'pwsh' }
+        try {
+            $startParams = @{ FilePath = $childExe; ArgumentList = @('-NoProfile', '-EncodedCommand', $encoded); PassThru = $true }
+            if ($IsWindows) { $startParams['WindowStyle'] = 'Hidden' }
+            $child = Start-Process @startParams -ErrorAction Stop
+            if ($child) {
+                Write-Host 'FFplay比較GUIを別ウィンドウで起動したぞ。判定はそのまま続行する。' -ForegroundColor Cyan
+                return
+            }
+        }
+        catch {
+            Write-Host "GUIの別プロセス起動に失敗したので、この場で表示する: $_" -ForegroundColor Yellow
+        }
+    }
+
     Resolve-PreviewNnediFilter
 
     # Media_Action_play.bat の既定の画面サイズ調整を維持する
@@ -562,6 +586,13 @@ function Show-FFplayVerification {
 }
 
 #endregion FFplayによるフィルター確認
+
+# 別プロセスから GUI だけを表示する場合はここで終了する（関数定義より後に置く必要がある）。
+if ($ShowComparisonOnly) {
+    $probeOnly = Get-Command ffprobe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    Show-FFplayVerification -VideoPath $filePaths[0] -FFprobeExecutable $(if ($probeOnly) { $probeOnly.Path } else { $null })
+    return
+}
 
 # まずはffprobeかffmpegが使えるか確認するのじゃ
 $ffprobePath = Get-Command -Name ffprobe -ErrorAction SilentlyContinue | Select-Object -First 1

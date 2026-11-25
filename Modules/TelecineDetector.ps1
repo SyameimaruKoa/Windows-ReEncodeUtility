@@ -503,8 +503,10 @@ function Get-TelecineAssessment {
         # 混在が疑われる場合だけ、区間の中間を追加サンプリングして検出率を上げる。
         $initialPositive = @($decimateReports | Where-Object { $_.Periodic32 }).Count
         if (-not $Full -and $initialPositive -gt 0 -and $initialPositive -lt $decimateReports.Count) {
-            for ($i = 0; $i -lt ($decimateStarts.Count - 1); $i++) {
-                $middle = [math]::Round(($decimateStarts[$i] + $decimateStarts[$i + 1]) / 2.0, 3)
+            $initialStarts = @($decimateStarts)
+            for ($i = 0; $i -lt ($initialStarts.Count - 1); $i++) {
+                $middle = [math]::Round(($initialStarts[$i] + $initialStarts[$i + 1]) / 2.0, 3)
+                $decimateStarts += $middle
                 $scan = Invoke-TelecineDecimateScan -File $File -FFmpegExecutable $FFmpegExecutable -Start $middle -Frames $Frames -Full $false
                 if (-not $scan.Success) { $decimateFailed = $true }
                 foreach ($report in $scan.Reports) { $decimateReports.Add($report) }
