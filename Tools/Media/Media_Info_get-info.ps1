@@ -10,8 +10,9 @@
     また、映像の走査方式（インターレース／プログレッシブ）とフィールド順、
     先頭10フレームの走査方式フラグも表示します。
     FFmpegで複数区間の3:2プルダウン周期を解析し、逆テレシネの要否を推定します。
+    簡易解析ではidetを最大4区間、decimateを6区間（混在時は中間を追加して最大11区間）走査します。
     Shift起動または -FullAnalysis で全編解析します。
-    FFplayで元映像・逆テレシネ・Bwdif・nnedi3・差分を比較する説明付きボタンを表示します。
+    FFplayで元映像・逆テレシネ・Bwdif・nnedi3・差分を比較する説明付きボタンを、3:2プル判定より先に表示します。GUIは別プロセスで開くため、ウィンドウを閉じなくても判定は続行します。
 
 .PARAMETER filePaths
     情報を表示したいメディアファイルのパスを1つ以上指定します。
@@ -68,6 +69,12 @@ param(
 
     [switch]$SkipCadenceAnalysis,
 
+    # FFplay比較GUIだけを表示する内部用スイッチ（別プロセスから起動する）
+    [switch]$ShowComparisonOnly,
+
+    # GUIを起動した親プロセスのPID。親が消えたらGUIも閉じる。
+    [int]$ParentPid = 0,
+
     [Alias('h')]
     [switch]$Help
 )
@@ -101,308 +108,15 @@ public static class MediaInfoKeyboard {
     }
 }
 
-#region 3:2プルダウン解析
+#region 3:2プルダウン解析（共通モジュール）
 
-function New-CadenceChunk {
-    return [pscustomobject]@{
-        Frames = 0
-        Top = [System.Collections.Generic.List[int]]::new()
-        Bottom = [System.Collections.Generic.List[int]]::new()
-        Progressive = 0
-        Interlaced = 0
-        Unknown = 0
-    }
+$telecineModulePath = Join-Path $PSScriptRoot '..\..\Modules\TelecineDetector.ps1'
+if (Test-Path -LiteralPath $telecineModulePath -PathType Leaf) {
+    . $telecineModulePath
 }
-
-function Get-PeriodicPhase {
-    param([int[]]$Positions)
-
-    if (-not $Positions -or $Positions.Count -eq 0) {
-        return [pscustomobject]@{ Phase = -1; Match = 0.0 }
-    }
-    $histogram = @(0, 0, 0, 0, 0)
-    foreach ($position in $Positions) {
-        $histogram[$position % 5]++
-    }
-    $best = 0
-    for ($i = 1; $i -lt 5; $i++) {
-        if ($histogram[$i] -gt $histogram[$best]) {
-            $best = $i
-        }
-    }
-    return [pscustomobject]@{
-        Phase = $best
-        Match = ($histogram[$best] / [double]$Positions.Count)
-    }
+else {
+    Write-Host '[WARN] Modules\TelecineDetector.ps1 が見つからないため、3:2判定をスキップします。' -ForegroundColor Yellow
 }
-
-function Complete-CadenceChunk {
-    param($Chunk)
-
-    $top = $Chunk.Top.Count
-    $bottom = $Chunk.Bottom.Count
-    $repeats = $top + $bottom
-    $phaseTop = Get-PeriodicPhase -Positions $Chunk.Top.ToArray()
-    $phaseBottom = Get-PeriodicPhase -Positions $Chunk.Bottom.ToArray()
-    $consistency = if ($repeats -gt 0) {
-        ($top * $phaseTop.Match + $bottom * $phaseBottom.Match) / $repeats
-    }
-    else {
-        0.0
-    }
-    $gap = ($phaseBottom.Phase - $phaseTop.Phase + 5) % 5
-    $repeatRatio = if ($Chunk.Frames -gt 0) { $repeats / [double]$Chunk.Frames } else { 0.0 }
-    $classified = $Chunk.Progressive + $Chunk.Interlaced
-    $progFraction = if ($classified -gt 0) { $Chunk.Progressive / [double]$classified } else { 0.0 }
-    return [pscustomobject]@{
-        Frames = $Chunk.Frames
-        Top = $top
-        Bottom = $bottom
-        Consistency = $consistency
-        Progressive = $Chunk.Progressive
-        Interlaced = $Chunk.Interlaced
-        Unknown = $Chunk.Unknown
-        Classified = $classified
-        ProgFraction = $progFraction
-        Telecine32 = (
-            $Chunk.Frames -ge 50 -and
-            $top -ge 4 -and
-            $bottom -ge 4 -and
-            $repeatRatio -ge 0.10 -and
-            $repeatRatio -le 0.55 -and
-            $consistency -ge 0.85 -and
-            $gap -in @(2, 3)
-        )
-    }
-}
-
-# 全編解析時は300フレームごとに集計し、ログをメモリに蓄積しない
-function Invoke-CadenceScan {
-    param(
-        [string]$File,
-        [string]$FFmpegExecutable,
-        [double]$Start,
-        [int]$Frames,
-        [bool]$Full
-    )
-
-    $maxChunk = if ($Full) { 300 } else { $Frames }
-    $state = [pscustomobject]@{
-        Chunk = (New-CadenceChunk)
-        Reports = [System.Collections.Generic.List[object]]::new()
-        FrameCount = [long]0
-    }
-    $arguments = @('-hide_banner', '-loglevel', 'info', '-nostats', '-nostdin')
-    if (-not $Full -and $Start -gt 0) {
-        $arguments += @('-ss', $Start.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture))
-    }
-    $arguments += @(
-        '-i', $File, '-map', '0:v:0',
-        '-vf', 'idet,metadata=mode=print:key=lavfi.idet.repeated.current_frame,metadata=mode=print:key=lavfi.idet.multiple.current_frame'
-    )
-    if (-not $Full) {
-        $arguments += @('-frames:v', [string]$Frames)
-    }
-    $arguments += @('-an', '-sn', '-dn', '-f', 'null', '-')
-
-    & $FFmpegExecutable @arguments 2>&1 | ForEach-Object {
-        $line = [string]$_
-        if ($line -match 'lavfi\.idet\.repeated\.current_frame=(neither|top|bottom)') {
-            # 前のフレームの分類が届いてから区間を確定する
-            if ($state.Chunk.Frames -ge $maxChunk) {
-                $state.Reports.Add((Complete-CadenceChunk -Chunk $state.Chunk))
-                $state.Chunk = New-CadenceChunk
-            }
-            if ($Matches[1] -eq 'top') {
-                $state.Chunk.Top.Add([int]$state.Chunk.Frames)
-            }
-            elseif ($Matches[1] -eq 'bottom') {
-                $state.Chunk.Bottom.Add([int]$state.Chunk.Frames)
-            }
-            $state.Chunk.Frames++
-            $state.FrameCount++
-            if ($Full -and ($state.FrameCount % 900 -eq 0)) {
-                Write-Progress -Activity '全編のプルダウン周期を解析中' -Status "$($state.FrameCount) フレーム完了"
-            }
-        }
-        elseif ($line -match 'lavfi\.idet\.multiple\.current_frame=(tff|bff|progressive|undetermined)') {
-            switch ($Matches[1]) {
-                'progressive' { $state.Chunk.Progressive++; break }
-                'tff' { $state.Chunk.Interlaced++; break }
-                'bff' { $state.Chunk.Interlaced++; break }
-                default { $state.Chunk.Unknown++; break }
-            }
-        }
-    }
-    $scanExitCode = $LASTEXITCODE
-    if ($Full) {
-        Write-Progress -Activity '全編のプルダウン周期を解析中' -Completed
-    }
-    if ($state.Chunk.Frames -gt 0) {
-        $state.Reports.Add((Complete-CadenceChunk -Chunk $state.Chunk))
-    }
-    return [pscustomobject]@{
-        Success = ($scanExitCode -eq 0 -and $state.FrameCount -ge 50)
-        ExitCode = $scanExitCode
-        FrameCount = $state.FrameCount
-        Reports = @($state.Reports.ToArray() | Where-Object { $_.Frames -ge 50 })
-    }
-}
-
-#endregion 3:2プルダウン解析
-
-#region プログレッシブ映像の重複フレーム解析
-
-function New-DuplicateChunk {
-    return [pscustomobject]@{
-        Frames = 0
-        Drops = [System.Collections.Generic.List[int]]::new()
-    }
-}
-
-function Complete-DuplicateChunk {
-    param($Chunk)
-
-    # mpdecimateは静止場面でも連続してdropを出すため、drop位置のmod 5集計だけでは
-    # 24p→30pの規則的な重複が静止場面に埋もれる。5フレーム単位で評価する。
-    $dropPositions = [System.Collections.Generic.HashSet[int]]::new()
-    foreach ($position in $Chunk.Drops) {
-        [void]$dropPositions.Add($position)
-    }
-
-    $best = [pscustomobject]@{
-        Periodic = $false
-        Match = 0.0
-        CleanCycles = 0
-        ActiveCycles = 0
-        Coverage = 0.0
-        DropPerCycle = 0.0
-    }
-
-    # 区間開始位置が5フレーム周期の途中でも検出できるよう、全位相を評価する。
-    for ($offset = 0; $offset -lt 5; $offset++) {
-        $cycles = 0
-        $active = 0
-        $clean = 0
-        $dropSum = 0
-
-        for ($start = $offset; ($start + 5) -le $Chunk.Frames; $start += 5) {
-            $cycleDrops = 0
-            for ($position = $start; $position -lt ($start + 5); $position++) {
-                if ($dropPositions.Contains($position)) {
-                    $cycleDrops++
-                }
-            }
-            $cycles++
-
-            # 3枚以上の重複がある5フレームは静止場面などとして周期判定から外す。
-            if ($cycleDrops -ge 3) {
-                continue
-            }
-
-            $active++
-            $dropSum += $cycleDrops
-            if ($cycleDrops -eq 1) {
-                $clean++
-            }
-        }
-
-        $match = if ($active -gt 0) { $clean / [double]$active } else { 0.0 }
-        $coverage = if ($cycles -gt 0) { $clean / [double]$cycles } else { 0.0 }
-        $dropPerCycle = if ($active -gt 0) { $dropSum / [double]$active } else { 0.0 }
-        $periodic = (
-            $Chunk.Frames -ge 50 -and
-            $clean -ge 8 -and
-            $coverage -ge 0.20 -and
-            $match -ge 0.80 -and
-            $dropPerCycle -ge 0.90 -and
-            $dropPerCycle -le 1.10
-        )
-        $candidate = [pscustomobject]@{
-            Periodic = $periodic
-            Match = $match
-            CleanCycles = $clean
-            ActiveCycles = $active
-            Coverage = $coverage
-            DropPerCycle = $dropPerCycle
-        }
-
-        if (($periodic -and -not $best.Periodic) -or
-            ($periodic -eq $best.Periodic -and $clean -gt $best.CleanCycles) -or
-            ($periodic -eq $best.Periodic -and $clean -eq $best.CleanCycles -and $match -gt $best.Match)) {
-            $best = $candidate
-        }
-    }
-
-    return [pscustomobject]@{
-        Frames = $Chunk.Frames
-        Drops = $Chunk.Drops.Count
-        Periodic = $best.Periodic
-        Match = $best.Match
-        CleanCycles = $best.CleanCycles
-        ActiveCycles = $best.ActiveCycles
-        Coverage = $best.Coverage
-        DropPerCycle = $best.DropPerCycle
-    }
-}
-
-function Invoke-DuplicateScan {
-    param(
-        [string]$File,
-        [string]$FFmpegExecutable,
-        [double]$Start,
-        [int]$Frames,
-        [bool]$Full
-    )
-
-    $maxChunk = if ($Full) { 300 } else { $Frames }
-    $state = [pscustomobject]@{
-        Chunk = (New-DuplicateChunk)
-        Reports = [System.Collections.Generic.List[object]]::new()
-        FrameCount = [long]0
-    }
-    $arguments = @('-hide_banner', '-loglevel', 'debug', '-nostats', '-nostdin')
-    if (-not $Full -and $Start -gt 0) {
-        $arguments += @('-ss', $Start.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture))
-    }
-    $filter = if ($Full) { 'mpdecimate' } else { "trim=end_frame=$Frames,mpdecimate" }
-    $arguments += @('-i', $File, '-map', '0:v:0', '-vf', $filter, '-an', '-sn', '-dn', '-f', 'null', '-')
-
-    & $FFmpegExecutable @arguments 2>&1 | ForEach-Object {
-        $line = [string]$_
-        if ($line -match '\[Parsed_mpdecimate_[^\]]+\].*\b(drop|keep)\s+pts:') {
-            if ($state.Chunk.Frames -ge $maxChunk) {
-                $state.Reports.Add((Complete-DuplicateChunk -Chunk $state.Chunk))
-                $state.Chunk = New-DuplicateChunk
-            }
-            if ($Matches[1] -eq 'drop') {
-                $state.Chunk.Drops.Add([int]$state.Chunk.Frames)
-            }
-            $state.Chunk.Frames++
-            $state.FrameCount++
-            if ($Full -and ($state.FrameCount % 900 -eq 0)) {
-                Write-Progress -Activity '全編の重複フレームを解析中' -Status "$($state.FrameCount) フレーム完了"
-            }
-        }
-    }
-    $scanExitCode = $LASTEXITCODE
-    if ($Full) {
-        Write-Progress -Activity '全編の重複フレームを解析中' -Completed
-    }
-    if ($state.Chunk.Frames -gt 0) {
-        $state.Reports.Add((Complete-DuplicateChunk -Chunk $state.Chunk))
-    }
-    return [pscustomobject]@{
-        Success = ($scanExitCode -eq 0 -and $state.FrameCount -ge 50)
-        ExitCode = $scanExitCode
-        FrameCount = $state.FrameCount
-        Reports = @($state.Reports.ToArray() | Where-Object { $_.Frames -ge 50 })
-    }
-}
-
-#endregion プログレッシブ映像の重複フレーム解析
-
-#region 逆テレシネの要否判定
 
 function Show-TelecineAssessment {
     param(
@@ -415,188 +129,61 @@ function Show-TelecineAssessment {
 
     Write-Host ''
     Write-Host '[ プルダウン・逆テレシネ判定（実映像解析） ]' -ForegroundColor Cyan
-    if (-not $FFmpegExecutable) {
-        Write-Host 'FFmpegがないため解析できないのじゃ。' -ForegroundColor Yellow
+    if (-not (Get-Command Get-TelecineAssessment -ErrorAction SilentlyContinue)) {
+        Write-Host '判定モジュールがないため解析できないのじゃ。' -ForegroundColor Yellow
         return
     }
 
-    $duration = 0.0
-    $fps = 0.0
-    $nominalFps = 0.0
-    if ($FFprobeExecutable) {
-        $data = & $FFprobeExecutable -v error -select_streams v:0 -show_entries 'format=duration:stream=avg_frame_rate,r_frame_rate' -of json -i $File
-        if ($LASTEXITCODE -eq 0 -and $data) {
-            try {
-                $meta = ($data -join [Environment]::NewLine) | ConvertFrom-Json
-                if ($meta.format.duration) {
-                    $duration = [double]::Parse([string]$meta.format.duration, [Globalization.CultureInfo]::InvariantCulture)
-                }
-                if ($meta.streams.Count -gt 0) {
-                    $fraction = [string]$meta.streams[0].avg_frame_rate
-                    if ($fraction -match '^(\d+)/(\d+)$' -and [double]$Matches[2] -ne 0) {
-                        $fps = [double]$Matches[1] / [double]$Matches[2]
-                    }
-                    $nominalFraction = [string]$meta.streams[0].r_frame_rate
-                    if ($nominalFraction -match '^(\d+)/(\d+)$' -and [double]$Matches[2] -ne 0) {
-                        $nominalFps = [double]$Matches[1] / [double]$Matches[2]
-                    }
-                }
-            }
-            catch {
-                Write-Host '再生時間／fpsは取得できなかったため先頭のみ調査するのじゃ。' -ForegroundColor Yellow
-            }
-        }
+    $assessment = Get-TelecineAssessment -File $File -FFmpegExecutable $FFmpegExecutable -FFprobeExecutable $FFprobeExecutable -Frames $Frames -Full $Full
+    $windowCount = if ($assessment.Meta.AvgFps -gt 0) { 2 } else { 1 }
+    $decimateText = if ($assessment.DecimateReports.Count -gt 0) { "decimate最大$($assessment.DecimateReports.Count)区間" } else { 'decimate解析なし' }
+    $modeText = if ($Full) { '全編解析' } else { "簡易解析（idet最大${windowCount}区間 / $decimateText × $Frames フレーム）" }
+    Write-Host "モード: $modeText" -ForegroundColor Cyan
+
+    $i = 0
+    foreach ($report in $assessment.IdetReports) {
+        $i++
+        $description = if ($report.Telecine32) { '3:2周期あり' } else { '3:2周期は未検出' }
+        $matching = if (($report.Top + $report.Bottom) -ge 10) { '{0:P0}' -f $report.Consistency } else { '算出保留（反復が少ない）' }
+        Write-Host "idet[$i] : $description / Top=$($report.Top) / Bottom=$($report.Bottom) / 周期一致=$matching"
+    }
+    $i = 0
+    foreach ($report in $assessment.DecimateReports) {
+        $startText = if ($i -lt $assessment.DecimateStarts.Count) { "$($assessment.DecimateStarts[$i])秒" } else { '位置不明' }
+        $i++
+        $description = if ($report.Periodic32) { '3:2周期あり' } else { '3:2周期は未検出' }
+        Write-Host "decimate[$i]($startText) : $description / 周期=$($report.Cycles) / 最小diff=$($report.DropIsMin) / 低比率=$($report.LowRatio) / 比率=$($report.RatioMedian.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture))"
     }
 
-    $starts = @(0.0)
-    if (-not $Full -and $fps -gt 0 -and $duration -gt ($Frames / $fps) * 2.5) {
-        # 冒頭・中央・終盤ではなく、前半と後半の中間（約25%、75%）を解析する。
-        # -ss は解析区間の開始位置なので、各地点が区間の中央になるよう補正する。
-        $windowSeconds = $Frames / $fps
-        $latestStart = [math]::Max(0.0, $duration - $windowSeconds - 1.0)
-        $firstStart = [math]::Min($latestStart, [math]::Max(0.0, $duration * 0.25 - $windowSeconds / 2.0))
-        $secondStart = [math]::Min($latestStart, [math]::Max(0.0, $duration * 0.75 - $windowSeconds / 2.0))
-        $starts = @([math]::Round($firstStart, 3), [math]::Round($secondStart, 3))
+    $classified = 0
+    $progressive = 0
+    $interlaced = 0
+    foreach ($report in $assessment.IdetReports) {
+        $classified += $report.Classified
+        $progressive += $report.Progressive
+        $interlaced += $report.Interlaced
     }
+    $progFraction = if ($classified -gt 0) { $progressive / [double]$classified } else { 0.0 }
+    $interlacedFraction = if ($classified -gt 0) { $interlaced / [double]$classified } else { 0.0 }
+    Write-Host "判定区間=$($assessment.IdetReports.Count) / 3:2検出=$(@($assessment.IdetReports | Where-Object { $_.Telecine32 }).Count) / 周期重複=$(@($assessment.DecimateReports | Where-Object { $_.Periodic32 }).Count)"
+    Write-Host ("実映像の傾向: Progressive={0:P0} / Interlaced={1:P0}" -f $progFraction, $interlacedFraction)
 
-    $reports = [System.Collections.Generic.List[object]]::new()
-    $validStarts = [System.Collections.Generic.List[double]]::new()
-    $failed = $false
-    if ($Full) {
-        Write-Host 'モード: 全編解析' -ForegroundColor Cyan
-        $scan = Invoke-CadenceScan -File $File -FFmpegExecutable $FFmpegExecutable -Start 0 -Frames $Frames -Full $true
-        if ($scan.Success) {
-            foreach ($report in $scan.Reports) { $reports.Add($report) }
-            Write-Host "全編 $($scan.FrameCount) フレームを確認したぞ。"
-        }
-        else {
-            $failed = $true
-        }
+    $color = if ($assessment.Verdict -match '^推奨') { 'Green' } elseif ($assessment.Verdict -match '^不要') { 'Green' } else { 'Yellow' }
+    Write-Host "逆テレシネ判定: $($assessment.Verdict)（確信度 $($assessment.Confidence)%）" -ForegroundColor $color
+    Write-Host '  根拠:'
+    foreach ($line in ($assessment.Evidence -split "`n")) {
+        Write-Host "    $line"
     }
-    else {
-        Write-Host "モード: 簡易解析（最大$($starts.Count)区間 × $Frames フレーム）" -ForegroundColor Cyan
-        $labels = @('前半中間（約25%）', '後半中間（約75%）')
-        for ($i = 0; $i -lt $starts.Count; $i++) {
-            $start = [double]$starts[$i]
-            $label = if ($starts.Count -eq 1) { '冒頭' } else { $labels[$i] }
-            $scan = Invoke-CadenceScan -File $File -FFmpegExecutable $FFmpegExecutable -Start $start -Frames $Frames -Full $false
-            if ($scan.Success -and $scan.Reports.Count -gt 0) {
-                $report = $scan.Reports[0]
-                $reports.Add($report)
-                $validStarts.Add($start)
-                $description = if ($report.Telecine32) { '3:2周期あり' } else { '3:2周期は未検出' }
-                $matching = if (($report.Top + $report.Bottom) -ge 10) { '{0:P0}' -f $report.Consistency } else { '算出保留（反復が少ない）' }
-                Write-Host "$label : $description / Top=$($report.Top) / Bottom=$($report.Bottom) / 周期一致=$matching"
-            }
-            else {
-                $failed = $true
-                Write-Host "$label : 映像を十分に解析できなかったのじゃ。" -ForegroundColor Yellow
-            }
-        }
+    if ($assessment.RecommendedFilter) {
+        Write-Host "  処理候補: $($assessment.RecommendedFilter)"
     }
-
-    if ($reports.Count -eq 0) {
-        Write-Host '逆テレシネ判定: 判定不能（有効な解析区間なし）' -ForegroundColor Yellow
-        return
-    }
-
-    $telecine = @($reports | Where-Object { $_.Telecine32 }).Count
-    $progressive = @($reports | Where-Object { $_.Classified -ge 20 -and $_.ProgFraction -ge 0.85 }).Count
-    $interlaced = @($reports | Where-Object { $_.Classified -ge 20 -and $_.ProgFraction -le 0.15 }).Count
-    $top = 0
-    $bottom = 0
-    foreach ($report in $reports) {
-        $top += $report.Top
-        $bottom += $report.Bottom
-    }
-    Write-Host "判定区間=$($reports.Count) / 3:2検出=$telecine / Top反復=$top / Bottom反復=$bottom"
-    Write-Host "実映像の傾向: Progressive優勢=$progressive / Interlaced優勢=$interlaced"
-
-    if ($telecine -gt 0) {
-        if (-not $failed -and $telecine -eq $reports.Count) {
-            Write-Host '逆テレシネ判定: 推奨（全解析区間で3:2周期を検出）' -ForegroundColor Green
-            Write-Host '処理候補: fieldmatch,decimate。縞・フレーム欠落は映像でも確認するのじゃ。'
-        }
-        else {
-            Write-Host '逆テレシネ判定: 混在・要確認（一部区間だけ3:2周期を検出）' -ForegroundColor Yellow
-            Write-Host '注意: 全編への一律decimateは非3:2部分のコマ落ちにつながり得るぞ。'
-        }
-        return
-    }
-
-    if ($progressive -ge [math]::Ceiling($reports.Count * 0.8) -and $interlaced -eq 0 -and $fps -ge 29.5 -and $fps -le 30.1) {
-        Write-Host 'プログレッシブ優勢につき、周期的な重複フレームも確認するのじゃ。'
-        $duplicateReports = [System.Collections.Generic.List[object]]::new()
-        if ($Full) {
-            $dup = Invoke-DuplicateScan -File $File -FFmpegExecutable $FFmpegExecutable -Start 0 -Frames $Frames -Full $true
-            if ($dup.Success) {
-                foreach ($report in $dup.Reports) { $duplicateReports.Add($report) }
-            }
-            else { $failed = $true }
-        }
-        else {
-            foreach ($start in $validStarts) {
-                $dup = Invoke-DuplicateScan -File $File -FFmpegExecutable $FFmpegExecutable -Start $start -Frames $Frames -Full $false
-                if ($dup.Success) {
-                    foreach ($report in $dup.Reports) { $duplicateReports.Add($report) }
-                }
-                else { $failed = $true }
-            }
-        }
-        $periodic = @($duplicateReports | Where-Object { $_.Periodic }).Count
-        $drops = 0
-        $checked = 0
-        $cleanCycles = 0
-        $activeCycles = 0
-        foreach ($report in $duplicateReports) {
-            $drops += $report.Drops
-            $checked += $report.Frames
-            $cleanCycles += $report.CleanCycles
-            $activeCycles += $report.ActiveCycles
-        }
-        Write-Host "重複候補=$drops / $checked、5フレーム周期検出=$periodic / $($duplicateReports.Count)"
-        Write-Host "静止区間を除いた周期: 単一重複=$cleanCycles / 有効周期=$activeCycles"
-        if ($failed -or $duplicateReports.Count -eq 0) {
-            Write-Host '逆テレシネ判定: 保留（重複解析が不完全）' -ForegroundColor Yellow
-        }
-        elseif ($periodic -eq $duplicateReports.Count) {
-            Write-Host '逆テレシネ判定: 24p由来の周期重複候補（Progressive。fieldmatch不要、decimate=cycle=5を確認）' -ForegroundColor Green
-        }
-        elseif ($periodic -gt 0) {
-            Write-Host '逆テレシネ判定: 24p由来の周期重複を一部区間で検出（混在・要確認）' -ForegroundColor Yellow
-        }
-        elseif ($drops -le [math]::Max(5, $checked * 0.03)) {
-            Write-Host '逆テレシネ判定: 不要寄り（3:2も周期的な重複も見当たらない）' -ForegroundColor Green
-        }
-        else {
-            Write-Host '逆テレシネ判定: 保留（不規則な重複または静止場面）' -ForegroundColor Yellow
-        }
-        return
-    }
-
-    if (-not $failed -and
-        $progressive -eq $reports.Count -and $interlaced -eq 0 -and
-        $fps -ge 23.9 -and $fps -le 24.1 -and
-        $nominalFps -ge 23.9 -and $nominalFps -le 24.1) {
-        # 既に24pのプログレッシブ映像なら、30p由来の重複除去もfieldmatchも不要。
-        Write-Host '逆テレシネ判定: 不要（23.976/24fpsのプログレッシブ映像。3:2周期も未検出）' -ForegroundColor Green
-        return
-    }
-
-    if ($failed) {
-        Write-Host '逆テレシネ判定: 保留（解析できなかった区間あり）' -ForegroundColor Yellow
-    }
-    elseif ($interlaced -eq $reports.Count) {
-        Write-Host '逆テレシネ判定: 不要寄り（3:2周期なし、通常インターレースの可能性）' -ForegroundColor Yellow
-        Write-Host '注意: デインターレースとは別の処理じゃ。2:2プルダウンは判定保留。'
-    }
-    else {
-        Write-Host '逆テレシネ判定: 保留（3:2周期未検出だが走査方式が不明・混在）' -ForegroundColor Yellow
+    if ($assessment.Telecine32) {
+        Write-Host '  縞・フレーム欠落は映像でも確認するのじゃ。'
     }
     Write-Host 'この判定は映像の特徴からの推定であり、全編解析でも完全保証ではないぞ。'
 }
 
-#endregion 逆テレシネの要否判定
+#endregion
 
 #region FFplayによるフィルター確認
 
@@ -647,7 +234,8 @@ function Show-GtkComparison {
     param(
         [string]$VideoPath,
         [string]$FFprobeExecutable,
-        [string]$FFplayExecutable
+        [string]$FFplayExecutable,
+        [int]$ParentPid = 0
     )
 
     if (-not ('GtkNative' -as [type])) {
@@ -799,7 +387,7 @@ public static class GtkNative {
 }
 
 function Show-FFplayVerification {
-    param([string]$VideoPath, [string]$FFprobeExecutable)
+    param([string]$VideoPath, [string]$FFprobeExecutable, [int]$ParentPid = 0)
 
     $ffplay = Get-Command ffplay -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     $headless = $env:OS -ne 'Windows_NT' -and -not $env:DISPLAY -and -not $env:WAYLAND_DISPLAY
@@ -811,6 +399,46 @@ function Show-FFplayVerification {
     if ($FFprobeExecutable) {
         $videoStream = & $FFprobeExecutable -v error -select_streams v:0 -show_entries stream=index -of 'csv=p=0' -i $VideoPath
         if ($LASTEXITCODE -eq 0 -and -not $videoStream) { return }
+    }
+
+    # GUIは別プロセスで開き、この側は3:2判定へ即座に進む。
+    if (-not $ShowComparisonOnly) {
+        $quoteChild = { param([string]$v) "'" + $v.Replace("'", "''") + "'" }
+        $childCommand = '& ' + (& $quoteChild $PSCommandPath) + ' -ShowComparisonOnly -filePaths ' + (& $quoteChild $VideoPath) + ' -ParentPid ' + $PID
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+        $pwshCmd = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        $childExe = if ($pwshCmd) { $pwshCmd.Path } elseif ($IsWindows) { Join-Path $PSHOME 'pwsh.exe' } else { 'pwsh' }
+        try {
+            # SW_HIDE で起動すると子プロセスのGUIまで消えるため、コンソールを作らない CREATE_NO_WINDOW を使う。
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $childExe
+            $psi.Arguments = "-NoProfile -EncodedCommand $encoded"
+            $psi.WorkingDirectory = (Get-Location).Path
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $child = [System.Diagnostics.Process]::Start($psi)
+            Start-Sleep -Milliseconds 400
+            $child.Refresh()
+            if ($child.HasExited) {
+                Write-Host "GUIプロセスが即座に終了した (exit=$($child.ExitCode))。この場で表示する。" -ForegroundColor Yellow
+            }
+            else {
+                $script:GuiProcessId = $child.Id
+                if (-not $script:GuiExitHookRegistered) {
+                    $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -SupportEvent -Action {
+                        if ($script:GuiProcessId) {
+                            try { Stop-Process -Id $script:GuiProcessId -Force -ErrorAction SilentlyContinue } catch {}
+                        }
+                    }
+                    $script:GuiExitHookRegistered = $true
+                }
+                Write-Host "FFplay比較GUIを別ウィンドウで起動したぞ (PID=$($child.Id))。判定はそのまま続行する。" -ForegroundColor Cyan
+                return
+            }
+        }
+        catch {
+            Write-Host "GUIの別プロセス起動に失敗したので、この場で表示する: $_" -ForegroundColor Yellow
+        }
     }
 
     Resolve-PreviewNnediFilter
@@ -829,7 +457,7 @@ function Show-FFplayVerification {
         # Linux で GTK が使えればボタンGUIを出す。
         if ($env:OS -ne 'Windows_NT') {
             try {
-                Show-GtkComparison -VideoPath $VideoPath -FFprobeExecutable $FFprobeExecutable -FFplayExecutable $ffplay.Path
+                Show-GtkComparison -VideoPath $VideoPath -FFprobeExecutable $FFprobeExecutable -FFplayExecutable $ffplay.Path -ParentPid $ParentPid
                 return
             }
             catch {
@@ -976,11 +604,31 @@ function Show-FFplayVerification {
     Write-Host '[ FFplay比較ボタン ]' -ForegroundColor Cyan
     Write-Host 'クリックすると別のPowerShellウィンドウでFFplayが起動する。'
     Write-Host '累積フレーム番号は表示しない。fpsは冒頭のPTSからの推定値。'
+
+    if ($ParentPid -gt 0) {
+        # 親コンソールが閉じられたらこのGUIも閉じる。
+        $watcher = New-Object System.Windows.Forms.Timer
+        $watcher.Interval = 1000
+        $watcher.Add_Tick({
+            if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) {
+                $form.Close()
+            }
+        }.GetNewClosure())
+        $watcher.Start()
+    }
     [void]$form.ShowDialog()
+    if ($watcher) { $watcher.Stop(); $watcher.Dispose() }
     $form.Dispose()
 }
 
 #endregion FFplayによるフィルター確認
+
+# 別プロセスから GUI だけを表示する場合はここで終了する（関数定義より後に置く必要がある）。
+if ($ShowComparisonOnly) {
+    $probeOnly = Get-Command ffprobe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    Show-FFplayVerification -VideoPath $filePaths[0] -FFprobeExecutable $(if ($probeOnly) { $probeOnly.Path } else { $null }) -ParentPid $ParentPid
+    return
+}
 
 # まずはffprobeかffmpegが使えるか確認するのじゃ
 $ffprobePath = Get-Command -Name ffprobe -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -1074,24 +722,22 @@ foreach ($filePath in $filePaths) {
             }
             Write-Host "（これはメタデータ／デコード時のフラグで、映像内の縞模様を実測した結果ではないぞ）"
 
-            if (-not $SkipCadenceAnalysis) {
-                $exe = if ($ffmpegPath) { $ffmpegPath.Path } else { $null }
-                Show-TelecineAssessment -File $filePath -FFmpegExecutable $exe -FFprobeExecutable $ffprobePath.Path -Frames $AnalysisFrames -Full $runFullAnalysis
-            }
-
         }
         else {
             Write-Host "[ フレームレート詳細 ]" -ForegroundColor DarkGray
             Write-Host "（ffprobeが見つからんため、このセクションはスキップするのじゃ）"
             Write-Host "[ 走査方式 ]" -ForegroundColor DarkGray
             Write-Host "（ffprobeが見つからんため、このセクションはスキップするのじゃ）"
-            if (-not $SkipCadenceAnalysis) {
-                $exe = if ($ffmpegPath) { $ffmpegPath.Path } else { $null }
-                Show-TelecineAssessment -File $filePath -FFmpegExecutable $exe -FFprobeExecutable $null -Frames $AnalysisFrames -Full $runFullAnalysis
-            }
         }
 
+        # 実映像の比較を先に見せてから、3:2プル判定の解析を実行する。
         Show-FFplayVerification -VideoPath $filePath -FFprobeExecutable $(if ($ffprobePath) { $ffprobePath.Path } else { $null })
+
+        if (-not $SkipCadenceAnalysis) {
+            $exe = if ($ffmpegPath) { $ffmpegPath.Path } else { $null }
+            $probe = if ($ffprobePath) { $ffprobePath.Path } else { $null }
+            Show-TelecineAssessment -File $filePath -FFmpegExecutable $exe -FFprobeExecutable $probe -Frames $AnalysisFrames -Full $runFullAnalysis
+        }
 
         Write-Host "======================================================================`n"
     }

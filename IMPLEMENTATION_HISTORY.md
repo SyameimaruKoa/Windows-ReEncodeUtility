@@ -504,3 +504,40 @@ Opus音声エンコーダー（libopus）を使用する際、入力ファイル
 - Linux の FFplay比較GUIを PowerShell から GTK 3 を直接呼び出すボタン式に変更した。8項目すべてをボタンで表示し、クリックで ffplay を起動する。GTK が無い環境では比較用コマンド例、ffplay が無い環境や DISPLAY / WAYLAND_DISPLAY の無い headless 環境では比較機能のみスキップする。
 - README.md に付属ツールと依存関係（GUI ツール）を追記した。
 
+## 2026-11-26（ブランチ `OptiPlex-3040-MFF_20261126`）
+
+### 3:2プルダウン／逆テレシネ判定を共通モジュールに集約し取りこぼしを修正
+
+`origin/main` を基点に作業ブランチを切り、ハードテレシネの取りこぼしとプログレッシブ3:2の「保留」判定を修正した。
+
+- `Modules/TelecineDetector.ps1` を新設。メディア情報ツールとメイン処理の両方から dot-source して同じ判定を使うようにした。
+- idet の走査を `rep_thres=3.0` と `1.5` の二段に変更。ノイズを含むハードテレシネで標準しきい値では反復が0になるケースを低しきい値で検出できるようにした（`rep_thres=1.5` でもプログレッシブ素材に誤検出は出ないことを確認）。
+- フレーム単位のプログレッシブ／インターレース分類を `lavfi.idet.multiple.current_frame`（履歴によるフィールド順の推定）から `lavfi.idet.single.current_frame`（フレーム単位の判定）へ修正した。
+- `decimate=cycle=5` のデバッグログを新規解析し、各5フレーム周期で最小差分のフレームが落下する比率から 24p 由来のフレーム重複を検出するようにした。mpdecimate の drop 数に依存していた従来手法では、アニメの静止フレームに埋もれて周期検出が失敗していた。
+- ffprobe の `repeat_pict` と `field_order` を読み、soft telecine の判定にも使うようにした。
+- `Tools/Media/Media_Info_get-info.ps1` は解析関数を共通モジュールへ移し、日本語の結論に加えて確信度と根拠（idet反復・5周期一致・decimate比率・ffprobeフラグ）を表示するようにした。
+- `re-encode-AIOptimus.ps1` の `Test-IsInterlaced` を共通モジュールに差し替え（bool 戻り値は維持、判定結果を `$script:LastTelecineAssessment` にキャッシュ）。`Select-DeinterlaceOption` の自動判定メニューに根拠と推奨を表示し、ハードテレシネは `fieldmatch,decimate`、プログレッシブ3:2は `decimate=cycle=5` を既定選択にした。選択肢に `decimate=cycle=5` を追加。
+- `Tests/Test-TelecineDetection.ps1` を追加。24p／ハードテレシネ(TFF/BFF)／ノイズ付きハードテレシネ／24→30p重複／アニメ風静止を含む3:2／30pネイティブを合成サンプルで検証し、15 PASS（実サンプル込み）を確認。
+- 実サンプル `けいおん 01話.mp4`（U-NEXT）は従来「保留（不規則な重複または静止場面）」だったが、「推奨（プログレッシブ3:2：フレーム重複を検出。fieldmatch不要）」確信度96%に改善した。
+
+### 追記: プログレッシブ3:2の混在判定を追加
+
+`ゲーセン少女と異文化交流` 1話が「保留」になる件を調査した結果、25%／75%の2区間だけでは3:2の弱い領域を拾い、120秒／600秒／1380秒付近の綺麗な3:2（decimate比率 0.014〜0.042、drop間隔5が30〜33/36）を取りこぼしていた。
+
+- decimate のサンプリングを簡易解析時は約10%ずつ6区間に増やした（idet は従来の2区間のまま）。
+- 3:2検出が全区間なら「推奨」、一部なら「混在・要確認（検出区間数を明記）」に分け、`Progressive32Mixed` フラグを追加した。メニューでも混在時は全編への一律decimate注意を表示する。
+- 回帰テストに「3:2と30pの混在」ケースを追加し、16 PASS を確認。
+
+### 追記: 簡易解析の検出率を上げ、FFplay比較GUIを判定より先に表示
+
+- decimate の周期判定しきい値を緩め（`DropIsMin` 0.7→0.6、`LowRatio` 0.6→0.55）、メディア情報ツールからは混在を拾いやすくした。
+- 混在が疑われる場合に限り、6区間の各中間を追加走査して最大11区間で判定する。idet も未検出時に12%／88%の2区間を追加する。明確な場合は余分な走査をしない。
+- 効果: ゲーセン少女1話は 2/6・確信度67% → **9/11・確信度84%** に改善。けいおん1話は 6/6・96% を維持。
+- `Media_Info_get-info.ps1` の表示順を変更し、`Show-FFplayVerification` を `Show-TelecineAssessment` より先に呼ぶようにした。先に映像を目視してから解析結果を読める。
+- 回帰テスト16 PASS を維持。
+
+### 追記: FFplay比較GUIを非ブロッキング化し、追加サンプリング区間の時刻も表示
+
+- `Show-FFplayVerification` を別PowerShellプロセス（`-ShowComparisonOnly`）で起動するようにし、`ShowDialog()` / `gtk_main()` で止まらずに3:2判定へ進むようにした。GUIを閉じる待ち時間が不要になった。
+- 内部スイッチ `-ShowComparisonOnly` を追加。関数定義より後に分岐を置く必要があるため、配置場所に注意。
+- decimateの追加サンプリング（中間5区間）の開始時刻も `DecimateStarts` に記録し、表示で「位置不明」にならないようにした。

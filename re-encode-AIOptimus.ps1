@@ -166,6 +166,15 @@ else {
     Write-Host "[WARN] Modules\HardwareFilterResolver.ps1 が見つからないため、HWフィルター自動置換を無効化します。" -ForegroundColor Yellow
 }
 
+# --- 3:2プルダウン／逆テレシネ判定の共通モジュール ---
+$telecineDetectorPath = Join-Path $global:ScriptDir 'Modules\TelecineDetector.ps1'
+if (Test-Path -LiteralPath $telecineDetectorPath) {
+    . $telecineDetectorPath
+}
+else {
+    Write-Host "[WARN] Modules\TelecineDetector.ps1 が見つからないため、3:2判定は従来の検出にフォールバックします。" -ForegroundColor Yellow
+}
+
 # --- 依存スクリプトの確認 ---
 $optionsScriptPath = Join-Path $global:ScriptDir "get-ffmpegOptions.ps1"
 if (-not (Test-Path $optionsScriptPath)) {
@@ -309,6 +318,10 @@ function Test-IsInterlaced {
             $file = (Get-ChildItem -LiteralPath $file -File -Include *.mp4, *.mkv, *.avi, *.mov, *.ts, *.m2ts, *.iso -Recurse | Select-Object -First 1).FullName
         }
         if ($file -and (Test-Path -LiteralPath $file -PathType Leaf)) {
+            if (Get-Command Get-TelecineAssessment -ErrorAction SilentlyContinue) {
+                $script:LastTelecineAssessment = Get-TelecineAssessment -File $file -FFmpegExecutable $global:Settings.FfmpegPath -FFprobeExecutable $global:Settings.FfprobePath -Frames 180 -Full $false
+                return [bool]$script:LastTelecineAssessment.IsInterlaced
+            }
             $fieldOrder = & $global:Settings.FfprobePath -v error -select_streams v:0 -show_entries stream=field_order -of default=noprint_wrappers=1:nokey=1 "$file" 2>$null | Out-String
             if ($fieldOrder.Trim() -match '^(tb|bt|tt|bb)$') {
                 return $true
@@ -1032,7 +1045,7 @@ function Select-DeinterlaceOption {
     .SYNOPSIS
         インターレース処理を行うかどうかの確認およびフィルター選択メニューを表示し、解決済みのフィルター文字列（または "None"）を返す。
     #>
-    $filterValues = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif")
+    $filterValues = @("None", "fieldmatch,decimate", "fieldmatch,nnedi,decimate", "bwdif", "nnedi", "w3fdif", "decimate=cycle=5")
 
     $actionIndex = Show-Menu -Title "インターレース処理（解除・逆テレシネ等）を行いますか？" -Choices @(
         "行わない (スキップ)",
@@ -1044,27 +1057,48 @@ function Select-DeinterlaceOption {
     if ($actionIndex -eq 1) {
         Write-Host "インターレース判定を実行中..." -ForegroundColor Cyan
         $isInterlaced = (Get-Command Test-IsInterlaced -ErrorAction SilentlyContinue) -and (Test-IsInterlaced -Paths $script:Path)
+        $assessment = $script:LastTelecineAssessment
+        $evidenceLines = @()
+        if ($assessment -and $assessment.Evidence) {
+            $evidenceLines = @('判定根拠:', "  $($assessment.Verdict)（確信度 $($assessment.Confidence)%）") + @($assessment.Evidence -split "`n" | ForEach-Object { "  $_" })
+            if ($assessment.RecommendedFilter) { $evidenceLines += "  処理候補: $($assessment.RecommendedFilter)" }
+        }
+        $titleSuffix = if ($evidenceLines.Count -gt 0) { "`n" + ($evidenceLines -join "`n") } else { '' }
         if ($isInterlaced) {
-            $idx = Show-Menu -Title "インターレースが検出されました。解除方法を選択してください。" -Choices @(
+            $defaultIndex = if ($assessment -and $assessment.Telecine32) { 1 } else { 0 }
+            $titleText = if ($assessment -and $assessment.Telecine32) { "ハードテレシネ(3:2)を検出しました。解除方法を選択してください。" } else { "インターレースが検出されました。解除方法を選択してください。" }
+            $idx = Show-Menu -Title ($titleText + $titleSuffix) -DefaultIndex $defaultIndex -Choices @(
                 "行わない",
                 "fieldmatch,decimate (逆テレシネ: 通常のアニメ等に)",
                 "fieldmatch,nnedi,decimate (逆テレシネ: 極高品質 ※重い)",
                 "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)",
                 "nnedi (極高品質: 学習ウェイトDL必要 ※重い)",
-                "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"
+                "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)",
+                "decimate=cycle=5 (30p由来の3:2重複を除去: fieldmatch不要)"
             )
             if ($idx -ge 0 -and $idx -lt $filterValues.Length) {
                 $selectedFilter = $filterValues[$idx]
             }
         }
         else {
-            $idx = Show-Menu -Title "インターレースは検出されませんでした (プログレッシブ判定)。`n特定フレームの除去や強制インターレース解除を行いますか？" -Choices @(
+            $titleText = if ($assessment -and $assessment.Progressive32Mixed) {
+                "一部区間でプログレッシブ3:2を検出しました（混在）。全編への適用は非3:2部分のコマ落ちに注意。"
+            }
+            elseif ($assessment -and $assessment.Progressive32) {
+                "プログレッシブ3:2のフレーム重複を検出しました。3:2周期の除去を行いますか？"
+            }
+            else {
+                "インターレースは検出されませんでした (プログレッシブ判定)。`n特定フレームの除去や強制インターレース解除を行いますか？"
+            }
+            $defaultIndex = if ($assessment -and $assessment.Progressive32) { 6 } else { 0 }
+            $idx = Show-Menu -Title ($titleText + $titleSuffix) -DefaultIndex $defaultIndex -Choices @(
                 "行わない",
                 "fieldmatch,decimate (強制逆テレシネ: 通常)",
                 "fieldmatch,nnedi,decimate (強制逆テレシネ: 極高品質 ※重い)",
                 "bwdif (強制インターレース解除: 高品質)",
                 "nnedi (強制インターレース解除: 極高品質 ※重い)",
-                "w3fdif (強制インターレース解除: 標準・高速)"
+                "w3fdif (強制インターレース解除: 標準・高速)",
+                "decimate=cycle=5 (30p由来の3:2重複を除去: fieldmatch不要)"
             )
             if ($idx -ge 0 -and $idx -lt $filterValues.Length) {
                 $selectedFilter = $filterValues[$idx]
@@ -1078,7 +1112,8 @@ function Select-DeinterlaceOption {
             "fieldmatch,nnedi,decimate (逆テレシネ: 極高品質 ※重い)",
             "bwdif (実写/アニメ: 高品質で標準的な解除 ※現在推奨)",
             "nnedi (極高品質: 学習ウェイトDL必要 ※重い)",
-            "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)"
+            "w3fdif (実写等: 高速で標準的なインターレース解除 ※ビデオカメラ等に推奨)",
+            "decimate=cycle=5 (30p由来の3:2重複を除去: fieldmatch不要)"
         )
         if ($idx -ge 0 -and $idx -lt $filterValues.Length) {
             $selectedFilter = $filterValues[$idx]

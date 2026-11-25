@@ -572,6 +572,13 @@ MiraBox等のキャプチャデバイスから映像を取り込み、**ゼロ�
 
 ffprobe / ffmpeg を使ってメディアファイルの情報を表示するスタンドアロンスクリプトです。一般情報、フレームレート詳細、先頭フレームの表示時間、走査方式（インターレース／プログレッシブ）に加え、実映像解析による 3:2 プルダウン周期・重複フレームの検出と逆テレシネの要否推定を行います。
 
+判定ロジックは `Modules/TelecineDetector.ps1` に集約され、メイン処理の自動インターレース判定と共通です。idet を標準／低しきい値の二段で走査してノイズを含むハードテレシネを拾い、`decimate=cycle=5` の周期ログから 24p 由来のフレーム重複（アニメの静止が多い素材でも検出可）を判定します。フレーム重複は編集全体の約10%ずつ6区間をサンプリングし、混在が疑われる場合のみ区間の中間を追加走査して最大11区間で判定します。idetも3:2未検出時は前後に2区間を追加します。一部の区間だけ3:2が出る素材は「混在・要確認」として警告します。結果には日本語の結論に加えて確信度と根拠（反復数・周期一致・decimate比率・検出区間数・ffprobeフラグ）を表示します。FFplay比較GUIは3:2プル判定より先に開き、別プロセスで動作するのでウィンドウを閉じるまで待たずに判定が進みます。
+
+```
+pwsh -NoProfile -File ./Tests/Test-TelecineDetection.ps1
+pwsh -NoProfile -File ./Tests/Test-TelecineDetection.ps1 -RealSample './input.mp4'
+```
+
 ```powershell
 pwsh -NoProfile -File ./Tools/Media/Media_Info_get-info.ps1 -h
 pwsh -NoProfile -File ./Tools/Media/Media_Info_get-info.ps1 ./input.mkv
@@ -615,7 +622,9 @@ Linux 用の設定ファイルです。`$IsLinux` 時に自動読み込みされ
 ├── .cache/                       # ハードウェアスキャン等のキャッシュ保存先
 │   └── hardware-scan-cache.clixml
 ├── Modules/TemplateManager.ps1   # エンコード・フィルターテンプレート管理
+├── Modules/TelecineDetector.ps1         # 3:2プルダウン／逆テレシネ判定の共通ロジック
 ├── Tools/Media/Media_Info_get-info.ps1  # メディア情報・逆テレシネ判定 (Windows/Linux)
+├── Tests/Test-TelecineDetection.ps1     # 3:2判定の回帰テスト
 └── Profiles/                     # テンプレート保存先
     ├── Encoding/                  # エンコード設定
     │   └── HEVC QSV - 音声コピー.psd1

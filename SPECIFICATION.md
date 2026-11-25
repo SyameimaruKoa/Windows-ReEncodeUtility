@@ -190,7 +190,7 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
 
 ### 4.5 インターレース選択肢 (`Select-DeinterlaceOption`)
 - `行わない (スキップ)`
-- `自動判定する (動画解析を実行)` (ffprobe `field_order`/`interlaced_frame` ＋ ffmpeg `idet` 500フレーム実走査)
+- `自動判定する (動画解析を実行)` (`Modules/TelecineDetector.ps1` による ffprobe フラグ ＋ idet 二段走査 ＋ decimate 周期ログの統合判定。確信度と根拠をメニューに表示)
 - `手動で選択する (解析をスキップして直接フィルター指定)`
   - `bwdif (標準 / 推奨)`
   - `yadif (軽量)`
@@ -198,6 +198,7 @@ PS1の `Profiles/` ディレクトリに存在したテンプレートを完全�
   - `nnedi (高品質 / ニューラルネットワーク)`
   - `fieldmatch,decimate (24fpsアニメ・映画向け逆テレシネ)`
   - `fieldmatch,nnedi,decimate (24fps逆テレシネ + コーミング補完)`
+  - `decimate=cycle=5 (30p由来の3:2フレーム重複を除去。fieldmatch不要)`
 
 ### 4.6 音声エンコーダ選択肢 (`get-ffmpegOptions.ps1`)
 - **外部エンコーダ (自動検出)**:
@@ -323,13 +324,16 @@ ffmpeg の verbose ログで実際に選択される MFT / デバイスを確認
 
 ### 5.7 インターレース検出 & 解除 (`internal/core/deinterlace.go`)
 - **選択肢**: `行わない (スキップ)` / `自動判定する (動画解析を実行)` / `手動で選択する (解析をスキップして直接フィルター指定)`
-- **自動検出フロー**:
-  1. `ffprobe` による `field_order` (tb, bt, tt, bb) および `interlaced_frame=1` 検証。
-  2. `ffmpeg -filter:v idet -frames:v 500` による複数フレーム実走査（TFF/BFFカウント判定）。
+- **自動検出フロー**（PowerShell 実装は `Modules/TelecineDetector.ps1` に集約し、メディア情報ツールと共用）:
+  1. `ffprobe` による `field_order` (tb, bt, tt, bb) / `interlaced_frame` / `repeat_pict` の検証。
+  2. `ffmpeg -vf idet` を `rep_thres=3.0` と `1.5` の二段で走査。フレーム分類は `lavfi.idet.single.current_frame` を使い、フィールド反復の位置から3:2周期を判定（ノイズで標準しきい値が失敗した場合も低しきい値で検出）。未検出時は前後に2区間を追加走査する。
+  3. `ffmpeg -vf decimate=cycle=5 -loglevel debug` の周期ログを解析。各周期で最小差分のフレームが落下し、その比率が低い場合に 24p 由来のフレーム重複（プログレッシブ3:2）と判定。アニメの静止フレームが多くても検出できる。簡易解析では約10%ずつ6区間をサンプリングし、混在が疑われる場合のみ中間を追加して最大11区間とする。3:2が一部区間のみなら「混在・要確認」とする。
+  4. 判定結果は `Verdict` / `Confidence` / `Evidence` としてメニューや情報表示に根拠付きで出す。
 - **解除フィルタ**:
   - `bwdif`, `yadif`, `w3fdif`, `nnedi`
   - `fieldmatch,decimate` (24fps 逆テレシネ)
   - `fieldmatch,nnedi=weights='...':deint=interlaced,decimate`
+  - `decimate=cycle=5` (30p由来の3:2フレーム重複。fieldmatch不要)
 - **nnedi3 自動取得とエラー時挙動**: `nnedi3_weights.bin` が未存在の場合、公式リポジトリから自動ダウンロードを試行。**ダウンロード失敗時はフォールバックせずエラーとして該当動画をスキップ**する。
 
 ### 5.8 外部音声エンコーダ & 特殊チャンネル処理 (`internal/core/audio_pipeline.go`, `audio_mapping.go`)
