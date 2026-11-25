@@ -72,6 +72,9 @@ param(
     # FFplay比較GUIだけを表示する内部用スイッチ（別プロセスから起動する）
     [switch]$ShowComparisonOnly,
 
+    # GUIを起動した親プロセスのPID。親が消えたらGUIも閉じる。
+    [int]$ParentPid = 0,
+
     [Alias('h')]
     [switch]$Help
 )
@@ -231,7 +234,8 @@ function Show-GtkComparison {
     param(
         [string]$VideoPath,
         [string]$FFprobeExecutable,
-        [string]$FFplayExecutable
+        [string]$FFplayExecutable,
+        [int]$ParentPid = 0
     )
 
     if (-not ('GtkNative' -as [type])) {
@@ -383,7 +387,7 @@ public static class GtkNative {
 }
 
 function Show-FFplayVerification {
-    param([string]$VideoPath, [string]$FFprobeExecutable)
+    param([string]$VideoPath, [string]$FFprobeExecutable, [int]$ParentPid = 0)
 
     $ffplay = Get-Command ffplay -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     $headless = $env:OS -ne 'Windows_NT' -and -not $env:DISPLAY -and -not $env:WAYLAND_DISPLAY
@@ -400,7 +404,7 @@ function Show-FFplayVerification {
     # GUIは別プロセスで開き、この側は3:2判定へ即座に進む。
     if (-not $ShowComparisonOnly) {
         $quoteChild = { param([string]$v) "'" + $v.Replace("'", "''") + "'" }
-        $childCommand = '& ' + (& $quoteChild $PSCommandPath) + ' -ShowComparisonOnly -filePaths ' + (& $quoteChild $VideoPath)
+        $childCommand = '& ' + (& $quoteChild $PSCommandPath) + ' -ShowComparisonOnly -filePaths ' + (& $quoteChild $VideoPath) + ' -ParentPid ' + $PID
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
         $pwshCmd = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         $childExe = if ($pwshCmd) { $pwshCmd.Path } elseif ($IsWindows) { Join-Path $PSHOME 'pwsh.exe' } else { 'pwsh' }
@@ -419,6 +423,15 @@ function Show-FFplayVerification {
                 Write-Host "GUIプロセスが即座に終了した (exit=$($child.ExitCode))。この場で表示する。" -ForegroundColor Yellow
             }
             else {
+                $script:GuiProcessId = $child.Id
+                if (-not $script:GuiExitHookRegistered) {
+                    $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -SupportEvent -Action {
+                        if ($script:GuiProcessId) {
+                            try { Stop-Process -Id $script:GuiProcessId -Force -ErrorAction SilentlyContinue } catch {}
+                        }
+                    }
+                    $script:GuiExitHookRegistered = $true
+                }
                 Write-Host "FFplay比較GUIを別ウィンドウで起動したぞ (PID=$($child.Id))。判定はそのまま続行する。" -ForegroundColor Cyan
                 return
             }
@@ -444,7 +457,7 @@ function Show-FFplayVerification {
         # Linux で GTK が使えればボタンGUIを出す。
         if ($env:OS -ne 'Windows_NT') {
             try {
-                Show-GtkComparison -VideoPath $VideoPath -FFprobeExecutable $FFprobeExecutable -FFplayExecutable $ffplay.Path
+                Show-GtkComparison -VideoPath $VideoPath -FFprobeExecutable $FFprobeExecutable -FFplayExecutable $ffplay.Path -ParentPid $ParentPid
                 return
             }
             catch {
@@ -591,7 +604,20 @@ function Show-FFplayVerification {
     Write-Host '[ FFplay比較ボタン ]' -ForegroundColor Cyan
     Write-Host 'クリックすると別のPowerShellウィンドウでFFplayが起動する。'
     Write-Host '累積フレーム番号は表示しない。fpsは冒頭のPTSからの推定値。'
+
+    if ($ParentPid -gt 0) {
+        # 親コンソールが閉じられたらこのGUIも閉じる。
+        $watcher = New-Object System.Windows.Forms.Timer
+        $watcher.Interval = 1000
+        $watcher.Add_Tick({
+            if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) {
+                $form.Close()
+            }
+        }.GetNewClosure())
+        $watcher.Start()
+    }
     [void]$form.ShowDialog()
+    if ($watcher) { $watcher.Stop(); $watcher.Dispose() }
     $form.Dispose()
 }
 
@@ -600,7 +626,7 @@ function Show-FFplayVerification {
 # 別プロセスから GUI だけを表示する場合はここで終了する（関数定義より後に置く必要がある）。
 if ($ShowComparisonOnly) {
     $probeOnly = Get-Command ffprobe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    Show-FFplayVerification -VideoPath $filePaths[0] -FFprobeExecutable $(if ($probeOnly) { $probeOnly.Path } else { $null })
+    Show-FFplayVerification -VideoPath $filePaths[0] -FFprobeExecutable $(if ($probeOnly) { $probeOnly.Path } else { $null }) -ParentPid $ParentPid
     return
 }
 
