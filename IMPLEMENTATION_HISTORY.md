@@ -504,3 +504,18 @@ Opus音声エンコーダー（libopus）を使用する際、入力ファイル
 - Linux の FFplay比較GUIを PowerShell から GTK 3 を直接呼び出すボタン式に変更した。8項目すべてをボタンで表示し、クリックで ffplay を起動する。GTK が無い環境では比較用コマンド例、ffplay が無い環境や DISPLAY / WAYLAND_DISPLAY の無い headless 環境では比較機能のみスキップする。
 - README.md に付属ツールと依存関係（GUI ツール）を追記した。
 
+## 2026-11-26（ブランチ `OptiPlex-3040-MFF_20261126`）
+
+### 3:2プルダウン／逆テレシネ判定を共通モジュールに集約し取りこぼしを修正
+
+`origin/main` を基点に作業ブランチを切り、ハードテレシネの取りこぼしとプログレッシブ3:2の「保留」判定を修正した。
+
+- `Modules/TelecineDetector.ps1` を新設。メディア情報ツールとメイン処理の両方から dot-source して同じ判定を使うようにした。
+- idet の走査を `rep_thres=3.0` と `1.5` の二段に変更。ノイズを含むハードテレシネで標準しきい値では反復が0になるケースを低しきい値で検出できるようにした（`rep_thres=1.5` でもプログレッシブ素材に誤検出は出ないことを確認）。
+- フレーム単位のプログレッシブ／インターレース分類を `lavfi.idet.multiple.current_frame`（履歴によるフィールド順の推定）から `lavfi.idet.single.current_frame`（フレーム単位の判定）へ修正した。
+- `decimate=cycle=5` のデバッグログを新規解析し、各5フレーム周期で最小差分のフレームが落下する比率から 24p 由来のフレーム重複を検出するようにした。mpdecimate の drop 数に依存していた従来手法では、アニメの静止フレームに埋もれて周期検出が失敗していた。
+- ffprobe の `repeat_pict` と `field_order` を読み、soft telecine の判定にも使うようにした。
+- `Tools/Media/Media_Info_get-info.ps1` は解析関数を共通モジュールへ移し、日本語の結論に加えて確信度と根拠（idet反復・5周期一致・decimate比率・ffprobeフラグ）を表示するようにした。
+- `re-encode-AIOptimus.ps1` の `Test-IsInterlaced` を共通モジュールに差し替え（bool 戻り値は維持、判定結果を `$script:LastTelecineAssessment` にキャッシュ）。`Select-DeinterlaceOption` の自動判定メニューに根拠と推奨を表示し、ハードテレシネは `fieldmatch,decimate`、プログレッシブ3:2は `decimate=cycle=5` を既定選択にした。選択肢に `decimate=cycle=5` を追加。
+- `Tests/Test-TelecineDetection.ps1` を追加。24p／ハードテレシネ(TFF/BFF)／ノイズ付きハードテレシネ／24→30p重複／アニメ風静止を含む3:2／30pネイティブを合成サンプルで検証し、15 PASS（実サンプル込み）を確認。
+- 実サンプル `けいおん 01話.mp4`（U-NEXT）は従来「保留（不規則な重複または静止場面）」だったが、「推奨（プログレッシブ3:2：フレーム重複を検出。fieldmatch不要）」確信度96%に改善した。
