@@ -1081,7 +1081,10 @@ function Select-DeinterlaceOption {
             }
         }
         else {
-            $titleText = if ($assessment -and $assessment.Progressive32) {
+            $titleText = if ($assessment -and $assessment.Progressive32Mixed) {
+                "一部区間でプログレッシブ3:2を検出しました（混在）。全編への適用は非3:2部分のコマ落ちに注意。"
+            }
+            elseif ($assessment -and $assessment.Progressive32) {
                 "プログレッシブ3:2のフレーム重複を検出しました。3:2周期の除去を行いますか？"
             }
             else {

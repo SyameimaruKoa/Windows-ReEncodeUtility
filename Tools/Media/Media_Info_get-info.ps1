@@ -141,9 +141,10 @@ function Show-TelecineAssessment {
     }
     $i = 0
     foreach ($report in $assessment.DecimateReports) {
+        $startText = if ($i -lt $assessment.DecimateStarts.Count) { "$($assessment.DecimateStarts[$i])秒" } else { '位置不明' }
         $i++
         $description = if ($report.Periodic32) { '3:2周期あり' } else { '3:2周期は未検出' }
-        Write-Host "decimate[$i] : $description / 周期=$($report.Cycles) / 最小diff=$($report.DropIsMin) / 低比率=$($report.LowRatio) / 比率=$($report.RatioMedian.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture))"
+        Write-Host "decimate[$i]($startText) : $description / 周期=$($report.Cycles) / 最小diff=$($report.DropIsMin) / 低比率=$($report.LowRatio) / 比率=$($report.RatioMedian.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture))"
     }
 
     $classified = 0

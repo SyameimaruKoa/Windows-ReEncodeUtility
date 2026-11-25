@@ -102,6 +102,7 @@ $hardtcNoisy = New-TestClip -Name 'hardtc_noisy' -Arguments @('-i', $hardtc, '-v
 $dup30 = New-TestClip -Name 'dup30' -Arguments @('-i', $src24, '-vf', 'fps=30')
 $animeDup30 = New-TestClip -Name 'anime_dup30' -Arguments @('-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=12:duration=18,gblur=sigma=6,fps=24,fps=30')
 $native30 = New-TestClip -Name 'native30' -Arguments @('-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=30:duration=18,gblur=sigma=6')
+$mixed = New-TestClip -Name 'mixed' -Arguments @('-i', $dup30, '-i', $native30, '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0')
 
 #endregion
 
@@ -124,6 +125,7 @@ Check-File -Name 'ノイズ付きハードテレシネ' -Path $hardtcNoisy -Expe
 Check-File -Name '24→30pフレーム重複' -Path $dup30 -Expectations @{ Progressive32 = $true; Telecine32 = $false }
 Check-File -Name 'アニメ風静止を含む3:2' -Path $animeDup30 -Expectations @{ Progressive32 = $true; Telecine32 = $false }
 Check-File -Name '30pネイティブ' -Path $native30 -Expectations @{ Progressive32 = $false; Telecine32 = $false }
+Check-File -Name '3:2と30pの混在' -Path $mixed -Expectations @{ Progressive32 = $true; Progressive32Mixed = $true }
 
 if ($RealSample) {
     if (-not (Test-Path -LiteralPath $RealSample -PathType Leaf)) {

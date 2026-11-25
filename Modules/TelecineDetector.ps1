@@ -412,6 +412,7 @@ function Get-TelecineAssessment {
             IsInterlaced = ($flags.FieldOrder -in @('tt', 'bb', 'tb', 'bt') -or $flags.InterlacedFrames -gt 0)
             Telecine32 = $false
             Progressive32 = $false
+            Progressive32Mixed = $false
             SoftTelecine = $false
             Verdict = '判定不能（FFmpegなし）'
             Confidence = 0
@@ -419,6 +420,7 @@ function Get-TelecineAssessment {
             Evidence = ''
             Meta = $meta
             Flags = $flags
+            DecimateStarts = @()
         }
     }
 
@@ -429,6 +431,18 @@ function Get-TelecineAssessment {
         $firstStart = [math]::Min($latestStart, [math]::Max(0.0, $meta.Duration * 0.25 - $windowSeconds / 2.0))
         $secondStart = [math]::Min($latestStart, [math]::Max(0.0, $meta.Duration * 0.75 - $windowSeconds / 2.0))
         $starts = @([math]::Round($firstStart, 3), [math]::Round($secondStart, 3))
+    }
+
+    # idet は2区間でよいが、decimate は混在を拾うため多个所をサンプリングする。
+    $decimateStarts = @($starts)
+    if (-not $Full -and $meta.AvgFps -gt 0 -and $meta.Duration -gt ($Frames / $meta.AvgFps) * 2.5) {
+        $windowSeconds = $Frames / $meta.AvgFps
+        $latestStart = [math]::Max(0.0, $meta.Duration - $windowSeconds - 1.0)
+        $decimateStarts = @()
+        foreach ($fraction in @(0.10, 0.25, 0.40, 0.55, 0.70, 0.85)) {
+            $start = [math]::Min($latestStart, [math]::Max(0.0, $meta.Duration * $fraction - $windowSeconds / 2.0))
+            $decimateStarts += [math]::Round($start, 3)
+        }
     }
 
     $idetReports = [System.Collections.Generic.List[object]]::new()
@@ -469,13 +483,16 @@ function Get-TelecineAssessment {
     $decimateReports = [System.Collections.Generic.List[object]]::new()
     $decimateFailed = $false
     if (-not $telecine32 -and $meta.AvgFps -ge 23.9 -and $meta.AvgFps -le 31.0) {
-        foreach ($start in $starts) {
+        foreach ($start in $decimateStarts) {
             $scan = Invoke-TelecineDecimateScan -File $File -FFmpegExecutable $FFmpegExecutable -Start $start -Frames $Frames -Full $Full
             if (-not $scan.Success) { $decimateFailed = $true }
             foreach ($report in $scan.Reports) { $decimateReports.Add($report) }
         }
     }
-    $progressive32 = @($decimateReports | Where-Object { $_.Periodic32 }).Count -gt 0
+    $positiveWindows = @($decimateReports | Where-Object { $_.Periodic32 }).Count
+    $progressive32 = $positiveWindows -gt 0
+    $progressive32All = ($decimateReports.Count -gt 0 -and $positiveWindows -eq $decimateReports.Count)
+    $progressive32Mixed = ($positiveWindows -gt 0 -and $positiveWindows -lt $decimateReports.Count)
     $cycles = 0
     $lowRatioCycles = 0
     $dropIsMinCycles = 0
@@ -502,10 +519,16 @@ function Get-TelecineAssessment {
         $confidence = 92
         if ($usedThreshold -lt 3.0) { $confidence = 88 }
     }
-    elseif ($progressive32 -and -not $decimateFailed) {
-        $verdict = '推奨（プログレッシブ3:2：フレーム重複を検出。fieldmatch不要）'
+    elseif ($progressive32All -and -not $decimateFailed) {
+        $verdict = '推奨（プログレッシブ3:2：全解析区間でフレーム重複を検出。fieldmatch不要）'
         $recommended = 'decimate=cycle=5'
         $confidence = [int][math]::Min(96, 70 + (60 * (1.0 - $ratioAverage)))
+    }
+    elseif ($progressive32Mixed -and -not $decimateFailed) {
+        $coverage = $positiveWindows / [double]$decimateReports.Count
+        $verdict = "混在・要確認（一部区間でプログレッシブ3:2を検出 $positiveWindows/$($decimateReports.Count)。全編への一律decimateは非3:2部分のコマ落ちにつながる）"
+        $recommended = 'decimate=cycle=5'
+        $confidence = [int](55 + (35 * $coverage))
     }
     elseif ($softTelecine -and -not $idetFailed) {
         $verdict = '推奨（soft telecine：repeat_pictに3:2周期。field_orderを確認）'
@@ -549,7 +572,7 @@ function Get-TelecineAssessment {
         $idetDetail += " / 標準しきい値では未検出→rep_thres=${usedThreshold}で検出"
     }
     $decimateDetail = if ($cycles -gt 0) {
-        "decimate周期=$cycles / 最小diff=$dropIsMinCycles / 低比率=$lowRatioCycles / 比率平均=$($ratioAverage.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture))"
+        "decimate周期=$cycles / 最小diff=$dropIsMinCycles / 低比率=$lowRatioCycles / 比率平均=$($ratioAverage.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)) / 3:2検出区間=$positiveWindows/$($decimateReports.Count)"
     }
     else { 'decimate周期=解析なし' }
     $flagDetail = "field_order=$($flags.FieldOrder) / interlaced_frame=$($flags.InterlacedFrames) / repeat_pict=$($flags.RepeatFrames)"
@@ -560,6 +583,7 @@ function Get-TelecineAssessment {
         IsInterlaced = $isInterlaced
         Telecine32 = $telecine32
         Progressive32 = $progressive32
+        Progressive32Mixed = $progressive32Mixed
         SoftTelecine = $softTelecine
         Verdict = $verdict
         Confidence = $confidence
@@ -568,6 +592,7 @@ function Get-TelecineAssessment {
         UsedRepeatThreshold = $usedThreshold
         IdetReports = @($idetReports.ToArray())
         DecimateReports = @($decimateReports.ToArray())
+        DecimateStarts = @($decimateStarts)
         Meta = $meta
         Flags = $flags
     }
